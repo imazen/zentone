@@ -42,6 +42,17 @@ pub struct StreamingTonemapConfig {
     pub shadow_lift: f32,
     /// Highlight desaturation threshold (fraction of white point, default: 0.5).
     pub desat_threshold: f32,
+    /// How much of the key adaptation is local vs global (0.0 = fully
+    /// global, 1.0 = fully local). Default: 0.3.
+    ///
+    /// At 0.0, this is a global Reinhard-like tonemapper — the entire
+    /// image's geometric-mean key is used, preserving gradients but
+    /// losing local shadow/highlight detail. At 1.0, each grid cell
+    /// adapts independently, maximizing local contrast but flattening
+    /// smooth gradients.
+    ///
+    /// 0.3 is a reasonable default for photographic content.
+    pub locality: f32,
 }
 
 impl Default for StreamingTonemapConfig {
@@ -54,6 +65,7 @@ impl Default for StreamingTonemapConfig {
             saturation: 0.95,
             shadow_lift: 0.02,
             desat_threshold: 0.5,
+            locality: 0.3,
         }
     }
 }
@@ -483,11 +495,12 @@ impl StreamingTonemapper {
             .enumerate()
         {
             let local = self.grid.sample(x as f32, y as f32);
-            let blend = 0.7_f32;
+            let loc = self.config.locality;
+            let glb = 1.0 - loc;
             let params = LocalParams {
-                key: local.key * blend + global.key * (1.0 - blend),
-                white: local.white * blend + global.white * (1.0 - blend),
-                black: local.black * blend + global.black * (1.0 - blend),
+                key: local.key * loc + global.key * glb,
+                white: local.white * loc + global.white * glb,
+                black: local.black * loc + global.black * glb,
             };
 
             let rgb = self.tonemap_pixel([hdr_pixel[0], hdr_pixel[1], hdr_pixel[2]], &params);
@@ -540,17 +553,14 @@ impl StreamingTonemapper {
     }
 
     fn sigmoid_tonemap(&self, x: f32, white: f32) -> f32 {
+        // Extended Reinhard with contrast boost and white-point normalization.
+        // This is the same formula as the libultrahdr-validated reinhard_extended,
+        // with a contrast pre-scale for punch.
         let x_scaled = x * self.config.contrast;
-        let w2 = white * white;
-        let knee = 0.5_f32;
-        if x_scaled < knee {
-            x_scaled * 1.05
-        } else {
-            let base = knee * 1.05;
-            let over = x_scaled - knee;
-            let compressed = over * (1.0 + over / w2.max(1e-6)) / (1.0 + over);
-            (base + compressed * (1.0 - knee)).min(1.0)
-        }
+        let w = white * self.config.contrast;
+        let w2 = w * w;
+        // Extended Reinhard: x * (1 + x/w²) / (1 + x)
+        (x_scaled * (1.0 + x_scaled / w2.max(1e-6)) / (1.0 + x_scaled)).min(1.0)
     }
 
     /// Progress info: (rows_output, total_rows).
