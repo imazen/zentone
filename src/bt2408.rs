@@ -29,6 +29,7 @@ use crate::{LUMA_BT709, ToneMap};
 /// `Yrgb` for the desaturation amount. zentone doesn't implement the
 /// blend yet (issue #2) but offers either space individually.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum EetfSpace {
     /// YRGB: compute BT.709/BT.2020 luminance, apply EETF, scale all
     /// channels by luma ratio. Default.

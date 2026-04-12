@@ -129,6 +129,7 @@ pub fn aces_ap1(rgb: [f32; 3]) -> [f32; 3] {
 
 /// AgX look preset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AgxLook {
     /// Default AgX (no look applied).
     Default,
@@ -297,6 +298,7 @@ pub fn bt2390_tonemap_ext(
 /// [`LUMA_BT2020`](crate::LUMA_BT2020)) and applies it without threading luma
 /// through every call.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum ToneMapCurve {
     /// Simple per-channel Reinhard: `x / (1 + x)`.
     Reinhard,

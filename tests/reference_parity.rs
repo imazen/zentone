@@ -296,25 +296,24 @@ fn bt2390_scene_linear_matches_libplacebo() {
 
 /// Make a FilmicSplineConfig matching the named darktable golden config.
 fn filmic_config(name: &str) -> FilmicSplineConfig {
+    let mut cfg = FilmicSplineConfig::default();
     match name {
-        "zentone_defaults" => FilmicSplineConfig::default(),
-        "darktable_defaults" => FilmicSplineConfig {
-            output_power: 4.0,
-            latitude: 0.01,
-            white_point_source: 4.0,
-            contrast: 1.0,
-            ..Default::default()
-        },
-        "high_contrast" => FilmicSplineConfig {
-            contrast: 2.5,
-            ..Default::default()
-        },
-        "with_saturation" => FilmicSplineConfig {
-            saturation: 50.0,
-            ..Default::default()
-        },
+        "zentone_defaults" => {}
+        "darktable_defaults" => {
+            cfg.output_power = 4.0;
+            cfg.latitude = 0.01;
+            cfg.white_point_source = 4.0;
+            cfg.contrast = 1.0;
+        }
+        "high_contrast" => {
+            cfg.contrast = 2.5;
+        }
+        "with_saturation" => {
+            cfg.saturation = 50.0;
+        }
         _ => panic!("unknown config: {name}"),
     }
+    cfg
 }
 
 /// Test CompiledFilmicSpline::map_rgb against darktable's filmic_rgb

@@ -15,6 +15,7 @@ use crate::curves::{filmic_narkowicz, hable_filmic, reinhard_extended, reinhard_
 
 /// Result of curve detection.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct DetectedCurve {
     /// Name of the detected curve.
     pub name: &'static str,
@@ -26,6 +27,7 @@ pub struct DetectedCurve {
 
 /// Curve-specific parameters extracted from detection.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum DetectedParams {
     /// No parameters (Reinhard simple, Narkowicz, Hable, etc.)
     None,

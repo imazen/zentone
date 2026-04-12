@@ -27,6 +27,7 @@ use crate::math::{floorf, lnf};
 /// Tunes the local adaptation and per-pixel curve. The channel count is
 /// passed separately to [`StreamingTonemapper::new`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct StreamingTonemapConfig {
     /// Grid cell size in pixels (default: 8).
     pub cell_size: u32,

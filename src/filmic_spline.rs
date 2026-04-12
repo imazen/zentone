@@ -24,6 +24,7 @@ use crate::{LUMA_BT709, ToneMap};
 /// | `latitude` | 0.01% | 33.0% |
 /// | `contrast` | 1.0 | 1.18 |
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct FilmicSplineConfig {
     /// Output power (gamma). Default: 1.0.
     pub output_power: f32,

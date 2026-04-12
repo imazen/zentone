@@ -63,6 +63,7 @@ pub(crate) struct PerChannelLut {
 
 /// Statistics from the fitting process.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct FitStats {
     /// Number of pixel samples used (after sub-sampling).
     pub samples: usize,
@@ -82,6 +83,7 @@ pub struct FitStats {
 /// Defaults: 100k sub-sampled pixels, saturation detection on, MAE off,
 /// BT.709 luminance weights.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct FitConfig {
     /// Maximum number of samples to process. `0` = use every pixel.
     pub max_samples: usize,

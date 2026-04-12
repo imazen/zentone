@@ -7,6 +7,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 
 /// Errors produced by zentone.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// Input buffer is too small for the declared dimensions and channel count.
     BufferTooSmall {
