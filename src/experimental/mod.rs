@@ -15,4 +15,4 @@ pub use adaptive::{
     AdaptiveTonemapper, FitConfig, FitMode, FitStats, LuminanceCurve, PerChannelLut, TonemapMode,
 };
 pub use profile::ProfileToneCurve;
-pub use streaming::{LocalParams, StreamingTonemapConfig, StreamingTonemapper, TonemapOutput};
+pub use streaming::{LocalParams, StreamingTonemapConfig, StreamingTonemapper};

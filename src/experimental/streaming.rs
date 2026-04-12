@@ -295,29 +295,46 @@ impl AdaptationGrid {
 // ============================================================================
 
 /// Streaming tonemapper with local adaptation.
+///
+/// # Flow
+///
+/// Pull-based; the caller drives push/pull alternation and owns all pixel
+/// buffers. Zero allocation in the steady state — the HDR ring buffer and
+/// local adaptation grid are pre-allocated in [`StreamingTonemapper::new`].
+///
+/// ```text
+/// loop {
+///     tm.push_row(hdr_row)?;
+///     while let Some(idx) = tm.pull_row(&mut sdr_row)? {
+///         // consume sdr_row (row index = idx)
+///     }
+/// }
+/// tm.finish();
+/// while let Some(idx) = tm.pull_row(&mut sdr_row)? { /* flush */ }
+/// ```
 pub struct StreamingTonemapper {
     config: StreamingTonemapConfig,
     width: u32,
     height: u32,
+    /// Elements per row (`width * channels`).
+    row_stride: usize,
     grid: AdaptationGrid,
-    row_buffer: Vec<Vec<f32>>,
+    /// Flat HDR ring buffer, `lookahead_rows * row_stride` elements.
+    row_buffer: Vec<f32>,
+    /// Image-row index of the oldest row currently stored.
     buffer_start_row: u32,
+    /// Number of rows currently stored.
     buffer_count: u32,
+    /// Next image-row index awaiting output.
     next_output_row: u32,
     input_complete: bool,
 }
 
-/// Output produced by processing a row.
-#[derive(Debug, Clone)]
-pub struct TonemapOutput {
-    /// The tonemapped SDR row (linear RGB/RGBA, ready for an OETF).
-    pub sdr_linear: Vec<f32>,
-    /// The row index this corresponds to.
-    pub row_index: u32,
-}
-
 impl StreamingTonemapper {
     /// Create a new streaming tonemapper.
+    ///
+    /// Pre-allocates the HDR ring buffer (`lookahead_rows * width * channels`
+    /// f32 elements) and the local adaptation grid.
     pub fn new(width: u32, height: u32, config: StreamingTonemapConfig) -> Result<Self> {
         if config.channels != 3 && config.channels != 4 {
             return Err(Error::InvalidConfig("channels must be 3 or 4"));
@@ -329,13 +346,15 @@ impl StreamingTonemapper {
             return Err(Error::InvalidConfig("lookahead_rows must be >= 1"));
         }
         let grid = AdaptationGrid::new(width, height, config.cell_size);
-        let buffer_size = config.lookahead_rows as usize;
+        let row_stride = width as usize * config.channels as usize;
+        let buffer_elements = row_stride * config.lookahead_rows as usize;
         Ok(Self {
             config,
             width,
             height,
+            row_stride,
             grid,
-            row_buffer: vec![Vec::new(); buffer_size],
+            row_buffer: vec![0.0_f32; buffer_elements],
             buffer_start_row: 0,
             buffer_count: 0,
             next_output_row: 0,
@@ -343,121 +362,122 @@ impl StreamingTonemapper {
         })
     }
 
-    /// Push HDR rows from a slice with stride.
+    /// Elements per row: `width * channels`.
+    #[inline]
+    pub fn row_stride(&self) -> usize {
+        self.row_stride
+    }
+
+    /// Push one HDR row.
     ///
-    /// - `data`: slice containing row data (linear HDR, f32).
-    /// - `stride`: number of f32 elements between row starts
-    ///   (≥ `width * channels`).
-    /// - `num_rows`: number of rows to process from this slice.
+    /// `hdr_row.len()` must equal [`row_stride`](Self::row_stride). The row
+    /// is copied into the internal ring buffer and used to update local
+    /// adaptation statistics — no allocation.
     ///
-    /// Returns any tonemapped rows that are ready for output.
-    pub fn push_rows(
-        &mut self,
-        data: &[f32],
-        stride: usize,
-        num_rows: usize,
-    ) -> Result<Vec<TonemapOutput>> {
-        let channels = self.config.channels as usize;
-        let row_width = self.width as usize * channels;
-
-        for row_idx in 0..num_rows {
-            let input_row = self.buffer_start_row + self.buffer_count;
-            if input_row >= self.height {
-                break;
-            }
-            let start = row_idx * stride;
-            if start + row_width > data.len() {
-                break;
-            }
-            let row_data = &data[start..start + row_width];
-
-            self.grid.add_row(row_data, input_row, self.width, channels);
-
-            let buffer_idx = (input_row % self.config.lookahead_rows) as usize;
-            let buffer_slot = &mut self.row_buffer[buffer_idx];
-            buffer_slot.clear();
-            buffer_slot.extend_from_slice(row_data);
-            self.buffer_count += 1;
-
-            let completed_cell_y = input_row / self.config.cell_size;
-            if input_row % self.config.cell_size == self.config.cell_size - 1 {
-                self.grid.finalize_row(completed_cell_y);
-            }
+    /// Returns `Err(BufferTooSmall)` if the slice is shorter than the row
+    /// stride, or an error if the ring buffer is full (pull at least one
+    /// row first).
+    pub fn push_row(&mut self, hdr_row: &[f32]) -> Result<()> {
+        if hdr_row.len() < self.row_stride {
+            return Err(Error::BufferTooSmall {
+                required: self.row_stride,
+                actual: hdr_row.len(),
+            });
+        }
+        if self.buffer_count as usize >= self.config.lookahead_rows as usize {
+            return Err(Error::InvalidConfig("ring buffer full — pull a row first"));
+        }
+        let input_row = self.buffer_start_row + self.buffer_count;
+        if input_row >= self.height {
+            return Ok(()); // silently drop beyond image height
         }
 
-        self.try_output_rows()
+        let channels = self.config.channels as usize;
+        let src = &hdr_row[..self.row_stride];
+
+        self.grid.add_row(src, input_row, self.width, channels);
+
+        let buffer_idx = (input_row % self.config.lookahead_rows) as usize;
+        let slot_start = buffer_idx * self.row_stride;
+        self.row_buffer[slot_start..slot_start + self.row_stride].copy_from_slice(src);
+        self.buffer_count += 1;
+
+        if input_row % self.config.cell_size == self.config.cell_size - 1 {
+            self.grid.finalize_row(input_row / self.config.cell_size);
+        }
+        Ok(())
     }
 
-    /// Push a single HDR row (convenience wrapper).
-    #[inline]
-    pub fn push_row(&mut self, row: &[f32]) -> Result<Vec<TonemapOutput>> {
-        self.push_rows(row, row.len(), 1)
-    }
-
-    /// Signal that all input has been provided. Flushes remaining rows.
-    pub fn finish(&mut self) -> Result<Vec<TonemapOutput>> {
+    /// Signal that all input has been provided. Call [`pull_row`] repeatedly
+    /// afterwards until [`rows_ready`] returns zero to flush remaining rows.
+    ///
+    /// [`pull_row`]: Self::pull_row
+    /// [`rows_ready`]: Self::rows_ready
+    pub fn finish(&mut self) {
         self.input_complete = true;
-
         let last_cell_y = (self.height.saturating_sub(1)) / self.config.cell_size;
         for y in 0..=last_cell_y {
             self.grid.finalize_row(y);
         }
         self.grid.blur_params(1);
-
-        self.try_output_rows()
     }
 
-    fn try_output_rows(&mut self) -> Result<Vec<TonemapOutput>> {
-        let mut outputs = Vec::new();
-        let last_input_row = self.buffer_start_row + self.buffer_count;
-
-        let required_ahead = if self.input_complete {
+    /// Number of rows ready for immediate pull.
+    ///
+    /// Under steady state we hold `lookahead_rows / 2` rows of context before
+    /// emitting; after [`finish`](Self::finish) all buffered rows are emittable.
+    pub fn rows_ready(&self) -> u32 {
+        let remaining = self.height.saturating_sub(self.next_output_row);
+        let required = if self.input_complete {
             0
         } else {
             self.config.lookahead_rows / 2
         };
-
-        while self.next_output_row < self.height {
-            let rows_ahead = last_input_row.saturating_sub(self.next_output_row);
-            if rows_ahead < required_ahead && !self.input_complete {
-                break;
-            }
-            if self.next_output_row < self.buffer_start_row {
-                self.next_output_row += 1;
-                continue;
-            }
-
-            let buffer_idx = (self.next_output_row % self.config.lookahead_rows) as usize;
-            let hdr_row = &self.row_buffer[buffer_idx];
-            if hdr_row.is_empty() {
-                break;
-            }
-
-            let sdr_row = self.tonemap_row_inner(hdr_row, self.next_output_row);
-            outputs.push(TonemapOutput {
-                sdr_linear: sdr_row,
-                row_index: self.next_output_row,
-            });
-
-            self.next_output_row += 1;
-            if self.next_output_row > self.config.lookahead_rows {
-                self.buffer_start_row = self.next_output_row - self.config.lookahead_rows;
-            }
-        }
-
-        Ok(outputs)
+        self.buffer_count.saturating_sub(required).min(remaining)
     }
 
-    fn tonemap_row_inner(&self, hdr_row: &[f32], y: u32) -> Vec<f32> {
+    /// Pull the next ready row into `out`.
+    ///
+    /// `out.len()` must equal [`row_stride`](Self::row_stride).
+    ///
+    /// Returns:
+    /// - `Ok(Some(row_index))` — wrote a row into `out`.
+    /// - `Ok(None)` — nothing to pull yet; push more input or call
+    ///   [`finish`](Self::finish).
+    /// - `Err(BufferTooSmall)` — `out` slice is too short.
+    pub fn pull_row(&mut self, out: &mut [f32]) -> Result<Option<u32>> {
+        if out.len() < self.row_stride {
+            return Err(Error::BufferTooSmall {
+                required: self.row_stride,
+                actual: out.len(),
+            });
+        }
+        if self.rows_ready() == 0 {
+            return Ok(None);
+        }
+
+        let row_index = self.next_output_row;
+        let buffer_idx = (row_index % self.config.lookahead_rows) as usize;
+        let slot_start = buffer_idx * self.row_stride;
+        let hdr_slice = &self.row_buffer[slot_start..slot_start + self.row_stride];
+
+        self.tonemap_row_into(hdr_slice, row_index, &mut out[..self.row_stride]);
+
+        self.next_output_row += 1;
+        self.buffer_start_row += 1;
+        self.buffer_count -= 1;
+
+        Ok(Some(row_index))
+    }
+
+    fn tonemap_row_into(&self, hdr_row: &[f32], y: u32, out: &mut [f32]) {
         let channels = self.config.channels as usize;
-        let mut sdr_row = vec![0.0_f32; self.width as usize * channels];
         let global = self.grid.global_params();
 
         for (x, (hdr_pixel, sdr_pixel)) in hdr_row
-            .chunks(channels)
-            .zip(sdr_row.chunks_mut(channels))
+            .chunks_exact(channels)
+            .zip(out.chunks_exact_mut(channels))
             .enumerate()
-            .take(self.width as usize)
         {
             let local = self.grid.sample(x as f32, y as f32);
             // Blend local with global for stability at edges
@@ -473,10 +493,9 @@ impl StreamingTonemapper {
             sdr_pixel[1] = rgb[1];
             sdr_pixel[2] = rgb[2];
             if channels >= 4 {
-                sdr_pixel[3] = hdr_pixel.get(3).copied().unwrap_or(1.0);
+                sdr_pixel[3] = hdr_pixel[3];
             }
         }
-        sdr_row
     }
 
     fn tonemap_pixel(&self, rgb: [f32; 3], local: &LocalParams) -> [f32; 3] {
@@ -568,55 +587,105 @@ mod tests {
         assert!(StreamingTonemapper::new(64, 64, cfg).is_err());
     }
 
+    /// Drive push/pull until the image is consumed. Calls `consume` once per
+    /// tonemapped row. Reuses a single caller-owned output buffer.
+    fn run(
+        tm: &mut StreamingTonemapper,
+        row_rgb: &[f32],
+        height: u32,
+        mut consume: impl FnMut(u32, &[f32]),
+    ) {
+        let mut out = alloc::vec![0.0_f32; tm.row_stride()];
+        for _ in 0..height {
+            tm.push_row(row_rgb).unwrap();
+            while let Some(idx) = tm.pull_row(&mut out).unwrap() {
+                consume(idx, &out);
+            }
+        }
+        tm.finish();
+        while let Some(idx) = tm.pull_row(&mut out).unwrap() {
+            consume(idx, &out);
+        }
+    }
+
     #[test]
-    fn process_uniform_image() {
+    fn process_uniform_image_rgb() {
         let w = 32_u32;
         let h = 32_u32;
-        let cfg = StreamingTonemapConfig::rgb();
-        let mut tm = StreamingTonemapper::new(w, h, cfg).unwrap();
+        let mut tm = StreamingTonemapper::new(w, h, StreamingTonemapConfig::rgb()).unwrap();
 
-        let row: Vec<f32> = vec![0.5_f32; (w * 3) as usize];
-        let mut all_out: Vec<TonemapOutput> = Vec::new();
-        for _ in 0..h {
-            all_out.extend(tm.push_row(&row).unwrap());
-        }
-        all_out.extend(tm.finish().unwrap());
-
-        assert_eq!(all_out.len() as u32, h, "all rows should emit");
-        for output in &all_out {
-            assert_eq!(output.sdr_linear.len(), (w * 3) as usize);
-            for &v in &output.sdr_linear {
+        let row = alloc::vec![0.5_f32; tm.row_stride()];
+        let mut emitted = 0_u32;
+        run(&mut tm, &row, h, |_idx, sdr| {
+            assert_eq!(sdr.len(), (w * 3) as usize);
+            for &v in sdr {
                 assert!(
                     (0.0..=1.0).contains(&v),
                     "out of range in uniform mid-gray: {v}"
                 );
             }
-        }
+            emitted += 1;
+        });
+        assert_eq!(emitted, h, "all rows should emit");
     }
 
     #[test]
     fn rgba_alpha_preserved() {
         let w = 16_u32;
         let h = 16_u32;
-        let cfg = StreamingTonemapConfig::rgba();
-        let mut tm = StreamingTonemapper::new(w, h, cfg).unwrap();
+        let mut tm = StreamingTonemapper::new(w, h, StreamingTonemapConfig::rgba()).unwrap();
 
         let row: Vec<f32> = (0..w).flat_map(|_| [0.3_f32, 0.3, 0.3, 0.42]).collect();
-        let mut all_out: Vec<TonemapOutput> = Vec::new();
-        for _ in 0..h {
-            all_out.extend(tm.push_row(&row).unwrap());
-        }
-        all_out.extend(tm.finish().unwrap());
-
-        assert_eq!(all_out.len() as u32, h);
-        for output in &all_out {
-            for pixel in output.sdr_linear.chunks_exact(4) {
+        let mut emitted = 0_u32;
+        run(&mut tm, &row, h, |_idx, sdr| {
+            for pixel in sdr.chunks_exact(4) {
                 assert!(
                     (pixel[3] - 0.42).abs() < 1e-6,
                     "alpha not preserved: {}",
                     pixel[3]
                 );
             }
+            emitted += 1;
+        });
+        assert_eq!(emitted, h);
+    }
+
+    #[test]
+    fn push_row_rejects_short_slice() {
+        let mut tm = StreamingTonemapper::new(8, 8, StreamingTonemapConfig::rgb()).unwrap();
+        let bad = alloc::vec![0.0_f32; 10]; // needs 24
+        let err = tm.push_row(&bad).unwrap_err();
+        assert!(matches!(err, Error::BufferTooSmall { .. }));
+    }
+
+    #[test]
+    fn pull_row_rejects_short_out() {
+        let mut tm = StreamingTonemapper::new(8, 8, StreamingTonemapConfig::rgb()).unwrap();
+        let row = alloc::vec![0.5_f32; tm.row_stride()];
+        for _ in 0..8 {
+            tm.push_row(&row).unwrap();
         }
+        tm.finish();
+        let mut small = alloc::vec![0.0_f32; 5];
+        assert!(matches!(
+            tm.pull_row(&mut small),
+            Err(Error::BufferTooSmall { .. })
+        ));
+    }
+
+    #[test]
+    fn push_row_refuses_to_overflow_buffer() {
+        let cfg = StreamingTonemapConfig {
+            lookahead_rows: 4,
+            ..StreamingTonemapConfig::rgb()
+        };
+        let mut tm = StreamingTonemapper::new(8, 16, cfg).unwrap();
+        let row = alloc::vec![0.1_f32; tm.row_stride()];
+        for _ in 0..4 {
+            tm.push_row(&row).unwrap();
+        }
+        // 5th push should fail — no pulls yet, ring buffer full
+        let err = tm.push_row(&row).unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig(_)));
     }
 }

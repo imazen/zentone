@@ -11,8 +11,6 @@
 //! linear f32 buffers; stride equals `width * channels`.
 
 use alloc::boxed::Box;
-use alloc::vec::Vec;
-use core::cmp::Ordering;
 
 use crate::error::{Error, Result};
 use crate::math::roundf;
@@ -78,8 +76,11 @@ pub struct FitConfig {
     pub mode: FitMode,
     /// Maximum number of samples (0 = all pixels).
     pub max_samples: usize,
-    /// Whether to detect and apply saturation changes.
+    /// Whether to detect and apply saturation changes (one extra pass).
     pub detect_saturation: bool,
+    /// If true, compute mean absolute error as a diagnostic. Default: false.
+    /// Enabling this adds a third pass over the source buffers.
+    pub compute_mae: bool,
 }
 
 impl Default for FitConfig {
@@ -88,6 +89,7 @@ impl Default for FitConfig {
             mode: FitMode::Luminance,
             max_samples: 100_000,
             detect_saturation: true,
+            compute_mae: false,
         }
     }
 }
@@ -217,32 +219,25 @@ impl AdaptiveTonemapper {
     ) -> Result<Self> {
         let ch = channels as usize;
         let total_pixels = (width as usize) * (height as usize);
-        let step = if config.max_samples > 0 && total_pixels > config.max_samples {
-            total_pixels / config.max_samples
-        } else {
-            1
-        }
-        .max(1);
+        let step = sample_step(total_pixels, config.max_samples);
 
-        let mut pairs: Vec<(f32, f32)> = Vec::with_capacity(total_pixels / step);
+        // Pass 1: find max_hdr (+ optional saturation detection)
         let mut max_hdr = 0.0_f32;
         let mut saturation_sum = 0.0_f32;
         let mut saturation_count = 0_usize;
+        let mut sample_count = 0_usize;
 
         for i in (0..total_pixels).step_by(step) {
             let off = i * ch;
             let hdr_rgb = [hdr[off], hdr[off + 1], hdr[off + 2]];
             let sdr_rgb = [sdr[off], sdr[off + 1], sdr[off + 2]];
-
-            let l_hdr = 0.2126 * hdr_rgb[0] + 0.7152 * hdr_rgb[1] + 0.0722 * hdr_rgb[2];
-            let l_sdr = 0.2126 * sdr_rgb[0] + 0.7152 * sdr_rgb[1] + 0.0722 * sdr_rgb[2];
-
+            let l_hdr = luminance(hdr_rgb);
+            let l_sdr = luminance(sdr_rgb);
             if l_hdr > 0.001 && l_sdr > 0.001 {
-                pairs.push((l_hdr, l_sdr));
+                sample_count += 1;
                 if l_hdr > max_hdr {
                     max_hdr = l_hdr;
                 }
-
                 if config.detect_saturation && l_hdr > 0.01 && l_sdr > 0.01 {
                     let sat_hdr = compute_saturation(hdr_rgb, l_hdr);
                     let sat_sdr = compute_saturation(sdr_rgb, l_sdr);
@@ -254,20 +249,24 @@ impl AdaptiveTonemapper {
             }
         }
 
-        if pairs.is_empty() {
+        if sample_count == 0 || max_hdr <= 0.0 {
             return Err(Error::NoValidSamples);
         }
 
-        pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-
+        // Pass 2: bucket directly into the LUT (no pair vector, no sort)
         let mut lut = Box::new([0.0_f32; LUT_SIZE]);
         let mut counts = [0_u32; LUT_SIZE];
+        let max_idx = (LUT_SIZE - 1) as f32;
 
-        for (l_hdr, l_sdr) in &pairs {
-            let idx = roundf((*l_hdr / max_hdr) * (LUT_SIZE - 1) as f32)
-                .clamp(0.0, (LUT_SIZE - 1) as f32) as usize;
-            lut[idx] += l_sdr;
-            counts[idx] += 1;
+        for i in (0..total_pixels).step_by(step) {
+            let off = i * ch;
+            let l_hdr = luminance([hdr[off], hdr[off + 1], hdr[off + 2]]);
+            let l_sdr = luminance([sdr[off], sdr[off + 1], sdr[off + 2]]);
+            if l_hdr > 0.001 && l_sdr > 0.001 {
+                let idx = roundf((l_hdr / max_hdr) * max_idx).clamp(0.0, max_idx) as usize;
+                lut[idx] += l_sdr;
+                counts[idx] += 1;
+            }
         }
         for i in 0..LUT_SIZE {
             if counts[i] > 0 {
@@ -283,12 +282,28 @@ impl AdaptiveTonemapper {
             1.0
         };
 
-        let mut mae_sum = 0.0_f32;
-        for (l_hdr, l_sdr) in &pairs {
-            let idx = roundf((*l_hdr / max_hdr) * (LUT_SIZE - 1) as f32)
-                .clamp(0.0, (LUT_SIZE - 1) as f32) as usize;
-            mae_sum += (lut[idx] - l_sdr).abs();
-        }
+        // Optional pass 3: MAE (off by default)
+        let mae = if config.compute_mae {
+            let mut mae_sum = 0.0_f32;
+            let mut mae_count = 0_usize;
+            for i in (0..total_pixels).step_by(step) {
+                let off = i * ch;
+                let l_hdr = luminance([hdr[off], hdr[off + 1], hdr[off + 2]]);
+                let l_sdr = luminance([sdr[off], sdr[off + 1], sdr[off + 2]]);
+                if l_hdr > 0.001 && l_sdr > 0.001 {
+                    let idx = roundf((l_hdr / max_hdr) * max_idx).clamp(0.0, max_idx) as usize;
+                    mae_sum += (lut[idx] - l_sdr).abs();
+                    mae_count += 1;
+                }
+            }
+            if mae_count > 0 {
+                mae_sum / mae_count as f32
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
 
         Ok(Self {
             mode: TonemapMode::Luminance(LuminanceCurve {
@@ -298,8 +313,8 @@ impl AdaptiveTonemapper {
             }),
             max_hdr_observed: max_hdr,
             stats: FitStats {
-                samples: pairs.len(),
-                mae: mae_sum / pairs.len() as f32,
+                samples: sample_count,
+                mae,
                 max_hdr_luminance: max_hdr,
                 saturation_ratio: saturation,
             },
@@ -316,35 +331,19 @@ impl AdaptiveTonemapper {
     ) -> Result<Self> {
         let ch = channels as usize;
         let total_pixels = (width as usize) * (height as usize);
-        let step = if config.max_samples > 0 && total_pixels > config.max_samples {
-            total_pixels / config.max_samples
-        } else {
-            1
-        }
-        .max(1);
+        let step = sample_step(total_pixels, config.max_samples);
+        let max_idx = (LUT_SIZE - 1) as f32;
 
-        let mut pairs_r: Vec<(f32, f32)> = Vec::new();
-        let mut pairs_g: Vec<(f32, f32)> = Vec::new();
-        let mut pairs_b: Vec<(f32, f32)> = Vec::new();
+        // Pass 1: find max_hdr (shared across channels)
         let mut max_hdr = 0.0_f32;
-
+        let mut any_sample = false;
         for i in (0..total_pixels).step_by(step) {
             let off = i * ch;
             let hr = hdr[off];
             let hg = hdr[off + 1];
             let hb = hdr[off + 2];
-            let sr = sdr[off];
-            let sg = sdr[off + 1];
-            let sb = sdr[off + 2];
-
-            if hr > 0.001 {
-                pairs_r.push((hr, sr));
-            }
-            if hg > 0.001 {
-                pairs_g.push((hg, sg));
-            }
-            if hb > 0.001 {
-                pairs_b.push((hb, sb));
+            if hr > 0.001 || hg > 0.001 || hb > 0.001 {
+                any_sample = true;
             }
             if hr > max_hdr {
                 max_hdr = hr;
@@ -356,14 +355,51 @@ impl AdaptiveTonemapper {
                 max_hdr = hb;
             }
         }
-
-        if max_hdr <= 0.0 {
+        if !any_sample || max_hdr <= 0.0 {
             return Err(Error::NoValidSamples);
         }
 
-        let lut_r = build_channel_lut(&mut pairs_r, max_hdr);
-        let lut_g = build_channel_lut(&mut pairs_g, max_hdr);
-        let lut_b = build_channel_lut(&mut pairs_b, max_hdr);
+        // Pass 2: bucket each channel directly into its LUT
+        let mut lut_r = Box::new([0.0_f32; LUT_SIZE]);
+        let mut lut_g = Box::new([0.0_f32; LUT_SIZE]);
+        let mut lut_b = Box::new([0.0_f32; LUT_SIZE]);
+        let mut cnt_r = [0_u32; LUT_SIZE];
+        let mut cnt_g = [0_u32; LUT_SIZE];
+        let mut cnt_b = [0_u32; LUT_SIZE];
+        let mut sample_count = 0_usize;
+
+        for i in (0..total_pixels).step_by(step) {
+            let off = i * ch;
+            let hr = hdr[off];
+            let hg = hdr[off + 1];
+            let hb = hdr[off + 2];
+            let sr = sdr[off];
+            let sg = sdr[off + 1];
+            let sb = sdr[off + 2];
+
+            if hr > 0.001 {
+                let idx = roundf((hr / max_hdr) * max_idx).clamp(0.0, max_idx) as usize;
+                lut_r[idx] += sr;
+                cnt_r[idx] += 1;
+                sample_count += 1;
+            }
+            if hg > 0.001 {
+                let idx = roundf((hg / max_hdr) * max_idx).clamp(0.0, max_idx) as usize;
+                lut_g[idx] += sg;
+                cnt_g[idx] += 1;
+                sample_count += 1;
+            }
+            if hb > 0.001 {
+                let idx = roundf((hb / max_hdr) * max_idx).clamp(0.0, max_idx) as usize;
+                lut_b[idx] += sb;
+                cnt_b[idx] += 1;
+                sample_count += 1;
+            }
+        }
+
+        finalize_bucketed_lut(&mut lut_r, &cnt_r);
+        finalize_bucketed_lut(&mut lut_g, &cnt_g);
+        finalize_bucketed_lut(&mut lut_b, &cnt_b);
 
         Ok(Self {
             mode: TonemapMode::PerChannel(PerChannelLut {
@@ -374,13 +410,37 @@ impl AdaptiveTonemapper {
             }),
             max_hdr_observed: max_hdr,
             stats: FitStats {
-                samples: pairs_r.len() + pairs_g.len() + pairs_b.len(),
+                samples: sample_count,
                 mae: 0.0,
                 max_hdr_luminance: max_hdr,
                 saturation_ratio: 1.0,
             },
         })
     }
+}
+
+#[inline]
+fn luminance(rgb: [f32; 3]) -> f32 {
+    0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+}
+
+#[inline]
+fn sample_step(total_pixels: usize, max_samples: usize) -> usize {
+    if max_samples > 0 && total_pixels > max_samples {
+        (total_pixels / max_samples).max(1)
+    } else {
+        1
+    }
+}
+
+fn finalize_bucketed_lut(lut: &mut [f32; LUT_SIZE], counts: &[u32; LUT_SIZE]) {
+    for i in 0..LUT_SIZE {
+        if counts[i] > 0 {
+            lut[i] /= counts[i] as f32;
+        }
+    }
+    fill_lut_gaps(lut, counts);
+    enforce_monotonicity(lut);
 }
 
 impl LuminanceCurve {
@@ -487,37 +547,6 @@ fn enforce_monotonicity(lut: &mut [f32; LUT_SIZE]) {
     }
 }
 
-fn build_channel_lut(pairs: &mut [(f32, f32)], max_hdr: f32) -> Box<[f32; LUT_SIZE]> {
-    if pairs.is_empty() {
-        let mut lut = Box::new([0.0_f32; LUT_SIZE]);
-        for (i, slot) in lut.iter_mut().enumerate() {
-            *slot = (i as f32 / (LUT_SIZE - 1) as f32).min(1.0);
-        }
-        return lut;
-    }
-
-    pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-
-    let mut lut = Box::new([0.0_f32; LUT_SIZE]);
-    let mut counts = [0_u32; LUT_SIZE];
-
-    for (hdr_val, sdr_val) in pairs.iter() {
-        let idx = roundf((*hdr_val / max_hdr) * (LUT_SIZE - 1) as f32)
-            .clamp(0.0, (LUT_SIZE - 1) as f32) as usize;
-        lut[idx] += sdr_val;
-        counts[idx] += 1;
-    }
-    for i in 0..LUT_SIZE {
-        if counts[i] > 0 {
-            lut[i] /= counts[i] as f32;
-        }
-    }
-
-    fill_lut_gaps(&mut lut, &counts);
-    enforce_monotonicity(&mut lut);
-    lut
-}
-
 fn lookup_lut(lut: &[f32; LUT_SIZE], value: f32, max_hdr: f32) -> f32 {
     let idx_f = (value / max_hdr).clamp(0.0, 1.0) * (LUT_SIZE - 1) as f32;
     if idx_f >= (LUT_SIZE - 1) as f32 {
@@ -533,6 +562,7 @@ fn lookup_lut(lut: &[f32; LUT_SIZE], value: f32, max_hdr: f32) -> f32 {
 mod tests {
     use super::*;
     use alloc::vec;
+    use alloc::vec::Vec;
 
     fn make_pair(w: u32, h: u32) -> (Vec<f32>, Vec<f32>) {
         let n = (w * h) as usize;
