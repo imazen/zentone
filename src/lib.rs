@@ -47,6 +47,7 @@ extern crate alloc;
 
 mod bt2408;
 mod bt2446a;
+mod bt2446b;
 mod bt2446c;
 mod curves;
 mod error;
@@ -63,6 +64,7 @@ pub mod experimental;
 
 pub use bt2408::{Bt2408Tonemapper, EetfSpace};
 pub use bt2446a::Bt2446A;
+pub use bt2446b::Bt2446B;
 pub use bt2446c::Bt2446C;
 pub use curves::{
     AgxLook, ToneMapCurve, aces_ap1, agx_tonemap, bt2390_tonemap, bt2390_tonemap_ext,
