@@ -54,6 +54,7 @@ mod filmic_spline;
 pub mod gamut;
 pub mod hlg;
 mod math;
+pub mod pipeline;
 pub mod sdr_hdr;
 mod tone_map;
 
