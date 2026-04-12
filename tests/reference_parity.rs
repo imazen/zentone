@@ -23,7 +23,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use zentone::{
-    Bt2408Tonemapper, LUMA_BT709, bt2390_tonemap, bt2390_tonemap_ext, reinhard_extended,
+    Bt2408Tonemapper, CompiledFilmicSpline, FilmicSplineConfig, LUMA_BT709, ToneMap,
+    bt2390_tonemap, bt2390_tonemap_ext, reinhard_extended,
 };
 
 /// f32 absolute-error tolerance. ~8× the ulp at 1.0, generous enough to
@@ -76,13 +77,8 @@ fn parse_rows<'a>(body: &'a str, header_prefix: &str) -> impl Iterator<Item = Ve
             past_header = true;
             return None; // skip the header line itself
         }
-        // Stop at section boundary: blank, comment, or non-numeric start
+        // Stop at section boundary: blank line or comment line
         if line.is_empty() || line.starts_with('#') {
-            in_section = false;
-            return None;
-        }
-        let first = line.as_bytes().first().copied().unwrap_or(b' ');
-        if !first.is_ascii_digit() && first != b'-' && first != b'+' {
             in_section = false;
             return None;
         }
@@ -294,4 +290,107 @@ fn bt2390_scene_linear_matches_libplacebo() {
     }
     assert!(checked > 20, "too few scene-linear rows checked: {checked}");
     println!("bt2390_scene_linear: checked {checked} rows, max_err={max_err:.6e}");
+}
+
+// ============================================================================
+// darktable filmic spline parity
+// ============================================================================
+
+/// Make a FilmicSplineConfig matching the named darktable golden config.
+fn filmic_config(name: &str) -> FilmicSplineConfig {
+    match name {
+        "zentone_defaults" => FilmicSplineConfig::default(),
+        "darktable_defaults" => FilmicSplineConfig {
+            output_power: 4.0,
+            latitude: 0.01,
+            white_point_source: 4.0,
+            contrast: 1.0,
+            ..Default::default()
+        },
+        "high_contrast" => FilmicSplineConfig {
+            contrast: 2.5,
+            ..Default::default()
+        },
+        "with_saturation" => FilmicSplineConfig {
+            saturation: 50.0,
+            ..Default::default()
+        },
+        _ => panic!("unknown config: {name}"),
+    }
+}
+
+/// Test CompiledFilmicSpline::map_rgb against darktable's filmic_rgb
+/// output at multiple parameter configurations and RGB inputs.
+#[test]
+fn filmic_spline_matches_darktable_rgb() {
+    let csv = read_csv("darktable_filmic.csv");
+    let mut checked = 0;
+    let mut max_err: f32 = 0.0;
+
+    for cols in parse_rows(&csv, "config,r_in,g_in,b_in,r_out,g_out,b_out") {
+        if cols.len() != 7 {
+            continue;
+        }
+        let config_name = cols[0];
+        let rgb_in = [
+            cols[1].parse::<f32>().unwrap(),
+            cols[2].parse::<f32>().unwrap(),
+            cols[3].parse::<f32>().unwrap(),
+        ];
+        let expected = [
+            cols[4].parse::<f32>().unwrap(),
+            cols[5].parse::<f32>().unwrap(),
+            cols[6].parse::<f32>().unwrap(),
+        ];
+
+        let cfg = filmic_config(config_name);
+        let spline = CompiledFilmicSpline::new(&cfg);
+        let actual = spline.map_rgb(rgb_in);
+
+        for i in 0..3 {
+            let err = (actual[i] - expected[i]).abs();
+            max_err = max_err.max(err);
+            assert!(
+                err < 1e-4,
+                "filmic {config_name} at {rgb_in:?}[{i}]: zentone={}, darktable={}, err={err}",
+                actual[i],
+                expected[i]
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked > 20, "too few filmic RGB rows: {checked}");
+    println!("filmic_spline_rgb: checked {checked} rows, max_err={max_err:.6e}");
+}
+
+/// Test the raw spline evaluation (apply_spline) against darktable's
+/// filmic_spline at multiple x values.
+#[test]
+fn filmic_spline_eval_matches_darktable() {
+    let csv = read_csv("darktable_filmic.csv");
+    let mut checked = 0;
+    let mut max_err: f32 = 0.0;
+
+    for cols in parse_rows(&csv, "config,x,spline_y") {
+        if cols.len() != 3 {
+            continue;
+        }
+        let config_name = cols[0];
+        let x: f32 = cols[1].parse().unwrap();
+        let expected: f32 = cols[2].parse().unwrap();
+
+        let cfg = filmic_config(config_name);
+        let spline = CompiledFilmicSpline::new(&cfg);
+        let actual = spline.apply_spline(x);
+
+        let err = (actual - expected).abs();
+        max_err = max_err.max(err);
+        assert!(
+            err < 1e-4,
+            "filmic spline {config_name} at x={x}: zentone={actual}, darktable={expected}, err={err}"
+        );
+        checked += 1;
+    }
+    assert!(checked > 20, "too few spline eval rows: {checked}");
+    println!("filmic_spline_eval: checked {checked} rows, max_err={max_err:.6e}");
 }

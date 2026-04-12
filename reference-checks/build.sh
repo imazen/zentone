@@ -29,6 +29,7 @@ build_and_run libultrahdr_apply_gain
 build_and_run libultrahdr_compute_gain
 build_and_run libavif_apply_gain
 build_and_run libplacebo_bt2390
+build_and_run darktable_filmic
 
 echo ""
 echo "Golden files updated. Review the diff and commit if intentional:"
