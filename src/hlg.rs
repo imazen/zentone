@@ -6,7 +6,7 @@
 //! - [`hlg_system_gamma`] — BT.2390 §6.2 formula
 //! - [`hlg_ootf`] — luminance-preserving display-referred OOTF
 //! - [`hlg_inverse_ootf`] — scene-referred inverse
-//! - [`hlg_eotf_display`] — full HLG signal → display nits
+//! - [`hlg_to_display`] — full HLG signal → display nits
 //!
 //! Reference: ITU-R BT.2100-2, BT.2390-11 §6.2, BT.2408-8 §3.2.
 

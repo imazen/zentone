@@ -86,12 +86,12 @@ pub struct FitConfig {
     /// Maximum number of samples to process. `0` = use every pixel.
     pub max_samples: usize,
     /// Whether to detect and apply saturation changes
-    /// ([`LuminanceCurve`] only).
+    /// (luminance-mode only).
     pub detect_saturation: bool,
     /// If true, compute mean absolute error as a diagnostic
-    /// ([`LuminanceCurve`] only). Adds one extra pass over the source.
+    /// (luminance-mode only). Adds one extra pass over the source.
     pub compute_mae: bool,
-    /// RGB→luminance weights ([`LuminanceCurve`] only).
+    /// RGB→luminance weights (luminance-mode only).
     pub luma_coeffs: [f32; 3],
 }
 
