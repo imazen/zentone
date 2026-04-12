@@ -22,12 +22,21 @@
 use std::fs;
 use std::path::PathBuf;
 
-use zentone::reinhard_extended;
+use zentone::{
+    Bt2408Tonemapper, LUMA_BT709, bt2390_tonemap, bt2390_tonemap_ext, reinhard_extended,
+};
 
 /// f32 absolute-error tolerance. ~8× the ulp at 1.0, generous enough to
 /// absorb a reordered multiply/divide but tight enough to catch any real
 /// formula divergence.
 const TOLERANCE: f32 = 1e-6;
+
+/// Wider tolerance for PQ-domain comparisons. The PQ OETF/EOTF involve
+/// `powf` with fractional exponents, where libm and the C++ stdlib can
+/// diverge by 1–3 ULP per call. A full EETF pipeline has 4 `powf` calls
+/// (2× OETF + 2× EOTF), so the cumulative error can reach ~1e-4 at
+/// extreme luminance values where PQ's slope is steep.
+const PQ_TOLERANCE: f32 = 5e-4;
 
 fn golden_path(name: &str) -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -47,16 +56,38 @@ fn read_csv(name: &str) -> String {
     })
 }
 
-/// Iterate over non-empty, non-comment lines after the CSV header.
-/// Splits each line on ','. Skips lines that start with '#' (comments).
+/// Iterate data rows in a specific CSV section. Finds the header line
+/// matching `header_prefix`, then yields parsed rows until it hits an
+/// empty line, a comment line, or another header-like line (one that
+/// doesn't start with a digit, '-', or '+'). This correctly handles
+/// multi-section CSV files separated by blank lines and comments.
 fn parse_rows<'a>(body: &'a str, header_prefix: &str) -> impl Iterator<Item = Vec<&'a str>> {
-    body.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .skip_while(move |line| !line.starts_with(header_prefix))
-        .skip(1) // the header line itself
-        .take_while(|line| !line.starts_with('#') && !line.is_empty())
-        .map(|line| line.split(',').map(str::trim).collect())
+    let mut in_section = false;
+    let mut past_header = false;
+    body.lines().map(str::trim).filter_map(move |line| {
+        if !in_section {
+            if line.starts_with(header_prefix) {
+                in_section = true;
+                past_header = false;
+            }
+            return None;
+        }
+        if !past_header {
+            past_header = true;
+            return None; // skip the header line itself
+        }
+        // Stop at section boundary: blank, comment, or non-numeric start
+        if line.is_empty() || line.starts_with('#') {
+            in_section = false;
+            return None;
+        }
+        let first = line.as_bytes().first().copied().unwrap_or(b' ');
+        if !first.is_ascii_digit() && first != b'-' && first != b'+' {
+            in_section = false;
+            return None;
+        }
+        Some(line.split(',').map(str::trim).collect())
+    })
 }
 
 /// libultrahdr's globalTonemap, faithfully reimplemented with zentone's
@@ -156,4 +187,111 @@ fn global_tonemap_matches_libultrahdr() {
     }
     assert!(checked > 0, "no globalTonemap rows parsed");
     println!("global_tonemap: checked {checked} rows");
+}
+
+// ============================================================================
+// BT.2390 / BT.2408 parity against libplacebo
+// ============================================================================
+
+/// Test zentone's Bt2408Tonemapper::tonemap_nits against libplacebo's
+/// PQ-domain BT.2390 EETF at knee_offset=0.5 (the ITU standard value,
+/// which gives KS = 1.5*maxLum - 0.5, matching zentone's formula).
+///
+/// Uses PQ_TOLERANCE because the full pipeline involves 4× powf calls
+/// through the PQ transfer function.
+#[test]
+fn bt2408_tonemap_nits_matches_libplacebo_pq() {
+    let csv = read_csv("libplacebo_bt2390.csv");
+
+    let mut checked = 0;
+    let mut max_err: f32 = 0.0;
+
+    for cols in parse_rows(
+        &csv,
+        "content_nits,display_nits,knee_offset,input_nits,output_linear",
+    ) {
+        if cols.len() != 5 {
+            continue;
+        }
+        let content: f32 = cols[0].parse().unwrap();
+        let display: f32 = cols[1].parse().unwrap();
+        let offset: f32 = cols[2].parse().unwrap();
+        let input_nits: f32 = cols[3].parse().unwrap();
+        let expected_nits: f32 = cols[4].parse().unwrap();
+
+        // Only test knee_offset=0.5 rows (the ITU standard zentone implements).
+        // knee_offset=1.0 is libplacebo's default but a different formula.
+        if (offset - 0.5).abs() > 0.01 {
+            continue;
+        }
+
+        // Skip passthrough configs (content <= display)
+        if content <= display {
+            continue;
+        }
+
+        let tm = Bt2408Tonemapper::with_luma(content, display, LUMA_BT709);
+        let actual_nits = tm.tonemap_nits(input_nits);
+
+        // Use relative tolerance for large values, absolute for small
+        let err = (actual_nits - expected_nits).abs();
+        let rel = if expected_nits.abs() > 1.0 {
+            err / expected_nits.abs()
+        } else {
+            err
+        };
+
+        max_err = max_err.max(rel);
+
+        assert!(
+            rel < PQ_TOLERANCE,
+            "BT.2408 mismatch: content={content}, display={display}, \
+             input={input_nits} nits: zentone={actual_nits}, \
+             libplacebo={expected_nits}, rel_err={rel}"
+        );
+        checked += 1;
+    }
+    assert!(checked > 10, "too few PQ-domain rows checked: {checked}");
+    println!("bt2408_tonemap_nits: checked {checked} rows, max_rel_err={max_err:.6e}");
+}
+
+/// Test zentone's bt2390_tonemap and bt2390_tonemap_ext against
+/// libplacebo's scene-linear BT.2390 EETF. This is an exact comparison
+/// (no PQ conversion involved), so we use tight tolerance.
+#[test]
+fn bt2390_scene_linear_matches_libplacebo() {
+    let csv = read_csv("libplacebo_bt2390.csv");
+
+    let mut checked = 0;
+    let mut max_err: f32 = 0.0;
+
+    for cols in parse_rows(&csv, "source_peak,target_peak,min_lum,input,output") {
+        if cols.len() != 5 {
+            continue;
+        }
+        let source: f32 = cols[0].parse().unwrap();
+        let target: f32 = cols[1].parse().unwrap();
+        let min_lum: f32 = cols[2].parse().unwrap();
+        let input: f32 = cols[3].parse().unwrap();
+        let expected: f32 = cols[4].parse().unwrap();
+
+        let actual = if min_lum > 0.0 {
+            bt2390_tonemap_ext(input, source, target, Some(min_lum))
+        } else {
+            bt2390_tonemap(input, source, target)
+        };
+
+        let err = (actual - expected).abs();
+        max_err = max_err.max(err);
+
+        assert!(
+            err < TOLERANCE,
+            "bt2390 scene-linear mismatch: source={source}, target={target}, \
+             min_lum={min_lum}, input={input}: zentone={actual}, \
+             libplacebo={expected}, err={err}"
+        );
+        checked += 1;
+    }
+    assert!(checked > 20, "too few scene-linear rows checked: {checked}");
+    println!("bt2390_scene_linear: checked {checked} rows, max_err={max_err:.6e}");
 }
