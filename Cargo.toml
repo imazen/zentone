@@ -40,6 +40,10 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 zenbench = { version = "0.1.6", features = ["criterion-compat"] }
 
+[[example]]
+name = "visual_compare"
+required-features = ["experimental"]
+
 [[bench]]
 name = "tonemap_bench"
 harness = false
