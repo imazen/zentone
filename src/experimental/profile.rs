@@ -50,6 +50,10 @@ impl ProfileToneCurve {
         if n_points < 2 {
             return None;
         }
+        // Reject NaN/Inf in control points — these would corrupt the LUT.
+        if tc_data[..n_points * 2].iter().any(|v| !v.is_finite()) {
+            return None;
+        }
         let points: Vec<(f32, f32)> = (0..n_points)
             .map(|i| (tc_data[i * 2], tc_data[i * 2 + 1]))
             .collect();

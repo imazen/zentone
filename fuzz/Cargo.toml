@@ -1,0 +1,43 @@
+[package]
+name = "zentone-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.zentone]
+path = ".."
+features = ["experimental"]
+
+[[bin]]
+name = "fuzz_curves"
+path = "fuzz_targets/fuzz_curves.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_adaptive_fit"
+path = "fuzz_targets/fuzz_adaptive_fit.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_streaming"
+path = "fuzz_targets/fuzz_streaming.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_profile_curve"
+path = "fuzz_targets/fuzz_profile_curve.rs"
+test = false
+doc = false
+bench = false
