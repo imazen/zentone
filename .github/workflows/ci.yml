@@ -18,16 +18,12 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            features: "--all-features"
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
-            features: "--all-features"
           - os: macos-latest
             target: aarch64-apple-darwin
-            features: "--all-features"
           - os: macos-15-intel
             target: x86_64-apple-darwin
-            features: "--all-features"
 
     runs-on: ${{ matrix.os }}
 
@@ -43,7 +39,7 @@ jobs:
         run: cargo test --target ${{ matrix.target }}
 
       - name: Test (all features)
-        run: cargo test --target ${{ matrix.target }} ${{ matrix.features }}
+        run: cargo test --target ${{ matrix.target }} --all-features
 
       - name: Test (no default features)
         run: cargo test --target ${{ matrix.target }} --no-default-features
@@ -69,6 +65,33 @@ jobs:
 
       - name: Test i686 (all features)
         run: cross test --target i686-unknown-linux-gnu --all-features
+
+  wasm:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown, wasm32-wasip1
+
+      - name: Install wasmtime
+        run: curl https://wasmtime.dev/install.sh -sSf | bash && echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
+
+      - name: Check wasm32-unknown-unknown (no default features)
+        run: cargo check --target wasm32-unknown-unknown --no-default-features
+
+      - name: Check wasm32-unknown-unknown (no default + experimental)
+        run: cargo check --target wasm32-unknown-unknown --no-default-features --features experimental
+
+      - name: Test wasm32-wasip1 unit tests (default)
+        run: cargo test --target wasm32-wasip1 --lib
+
+      - name: Test wasm32-wasip1 unit tests (all features)
+        run: cargo test --target wasm32-wasip1 --lib --all-features
 
   lint:
     runs-on: ubuntu-latest

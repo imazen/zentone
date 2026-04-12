@@ -148,7 +148,7 @@ fn compute_rms(lut: &[f32], max_hdr: f32, curve: impl Fn(f32) -> f32) -> f32 {
     if count == 0 {
         return f32::MAX;
     }
-    (sum_sq / count as f64).sqrt() as f32
+    libm::sqrt(sum_sq / count as f64) as f32
 }
 
 #[cfg(test)]
