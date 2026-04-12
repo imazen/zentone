@@ -1,48 +1,67 @@
 # zentone
 
-HDR → SDR tone mapping: classical curves, BT.2408 PQ-domain Hermite spline, darktable/Blender filmic spline, and experimental adaptive and streaming tonemappers.
+HDR to SDR tone mapping. Classical curves, BT.2408 PQ-domain EETF, darktable/Blender filmic spline, and experimental adaptive and streaming tonemappers.
 
-`no_std + alloc` compatible. Zero unsafe.
+`no_std + alloc`. Zero unsafe. Zero allocation in hot paths.
 
-## Scope
+Every curve that claims a standard name has been numerically validated against its reference implementation.
+
+## Usage
+
+All tonemappers implement the `ToneMap` trait:
+
+```rust
+use zentone::{ToneMap, ToneMapCurve, AgxLook, LUMA_BT709};
+
+// Pick a curve — luma-carrying variants bake their coefficients at construction.
+let curve = ToneMapCurve::Agx(AgxLook::Punchy);
+
+// In-place on a row of interleaved f32 pixels.
+// channels = 3 (RGB) or 4 (RGBA, alpha preserved).
+let mut row = vec![2.5_f32, 1.8, 0.4, 0.8, 2.0, 0.1];
+curve.map_row(&mut row, 3);
+```
+
+Stateful tonemappers (BT.2408, filmic spline) construct once and apply many times:
+
+```rust
+use zentone::{Bt2408Tonemapper, ToneMap};
+
+let tm = Bt2408Tonemapper::new(4000.0, 1000.0); // content peak, display peak (nits)
+let mut row = vec![0.3_f32, 0.5, 0.2, 0.7, 0.1, 0.9];
+tm.map_row(&mut row, 3);
+```
+
+## Reference parity
+
+| Curve | Reference | Max error |
+|---|---|---|
+| `reinhard_extended` | libultrahdr `ReinhardMap` | 0 (exact) |
+| `Bt2408Tonemapper` | libplacebo `bt2390()` (PQ domain) | 4.5e-5 relative |
+| `bt2390_tonemap` | libplacebo scene-linear | 0 (exact) |
+| `CompiledFilmicSpline` | darktable `filmicrgb.c` V3 | 0 eval, 1 ULP RGB |
+| `agx_tonemap` | gainforge / Blender polynomial | Endpoint-verified |
+| PQ OETF/EOTF | ST.2084 formula (f64) | < 1e-5 |
+| HLG OETF/EOTF | BT.2100 formula (f64) | < 1e-5 |
+
+Golden CSV files from standalone C++ extractions of each reference are committed under `reference-checks/golden/`.
+
+## Curves
 
 **Stable (default feature):**
-- `ToneMapCurve` enum dispatch over classical curves:
-  - Reinhard (simple / extended / Jodie / tuned)
-  - Uncharted 2 / Hable filmic
-  - Narkowicz filmic (ACES-inspired S-curve)
-  - ACES AP1 (RRT+ODT fit)
-  - AgX (Blender) with Default / Punchy / Golden looks
-  - BT.2390 EETF
-  - Clamp
-- `Bt2408Tonemapper` — ITU-R BT.2408 PQ-domain Hermite spline (content/display peak nits)
-- `CompiledFilmicSpline` — darktable/Blender Filmic with latitude / balance / saturation parameters
-- Row-oriented API: `tonemap_row(&curve, row, channels, luma_coeffs)`
+- `ToneMapCurve` enum: Reinhard (simple / extended / Jodie), Narkowicz filmic, Uncharted 2 (Hable), ACES AP1, AgX (Default / Punchy / Golden), BT.2390 EETF, Clamp
+- `Bt2408Tonemapper` — ITU-R BT.2408 Annex 5 EETF (PQ-domain Hermite, YRGB application space)
+- `CompiledFilmicSpline` — darktable-style filmic (rational spline with latitude / balance / saturation)
 
-**Experimental (`experimental` feature, lightly tested):**
-- `AdaptiveTonemapper` — fits a luminance or per-channel LUT from an HDR/SDR pair, preserving the original artistic intent for re-encodes
-- `StreamingTonemapper` — single-pass spatially-local tonemapper with a lookahead row buffer and grid-based adaptation (~6 MB for 4K vs ~130 MB full frame)
-- `ProfileToneCurve` — DNG camera profile tone curve from 257 (x,y) control points → 4096-entry LUT, per-channel or luminance-preserving
-
-These APIs have light test coverage and may change without semver bumps until stabilized.
-
-## Example
-
-```rust,ignore
-use zentone::{ToneMapCurve, AgxLook, tonemap_row};
-
-let curve = ToneMapCurve::Agx(AgxLook::Punchy);
-let luma_coeffs = [0.2126, 0.7152, 0.0722]; // BT.709
-
-let mut row = vec![2.5_f32, 1.8, 0.4, /* ...more HDR pixels... */];
-tonemap_row(&curve, &mut row, 3, luma_coeffs);
-// `row` now holds SDR-range linear RGB, ready for an OETF (sRGB, BT.709, ...)
-```
+**Experimental (`experimental` feature):**
+- `AdaptiveTonemapper` — fits a luminance or per-channel LUT from an HDR/SDR pair
+- `StreamingTonemapper` — spatially-local, single-pass, bounded-memory, pull API
+- `ProfileToneCurve` — DNG camera profile tone curve with per-channel and luminance-preserving views
 
 ## Prior art
 
-`gainforge` (Radzivon Bartoshyk, BSD-3-Clause) independently covers similar classical-curve territory with multi-bit-depth entry points and a moxcms-based color pipeline. Our implementations were written from the same public specs (Hable GDC talk, ITU-R BT.2408, Blender AgX source) in parallel; the shared code is small and derives from identical references. zentone differs in its unique adaptive / streaming / DNG-profile primitives, zen-ecosystem integration points, and future archmage SIMD dispatch.
+[gainforge](https://github.com/awxkee/gainforge) (Radzivon Bartoshyk, BSD-3-Clause) independently covers similar classical-curve territory with multi-bit-depth entry points and a moxcms-based color pipeline. Our implementations were written from the same public specs in parallel. zentone differs in its BT.2408 EETF, adaptive/streaming primitives, zen-ecosystem integration, and reference-validated golden-file test suite.
 
 ## License
 
-AGPL-3.0-only OR LicenseRef-Imazen-Commercial — dual-licensed. See `LICENSE-AGPL3` and `LICENSE-COMMERCIAL`.
+AGPL-3.0-only OR LicenseRef-Imazen-Commercial. See `LICENSE-AGPL3` and `LICENSE-COMMERCIAL`.

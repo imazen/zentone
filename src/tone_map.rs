@@ -45,11 +45,9 @@ pub trait ToneMap {
     }
 }
 
-/// Const-generic in-place row tonemapper. Used internally by
-/// [`ToneMap::map_row`]; exposed here so callers with a concrete CN can skip
-/// the runtime match.
+/// Const-generic in-place row tonemapper. Called by [`ToneMap::map_row`].
 #[inline]
-pub fn map_row_cn<const CN: usize, T: ToneMap + ?Sized>(tm: &T, row: &mut [f32]) {
+pub(crate) fn map_row_cn<const CN: usize, T: ToneMap + ?Sized>(tm: &T, row: &mut [f32]) {
     debug_assert!(CN == 3 || CN == 4);
     for chunk in row.chunks_exact_mut(CN) {
         let mapped = tm.map_rgb([chunk[0], chunk[1], chunk[2]]);
@@ -60,9 +58,13 @@ pub fn map_row_cn<const CN: usize, T: ToneMap + ?Sized>(tm: &T, row: &mut [f32])
     }
 }
 
-/// Const-generic copying row tonemapper. See [`ToneMap::map_into`].
+/// Const-generic copying row tonemapper. Called by [`ToneMap::map_into`].
 #[inline]
-pub fn map_into_cn<const CN: usize, T: ToneMap + ?Sized>(tm: &T, src: &[f32], dst: &mut [f32]) {
+pub(crate) fn map_into_cn<const CN: usize, T: ToneMap + ?Sized>(
+    tm: &T,
+    src: &[f32],
+    dst: &mut [f32],
+) {
     debug_assert!(CN == 3 || CN == 4);
     debug_assert_eq!(src.len(), dst.len());
     for (s, d) in src.chunks_exact(CN).zip(dst.chunks_exact_mut(CN)) {

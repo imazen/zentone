@@ -30,18 +30,18 @@ pub struct AdaptiveTonemapper {
     stats: FitStats,
 }
 
-/// Representation of a fitted tonemapping curve.
+/// Representation of a fitted tonemapping curve (internal).
 #[derive(Debug, Clone)]
-pub enum TonemapMode {
+pub(crate) enum TonemapMode {
     /// Hue-preserving luminance-based curve.
     Luminance(LuminanceCurve),
     /// Per-channel LUTs; highest fidelity, may shift hues.
     PerChannel(PerChannelLut),
 }
 
-/// Luminance-based tone curve.
+/// Luminance-based tone curve (internal).
 #[derive(Debug, Clone)]
-pub struct LuminanceCurve {
+pub(crate) struct LuminanceCurve {
     /// LUT mapping HDR luminance `[0, max_hdr]` → SDR luminance `[0, 1]`.
     lut: Box<[f32; LUT_SIZE]>,
     /// Maximum HDR luminance covered by the LUT.
@@ -52,9 +52,9 @@ pub struct LuminanceCurve {
     luma: [f32; 3],
 }
 
-/// Per-channel tone curves.
+/// Per-channel tone curves (internal).
 #[derive(Debug, Clone)]
-pub struct PerChannelLut {
+pub(crate) struct PerChannelLut {
     lut_r: Box<[f32; LUT_SIZE]>,
     lut_g: Box<[f32; LUT_SIZE]>,
     lut_b: Box<[f32; LUT_SIZE]>,
@@ -341,9 +341,9 @@ impl AdaptiveTonemapper {
         self.max_hdr_observed
     }
 
-    /// Representation of the fitted curve.
-    pub fn mode(&self) -> &TonemapMode {
-        &self.mode
+    /// Whether the fit used luminance or per-channel mode.
+    pub fn is_per_channel(&self) -> bool {
+        matches!(self.mode, TonemapMode::PerChannel(_))
     }
 }
 

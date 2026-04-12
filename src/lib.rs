@@ -58,12 +58,11 @@ pub mod experimental;
 pub use bt2408::Bt2408Tonemapper;
 pub use curves::{
     AgxLook, ToneMapCurve, aces_ap1, agx_tonemap, bt2390_tonemap, bt2390_tonemap_ext,
-    clamp_tonemap, filmic_narkowicz, reinhard_extended, reinhard_jodie, reinhard_simple,
-    tuned_reinhard, uncharted2_filmic,
+    filmic_narkowicz, reinhard_extended, reinhard_jodie, reinhard_simple, uncharted2_filmic,
 };
 pub use error::{Error, Result};
 pub use filmic_spline::{CompiledFilmicSpline, FilmicSplineConfig};
-pub use tone_map::{ToneMap, map_into_cn, map_row_cn};
+pub use tone_map::ToneMap;
 
 /// BT.709 / sRGB luminance coefficients `[0.2126, 0.7152, 0.0722]`.
 pub const LUMA_BT709: [f32; 3] = [0.2126, 0.7152, 0.0722];

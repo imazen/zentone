@@ -121,15 +121,12 @@ impl CellStats {
     }
 }
 
-/// Local adaptation parameters for a region.
+/// Local adaptation parameters for a region (internal).
 #[derive(Debug, Clone, Copy)]
-pub struct LocalParams {
-    /// Local key (geometric mean luminance).
-    pub key: f32,
-    /// Local white point (approximate max).
-    pub white: f32,
-    /// Local black point (approximate min).
-    pub black: f32,
+pub(crate) struct LocalParams {
+    pub(crate) key: f32,
+    pub(crate) white: f32,
+    pub(crate) black: f32,
 }
 
 impl Default for LocalParams {

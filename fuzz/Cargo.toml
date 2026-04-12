@@ -41,3 +41,10 @@ path = "fuzz_targets/fuzz_profile_curve.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_filmic_params"
+path = "fuzz_targets/fuzz_filmic_params.rs"
+test = false
+doc = false
+bench = false

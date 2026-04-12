@@ -19,7 +19,7 @@ pub fn reinhard_simple(x: f32) -> f32 {
 
 /// Clamp tone map: clamps to `[0, 1]`.
 #[inline]
-pub fn clamp_tonemap(x: f32) -> f32 {
+pub(crate) fn clamp_tonemap(x: f32) -> f32 {
     x.clamp(0.0, 1.0)
 }
 
@@ -50,8 +50,8 @@ pub fn reinhard_jodie(rgb: [f32; 3], luma_coeffs: [f32; 3]) -> [f32; 3] {
 /// Tuned Reinhard with display-aware parameters.
 ///
 /// Derived from content and display peak luminance (nits), with a reference
-/// white of 203 nits.
-pub fn tuned_reinhard(luma: f32, content_max: f32, display_max: f32) -> f32 {
+/// white of 203 nits. Internal; used by `ToneMapCurve::TunedReinhard`.
+pub(crate) fn tuned_reinhard(luma: f32, content_max: f32, display_max: f32) -> f32 {
     let white_point = 203.0_f32;
     let ld = content_max / white_point;
     let w_a = (display_max / white_point) / (ld * ld);
@@ -97,6 +97,11 @@ pub fn uncharted2_filmic(v: f32) -> f32 {
 }
 
 /// ACES AP1 filmic tone mapping (Krzysztof Narkowicz fit, RRT+ODT).
+///
+/// **Near-black negativity:** The RRT's `−0.000090537` offset causes
+/// output to go slightly negative (≈ −2.7e-4) at very low input (< 0.002).
+/// This is inherent to the Narkowicz approximation. Clamp to 0 if your
+/// pipeline requires non-negative output.
 #[allow(clippy::excessive_precision)]
 pub fn aces_ap1(rgb: [f32; 3]) -> [f32; 3] {
     let a = 0.59719 * rgb[0] + 0.35458 * rgb[1] + 0.04823 * rgb[2];
@@ -323,6 +328,10 @@ pub enum ToneMapCurve {
     /// ACES AP1 RRT+ODT fit.
     AcesAp1,
     /// BT.2390 EETF in scene-linear domain.
+    ///
+    /// **Input must be normalized** to `[0, 1]` where `1.0 = source_peak`.
+    /// Passing raw HDR linear-light values (e.g. nits/10000) without
+    /// dividing by `source_peak` produces out-of-domain results.
     Bt2390 {
         /// Source peak luminance (normalized, in `[0, 1]`).
         source_peak: f32,
