@@ -33,6 +33,9 @@ experimental = []
 linear-srgb = { version = "0.6.8", default-features = false, features = ["transfer"] }
 libm = { version = "0.2", default-features = false }
 
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 # Native-only: benchmark dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 zenbench = { version = "0.1.6", features = ["criterion-compat"] }

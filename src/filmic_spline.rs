@@ -10,7 +10,19 @@ use crate::{LUMA_BT709, ToneMap};
 
 /// Filmic spline configuration parameters.
 ///
-/// Defaults match the darktable/Ansel v2 Filmic module.
+/// The rational spline math follows darktable's `filmicrgb.c` (V3 path,
+/// GPL-3.0, verified against commit `a193e27`). However, the **default
+/// parameter values differ** from darktable's defaults — zentone's
+/// defaults are tuned for linear-light output (no display gamma) and a
+/// wider linear latitude, while darktable defaults target a display
+/// transfer with `output_power = 4.0`.
+///
+/// | Parameter | darktable | zentone |
+/// |---|---|---|
+/// | `output_power` | 4.0 | 1.0 (linear) |
+/// | `white_point_source` | 4.0 EV | 3.0 EV |
+/// | `latitude` | 0.01% | 33.0% |
+/// | `contrast` | 1.0 | 1.18 |
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FilmicSplineConfig {
     /// Output power (gamma). Default: 1.0.
@@ -98,9 +110,17 @@ impl CompiledFilmicSpline {
         let balance = p.balance.clamp(-50.0, 50.0) / 100.0;
         let slope = p.contrast * dynamic_range / 8.0;
         let mut min_contrast = 1.0_f32;
-        let mc2 = (white_display - grey_display) / (white_log - grey_log);
-        if mc2.is_finite() {
-            min_contrast = min_contrast.max(mc2);
+        // Geometric constraint: the linear segment's slope must be steep
+        // enough to reach both the white and black display levels from
+        // grey. darktable V3 checks both directions; an earlier zentone
+        // version only checked white-to-grey.
+        let mc_white = (white_display - grey_display) / (white_log - grey_log);
+        if mc_white.is_finite() {
+            min_contrast = min_contrast.max(mc_white);
+        }
+        let mc_black = (grey_display - black_display) / (grey_log - black_log);
+        if mc_black.is_finite() {
+            min_contrast = min_contrast.max(mc_black);
         }
         const SAFETY_MARGIN: f32 = 0.01;
         min_contrast += SAFETY_MARGIN;
@@ -170,8 +190,12 @@ impl CompiledFilmicSpline {
     }
 
     fn compute_rational(p1: [f32; 2], p0: [f32; 2], g: f32) -> (f32, f32, f32, f32) {
-        let x = p0[0] - p1[0];
-        let y = p0[1] - p1[1];
+        // darktable uses different subtraction orders for the toe
+        // (x = P0-P1) vs shoulder (x = P1-P0) to keep x and y positive.
+        // We use abs() so argument order doesn't matter — both the
+        // toe and shoulder produce the same positive geometric distances.
+        let x = (p0[0] - p1[0]).abs();
+        let y = (p0[1] - p1[1]).abs();
         let jx_pre = x * g / y + 1.0;
         let jx = (jx_pre * jx_pre).max(4.0);
         let b = g / (2.0 * y) + (sqrtf(jx - 4.0) - 1.0) / (2.0 * x);
@@ -356,6 +380,44 @@ mod tests {
             low.map_rgb(mid),
             also_low.map_rgb(mid),
             "both should hit the same min_contrast clamp"
+        );
+    }
+
+    #[test]
+    fn shoulder_hits_white_point() {
+        // Regression test for the shoulder rational spline sign bug.
+        // With default params, apply_spline(1.0) should produce a value
+        // near white_display (= 1.0 for output_power=1.0). The old buggy
+        // code missed by ~4e-4 at default params; with darktable's
+        // defaults (output_power=4.0) the error was up to 0.18.
+        let spline = CompiledFilmicSpline::new(&FilmicSplineConfig::default());
+        let at_white = spline.apply_spline(1.0);
+        assert!(
+            (at_white - 1.0).abs() < 1e-3,
+            "spline at x=1.0 should be near white_display (1.0), got {at_white}"
+        );
+    }
+
+    #[test]
+    fn shoulder_with_darktable_defaults() {
+        // Uses darktable's actual defaults (output_power=4.0, latitude=0.01,
+        // white_point_source=4.0, contrast=1.0) — this is where the
+        // shoulder sign bug was most visible (~0.18 error at white point).
+        let cfg = FilmicSplineConfig {
+            output_power: 4.0,
+            latitude: 0.01,
+            white_point_source: 4.0,
+            contrast: 1.0,
+            ..Default::default()
+        };
+        let spline = CompiledFilmicSpline::new(&cfg);
+        let at_white = spline.apply_spline(1.0);
+
+        // white_display = (100/100)^(1/4) = 1.0
+        // The spline at x=1.0 should land near white_display.
+        assert!(
+            (at_white - 1.0).abs() < 0.01,
+            "darktable-default spline at x=1.0 should be near 1.0, got {at_white}"
         );
     }
 
