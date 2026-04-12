@@ -7,9 +7,9 @@
 //! tolerance.
 //!
 //! Current coverage:
-//! - libultrahdr `ReinhardMap` (extended Reinhard) → `zentone::reinhard_extended`
+//! - libultrahdr `ReinhardMap` (extended Reinhard) → `zentone::curves::reinhard_extended`
 //! - libultrahdr `globalTonemap` (max-channel extended Reinhard composition)
-//!   → a local helper that calls `zentone::reinhard_extended` the same way
+//!   → a local helper that calls `zentone::curves::reinhard_extended` the same way
 //!
 //! The `libultrahdr_apply_gain` and `libultrahdr_compute_gain` golden files
 //! are committed for future use in a reference-parity test inside
@@ -22,10 +22,8 @@
 use std::fs;
 use std::path::PathBuf;
 
-use zentone::{
-    Bt2408Tonemapper, CompiledFilmicSpline, FilmicSplineConfig, LUMA_BT709, ToneMap,
-    bt2390_tonemap, bt2390_tonemap_ext, reinhard_extended,
-};
+use zentone::curves::{bt2390_tonemap, bt2390_tonemap_ext, reinhard_extended};
+use zentone::{Bt2408Tonemapper, CompiledFilmicSpline, FilmicSplineConfig, LUMA_BT709, ToneMap};
 
 /// f32 absolute-error tolerance. ~8× the ulp at 1.0, generous enough to
 /// absorb a reordered multiply/divide but tight enough to catch any real

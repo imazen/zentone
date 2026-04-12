@@ -10,6 +10,7 @@
 
 #![allow(clippy::excessive_precision)]
 
+use zentone::curves::{aces_ap1, agx_tonemap, filmic_narkowicz, hable_filmic, reinhard_simple};
 use zentone::*;
 
 // ============================================================================

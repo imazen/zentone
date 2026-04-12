@@ -6,6 +6,7 @@
 
 #![allow(clippy::excessive_precision)]
 
+use zentone::curves::aces_ap1;
 use zentone::*;
 
 /// For each curve, test a set of adversarial inputs and record:

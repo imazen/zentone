@@ -14,10 +14,10 @@
 //! If a test fails, the diff tells you which formula diverged and by how
 //! much, which usually points directly at the bug.
 
-use zentone::{
-    AgxLook, LUMA_BT709, ToneMap, ToneMapCurve, aces_ap1, agx_tonemap, filmic_narkowicz,
-    hable_filmic, reinhard_extended, reinhard_simple,
+use zentone::curves::{
+    aces_ap1, agx_tonemap, filmic_narkowicz, hable_filmic, reinhard_extended, reinhard_simple,
 };
+use zentone::{AgxLook, LUMA_BT709, ToneMap, ToneMapCurve};
 
 const TOL: f32 = 1e-6;
 

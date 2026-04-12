@@ -10,7 +10,8 @@
 //!
 //! Experimental. Behind the `experimental` feature flag.
 
-use crate::{Bt2408Tonemapper, filmic_narkowicz, hable_filmic, reinhard_extended, reinhard_simple};
+use crate::Bt2408Tonemapper;
+use crate::curves::{filmic_narkowicz, hable_filmic, reinhard_extended, reinhard_simple};
 
 /// Result of curve detection.
 #[derive(Debug, Clone)]
