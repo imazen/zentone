@@ -36,6 +36,7 @@ libm = { version = "0.2", default-features = false }
 [dev-dependencies]
 gainforge = "0.4.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
+zensim = "0.2.6"
 
 # Native-only: benchmark dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
