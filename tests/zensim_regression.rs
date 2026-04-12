@@ -90,7 +90,7 @@ const GOLDEN_SCORES: &[(&str, f32)] = &[
     ("Reinhard", 100.0),
     ("ExtReinhard", 82.1),
     ("Narkowicz", 63.4),
-    ("Uncharted2", 94.0),
+    ("HableFilmic", 94.0),
     ("AcesAp1", 79.7),
     ("AgxDefault", 44.8),
     ("Bt2408_YRGB", 49.5),
@@ -124,8 +124,8 @@ fn all_tonemappers() -> Vec<NamedTm> {
             tm: Box::new(ToneMapCurve::Narkowicz),
         },
         NamedTm {
-            name: "Uncharted2",
-            tm: Box::new(ToneMapCurve::Uncharted2),
+            name: "HableFilmic",
+            tm: Box::new(ToneMapCurve::HableFilmic),
         },
         NamedTm {
             name: "AcesAp1",

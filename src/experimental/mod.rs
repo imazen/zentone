@@ -8,6 +8,7 @@
 //! - [`ProfileToneCurve`] — DNG camera profile tone curve.
 
 mod adaptive;
+pub mod detect;
 mod profile;
 mod streaming;
 

@@ -95,7 +95,7 @@ fn curves_benchmark(c: &mut Criterion) {
         luma: LUMA_BT709,
     };
     let narkowicz = ToneMapCurve::Narkowicz;
-    let uncharted2 = ToneMapCurve::Uncharted2;
+    let hable_filmic = ToneMapCurve::HableFilmic;
     let aces = ToneMapCurve::AcesAp1;
     let bt2390 = ToneMapCurve::Bt2390 {
         source_peak: 4.0,
@@ -111,7 +111,7 @@ fn curves_benchmark(c: &mut Criterion) {
     bench_curve(c, "reinhard_jodie", &jodie);
     bench_curve(c, "tuned_reinhard", &tuned);
     bench_curve(c, "narkowicz", &narkowicz);
-    bench_curve(c, "uncharted2", &uncharted2);
+    bench_curve(c, "hable_filmic", &hable_filmic);
     bench_curve(c, "aces_ap1", &aces);
     bench_curve(c, "bt2390", &bt2390);
     bench_curve(c, "agx_default", &agx_default);

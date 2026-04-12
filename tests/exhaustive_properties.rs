@@ -101,8 +101,8 @@ fn all_cases() -> Vec<Case> {
             monotonic: true,
         },
         Case {
-            name: "Uncharted2",
-            tm: Box::new(ToneMapCurve::Uncharted2),
+            name: "HableFilmic",
+            tm: Box::new(ToneMapCurve::HableFilmic),
             sdr_bounded: true,
             normalized_input: false,
             monotonic: true,
@@ -424,8 +424,8 @@ fn gainforge_reinhard_matches() {
 }
 
 #[test]
-fn gainforge_uncharted2_matches() {
-    // Verify zentone's uncharted2_filmic matches gainforge's
+fn gainforge_hable_matches() {
+    // Verify zentone's hable_filmic matches gainforge's
     // FilmicToneMapper formula using the same constants.
     fn gf_partial(x: f32) -> f32 {
         const A: f32 = 0.15;
@@ -443,11 +443,11 @@ fn gainforge_uncharted2_matches() {
     }
 
     for &x in &GRID {
-        let zt = uncharted2_filmic(x);
+        let zt = hable_filmic(x);
         let gf = gf_filmic(x);
         assert!(
             (zt - gf).abs() < 1e-6,
-            "uncharted2({x}): zentone={zt}, gainforge={gf}"
+            "hable({x}): zentone={zt}, gainforge={gf}"
         );
     }
 }

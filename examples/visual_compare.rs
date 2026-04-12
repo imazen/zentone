@@ -140,7 +140,7 @@ fn main() {
             }),
         ),
         ("03_narkowicz", Box::new(ToneMapCurve::Narkowicz)),
-        ("04_uncharted2", Box::new(ToneMapCurve::Uncharted2)),
+        ("04_hable_filmic", Box::new(ToneMapCurve::HableFilmic)),
         ("05_aces_ap1", Box::new(ToneMapCurve::AcesAp1)),
         (
             "06_agx_default",

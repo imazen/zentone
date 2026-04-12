@@ -52,8 +52,8 @@ fn all_curves() -> Vec<CurveCase> {
             curve: Box::new(ToneMapCurve::Narkowicz),
         },
         CurveCase {
-            name: "Uncharted2",
-            curve: Box::new(ToneMapCurve::Uncharted2),
+            name: "HableFilmic",
+            curve: Box::new(ToneMapCurve::HableFilmic),
         },
         CurveCase {
             name: "AcesAp1",

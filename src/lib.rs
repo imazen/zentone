@@ -68,7 +68,7 @@ pub use bt2446b::Bt2446B;
 pub use bt2446c::Bt2446C;
 pub use curves::{
     AgxLook, ToneMapCurve, aces_ap1, agx_tonemap, bt2390_tonemap, bt2390_tonemap_ext,
-    filmic_narkowicz, reinhard_extended, reinhard_jodie, reinhard_simple, uncharted2_filmic,
+    filmic_narkowicz, hable_filmic, reinhard_extended, reinhard_jodie, reinhard_simple,
 };
 pub use error::{Error, Result};
 pub use filmic_spline::{CompiledFilmicSpline, FilmicSplineConfig};

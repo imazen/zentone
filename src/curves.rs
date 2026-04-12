@@ -78,8 +78,8 @@ pub fn filmic_narkowicz(x: f32) -> f32 {
     (num / den).clamp(0.0, 1.0)
 }
 
-/// Uncharted 2 filmic tone mapping (Hable).
-pub fn uncharted2_filmic(v: f32) -> f32 {
+/// Hable filmic tone mapping (John Hable, GDC 2010).
+pub fn hable_filmic(v: f32) -> f32 {
     #[inline(always)]
     const fn partial(x: f32) -> f32 {
         const A: f32 = 0.15;
@@ -323,8 +323,8 @@ pub enum ToneMapCurve {
     },
     /// Narkowicz filmic (ACES-inspired S-curve).
     Narkowicz,
-    /// Uncharted 2 filmic (Hable).
-    Uncharted2,
+    /// Hable filmic (GDC 2010).
+    HableFilmic,
     /// ACES AP1 RRT+ODT fit.
     AcesAp1,
     /// BT.2390 EETF in scene-linear domain.
@@ -386,10 +386,10 @@ impl ToneMap for ToneMapCurve {
                 filmic_narkowicz(rgb[1]),
                 filmic_narkowicz(rgb[2]),
             ],
-            ToneMapCurve::Uncharted2 => [
-                uncharted2_filmic(rgb[0]),
-                uncharted2_filmic(rgb[1]),
-                uncharted2_filmic(rgb[2]),
+            ToneMapCurve::HableFilmic => [
+                hable_filmic(rgb[0]),
+                hable_filmic(rgb[1]),
+                hable_filmic(rgb[2]),
             ],
             ToneMapCurve::AcesAp1 => aces_ap1(rgb),
             ToneMapCurve::Bt2390 {
@@ -550,7 +550,7 @@ mod tests {
                 luma: LUMA_BT709,
             },
             ToneMapCurve::Narkowicz,
-            ToneMapCurve::Uncharted2,
+            ToneMapCurve::HableFilmic,
             ToneMapCurve::AcesAp1,
             ToneMapCurve::Agx(AgxLook::Punchy),
             ToneMapCurve::Clamp,

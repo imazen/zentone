@@ -120,7 +120,7 @@ mod tests {
             },
             ToneMapCurve::ReinhardJodie { luma: LUMA_BT709 },
             ToneMapCurve::Narkowicz,
-            ToneMapCurve::Uncharted2,
+            ToneMapCurve::HableFilmic,
             ToneMapCurve::AcesAp1,
             ToneMapCurve::Agx(AgxLook::Default),
         ]
@@ -229,7 +229,7 @@ mod tests {
     /// must produce the same pixels as the concrete type.
     #[test]
     fn dyn_tone_map_matches_concrete() {
-        let curve = ToneMapCurve::Uncharted2;
+        let curve = ToneMapCurve::HableFilmic;
         let src = synth_row_rgb(8);
 
         let mut via_concrete = src.clone();

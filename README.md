@@ -49,7 +49,7 @@ Golden CSV files from standalone C++ extractions of each reference are committed
 ## Curves
 
 **Stable (default feature):**
-- `ToneMapCurve` enum: Reinhard (simple / extended / Jodie), Narkowicz filmic, Uncharted 2 (Hable), ACES AP1, AgX (Default / Punchy / Golden), BT.2390 EETF, Clamp
+- `ToneMapCurve` enum: Reinhard (simple / extended / Jodie), Narkowicz filmic, Hable filmic (Hable), ACES AP1, AgX (Default / Punchy / Golden), BT.2390 EETF, Clamp
 - `Bt2408Tonemapper` — ITU-R BT.2408 Annex 5 EETF (PQ-domain Hermite, YRGB application space)
 - `CompiledFilmicSpline` — darktable-style filmic (rational spline with latitude / balance / saturation)
 

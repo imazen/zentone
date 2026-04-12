@@ -16,7 +16,7 @@
 
 use zentone::{
     AgxLook, LUMA_BT709, ToneMap, ToneMapCurve, aces_ap1, agx_tonemap, filmic_narkowicz,
-    reinhard_extended, reinhard_simple, uncharted2_filmic,
+    hable_filmic, reinhard_extended, reinhard_simple,
 };
 
 const TOL: f32 = 1e-6;
@@ -46,10 +46,10 @@ fn assert_close(a: f32, b: f32, label: &str) {
 }
 
 // ============================================================================
-// Uncharted 2 / Hable filmic
+// Hable filmic / Hable filmic
 // ============================================================================
 
-/// Reference: John Hable, GDC 2010 "Uncharted 2: HDR Lighting"
+/// Reference: John Hable, GDC 2010 "Hable filmic: HDR Lighting"
 /// Constants identical in gainforge (mappers.rs:292-299) and zentone.
 fn hable_partial(x: f32) -> f32 {
     const A: f32 = 0.15;
@@ -69,11 +69,11 @@ fn hable_filmic_reference(v: f32) -> f32 {
 }
 
 #[test]
-fn uncharted2_matches_hable_reference() {
+fn hable_matches_hable_reference() {
     for &x in &SCALAR_SWEEP {
-        let zt = uncharted2_filmic(x);
+        let zt = hable_filmic(x);
         let rf = hable_filmic_reference(x);
-        assert_close(zt, rf, &format!("uncharted2({x})"));
+        assert_close(zt, rf, &format!("hable({x})"));
     }
 }
 
