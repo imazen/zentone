@@ -1,0 +1,5 @@
+/target
+/Cargo.lock
+perf.data*
+*.profraw
+.DS_Store

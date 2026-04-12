@@ -1,0 +1,34 @@
+[package]
+name = "zentone"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+license = "AGPL-3.0-only OR LicenseRef-Imazen-Commercial"
+description = "HDR to SDR tone mapping: classical curves (Reinhard, ACES, AgX, BT.2408, filmic), plus experimental adaptive and streaming tonemappers"
+repository = "https://github.com/imazen/zentone"
+keywords = ["hdr", "tonemap", "bt2408", "agx", "image"]
+categories = ["multimedia::images", "graphics", "no-std"]
+exclude = [
+    "CLAUDE.md",
+    "CONTEXT-HANDOFF.md",
+    "FEEDBACK.md",
+    ".claude/",
+    ".github/",
+    "Cross.toml",
+    "justfile",
+    "fuzz/",
+]
+
+[lints.rust]
+unexpected_cfgs = { level = "allow" }
+
+[features]
+default = ["std"]
+std = ["linear-srgb/std"]
+# Experimental APIs: AdaptiveTonemapper, StreamingTonemapper, ProfileToneCurve.
+# Light test coverage; API and output may change without semver bumps until stabilized.
+experimental = []
+
+[dependencies]
+linear-srgb = { version = "0.6.8", default-features = false, features = ["transfer"] }
+libm = { version = "0.2", default-features = false }
