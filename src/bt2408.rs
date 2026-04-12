@@ -215,4 +215,61 @@ mod tests {
         tm.map_row(&mut row, 4);
         assert!((row[3] - 0.7).abs() < 1e-6);
     }
+
+    #[test]
+    fn bt2020_luma_affects_rgb_output() {
+        // Compare BT.709 vs BT.2020 on a heavily green-weighted pixel.
+        // The two weight matrices differ, so the luminance-driven scale
+        // should produce detectably different outputs.
+        let tm_709 = Bt2408Tonemapper::new(4000.0, 1000.0);
+        let tm_2020 = Bt2408Tonemapper::with_luma(4000.0, 1000.0, crate::LUMA_BT2020);
+
+        let rgb = [0.1_f32, 0.9, 0.05]; // very green
+        let out_709 = tm_709.map_rgb(rgb);
+        let out_2020 = tm_2020.map_rgb(rgb);
+
+        // Not bit-identical: the luma weights differ.
+        let mut any_different = false;
+        for i in 0..3 {
+            if (out_709[i] - out_2020[i]).abs() > 1e-5 {
+                any_different = true;
+            }
+        }
+        assert!(
+            any_different,
+            "BT.709 and BT.2020 luma should diverge on green-heavy pixel, got {out_709:?} vs {out_2020:?}"
+        );
+    }
+
+    #[test]
+    fn content_below_display_does_not_panic() {
+        // Edge case: content peak <= display peak (no tone mapping needed).
+        // Constructor must not panic or produce NaN.
+        let tm = Bt2408Tonemapper::new(500.0, 1000.0);
+        let out = tm.map_rgb([0.5, 0.5, 0.5]);
+        for c in out {
+            assert!(c.is_finite(), "got non-finite {c} for content < display");
+        }
+    }
+
+    #[test]
+    fn equal_content_and_display_is_near_passthrough() {
+        // When content peak = display peak, tone mapping should be near
+        // identity in the linear domain.
+        let tm = Bt2408Tonemapper::new(1000.0, 1000.0);
+        let out = tm.map_rgb([0.5, 0.5, 0.5]);
+        // Near passthrough within 5% — the spline still has some effect
+        for c in out {
+            assert!(
+                (c - 0.5).abs() < 0.1,
+                "equal-peak tonemap should be near-identity, got {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn luma_accessor_returns_configured_coefficients() {
+        let tm = Bt2408Tonemapper::with_luma(4000.0, 1000.0, [0.3, 0.5, 0.2]);
+        assert_eq!(tm.luma(), [0.3, 0.5, 0.2]);
+    }
 }

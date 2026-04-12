@@ -278,4 +278,108 @@ mod tests {
         spline.map_row(&mut row, 4);
         assert!((row[3] - 0.42).abs() < 1e-6);
     }
+
+    #[test]
+    fn output_power_changes_midtone_output() {
+        // `output_power` sets `hardness`, which changes `grey_display =
+        // 0.1845^(1/hardness)`. This is a free parameter (not clamped
+        // by the geometric constraints that clamp `contrast` in most
+        // reasonable ranges), so two values should always diverge.
+        let a = CompiledFilmicSpline::new(&FilmicSplineConfig {
+            output_power: 1.0,
+            ..Default::default()
+        });
+        let b = CompiledFilmicSpline::new(&FilmicSplineConfig {
+            output_power: 2.0,
+            ..Default::default()
+        });
+
+        let mid = [0.3_f32, 0.3, 0.3];
+        let out_a = a.map_rgb(mid);
+        let out_b = b.map_rgb(mid);
+
+        assert!(
+            (out_a[0] - out_b[0]).abs() > 1e-3,
+            "output_power 1.0 vs 2.0 produced indistinguishable outputs: {out_a:?} vs {out_b:?}"
+        );
+    }
+
+    #[test]
+    fn saturation_changes_colorful_output() {
+        // `saturation` modulates the per-pixel desaturation term in
+        // shadow/highlight regions. A non-neutral RGB input should
+        // diverge between saturation = 0 and saturation = 50.
+        let neutral = CompiledFilmicSpline::new(&FilmicSplineConfig {
+            saturation: 0.0,
+            ..Default::default()
+        });
+        let punchy = CompiledFilmicSpline::new(&FilmicSplineConfig {
+            saturation: 50.0,
+            ..Default::default()
+        });
+
+        // A color with obvious chroma — red-ish HDR pixel.
+        let color = [2.5_f32, 0.6, 0.3];
+        let out_n = neutral.map_rgb(color);
+        let out_p = punchy.map_rgb(color);
+
+        let mut any_different = false;
+        for i in 0..3 {
+            if (out_n[i] - out_p[i]).abs() > 1e-4 {
+                any_different = true;
+            }
+        }
+        assert!(
+            any_different,
+            "saturation 0 vs 50 produced identical outputs: {out_n:?} vs {out_p:?}"
+        );
+    }
+
+    #[test]
+    fn contrast_clamped_by_geometric_floor() {
+        // Smoke test documenting a quirk of the darktable-style filmic
+        // spline: `contrast` values below the geometric `min_contrast`
+        // (derived from the other parameters) get clamped, so two
+        // "low" contrast values can produce bit-identical output. This
+        // is intentional spline behavior, not a bug. Calibration work
+        // that tunes contrast needs to use values above the floor.
+        let low = CompiledFilmicSpline::new(&FilmicSplineConfig {
+            contrast: 0.9,
+            ..Default::default()
+        });
+        let also_low = CompiledFilmicSpline::new(&FilmicSplineConfig {
+            contrast: 1.5,
+            ..Default::default()
+        });
+        let mid = [0.3_f32, 0.3, 0.3];
+        assert_eq!(
+            low.map_rgb(mid),
+            also_low.map_rgb(mid),
+            "both should hit the same min_contrast clamp"
+        );
+    }
+
+    #[test]
+    fn with_luma_stores_bt2020_coefficients() {
+        let spline =
+            CompiledFilmicSpline::with_luma(&FilmicSplineConfig::default(), crate::LUMA_BT2020);
+        assert_eq!(spline.luma(), crate::LUMA_BT2020);
+    }
+
+    #[test]
+    fn bt2020_luma_diverges_from_bt709_on_green_heavy() {
+        let s_709 = CompiledFilmicSpline::new(&FilmicSplineConfig::default());
+        let s_2020 =
+            CompiledFilmicSpline::with_luma(&FilmicSplineConfig::default(), crate::LUMA_BT2020);
+        let rgb = [0.1_f32, 0.9, 0.05];
+        let a = s_709.map_rgb(rgb);
+        let b = s_2020.map_rgb(rgb);
+        let mut any_different = false;
+        for i in 0..3 {
+            if (a[i] - b[i]).abs() > 1e-5 {
+                any_different = true;
+            }
+        }
+        assert!(any_different, "709 vs 2020 matched on green-heavy pixel");
+    }
 }

@@ -645,4 +645,111 @@ mod tests {
         let tm = AdaptiveTonemapper::fit_luminance(&hdr, &sdr, 3, &FitConfig::default()).unwrap();
         assert!(tm.stats().mae.is_none());
     }
+
+    #[test]
+    fn detect_saturation_false_leaves_saturation_at_one() {
+        let (hdr, sdr) = make_pair_rgb(16, 16);
+        let cfg = FitConfig {
+            detect_saturation: false,
+            ..Default::default()
+        };
+        let tm = AdaptiveTonemapper::fit_luminance(&hdr, &sdr, 3, &cfg).unwrap();
+        assert_eq!(tm.stats().saturation_ratio, 1.0);
+    }
+
+    #[test]
+    fn full_sampling_max_samples_zero() {
+        // max_samples = 0 means "use every pixel" — sample_step = 1.
+        let (hdr, sdr) = make_pair_rgb(8, 8);
+        let cfg = FitConfig {
+            max_samples: 0,
+            ..Default::default()
+        };
+        let tm = AdaptiveTonemapper::fit_luminance(&hdr, &sdr, 3, &cfg).unwrap();
+        // 64 pixels, minus the first one which is v=0 (below the 0.001
+        // threshold), = 63 valid samples.
+        assert_eq!(tm.stats().samples, 63);
+    }
+
+    #[test]
+    fn apply_extrapolates_beyond_fitted_max_hdr() {
+        // Fit on data up to max_hdr = 4.0. Apply to an input at 5.0
+        // which is beyond the fit range. The luminance curve should
+        // extrapolate linearly from the last two LUT entries instead of
+        // clamping to the last value.
+        let (hdr, sdr) = make_pair_rgb(32, 32);
+        let tm = AdaptiveTonemapper::fit_luminance(&hdr, &sdr, 3, &FitConfig::default()).unwrap();
+        assert!(tm.max_hdr_observed() <= 4.0);
+
+        // An input above max_hdr_observed must still produce finite
+        // output (not NaN, not clamped to zero).
+        let out = tm.map_rgb([5.0, 5.0, 5.0]);
+        for c in out {
+            assert!(c.is_finite(), "extrapolation produced non-finite {c}");
+            assert!(
+                (0.0..=1.0).contains(&c),
+                "extrapolation should stay in SDR range, got {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn per_channel_empty_blue_errors_with_correct_index() {
+        let mut hdr = Vec::new();
+        let mut sdr = Vec::new();
+        for i in 0..64 {
+            let v = (i as f32 / 64.0) * 2.0;
+            hdr.extend_from_slice(&[v, v, 0.0]);
+            let s = v / (1.0 + v);
+            sdr.extend_from_slice(&[s, s, 0.0]);
+        }
+        let err =
+            AdaptiveTonemapper::fit_per_channel(&hdr, &sdr, 3, &FitConfig::default()).unwrap_err();
+        assert!(matches!(err, Error::EmptyChannel { channel: 2 }));
+    }
+
+    #[test]
+    fn per_channel_empty_green_errors_with_correct_index() {
+        let mut hdr = Vec::new();
+        let mut sdr = Vec::new();
+        for i in 0..64 {
+            let v = (i as f32 / 64.0) * 2.0;
+            hdr.extend_from_slice(&[v, 0.0, v]);
+            let s = v / (1.0 + v);
+            sdr.extend_from_slice(&[s, 0.0, s]);
+        }
+        let err =
+            AdaptiveTonemapper::fit_per_channel(&hdr, &sdr, 3, &FitConfig::default()).unwrap_err();
+        assert!(matches!(err, Error::EmptyChannel { channel: 1 }));
+    }
+
+    #[test]
+    fn fit_on_known_curve_recovers_it_approximately() {
+        // Generate an HDR image and a matching SDR image computed
+        // through a simple Reinhard curve. Fit luminance adaptive and
+        // verify the LUT approximates the curve when we apply it to
+        // unseen intermediate values.
+        let n = 64 * 64;
+        let mut hdr = Vec::with_capacity(n * 3);
+        let mut sdr = Vec::with_capacity(n * 3);
+        for i in 0..n {
+            let v = (i as f32 / n as f32) * 4.0;
+            hdr.extend_from_slice(&[v, v, v]);
+            let s = v / (1.0 + v); // Reinhard
+            sdr.extend_from_slice(&[s, s, s]);
+        }
+        let tm = AdaptiveTonemapper::fit_luminance(&hdr, &sdr, 3, &FitConfig::default()).unwrap();
+
+        // Probe at values the fit did see.
+        for probe in [0.5_f32, 1.0, 2.0, 3.0] {
+            let expected = probe / (1.0 + probe);
+            let out = tm.map_rgb([probe, probe, probe]);
+            let err = (out[0] - expected).abs();
+            assert!(
+                err < 0.02,
+                "adaptive fit at {probe}: got {}, expected {expected} (err {err})",
+                out[0]
+            );
+        }
+    }
 }

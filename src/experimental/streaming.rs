@@ -683,4 +683,109 @@ mod tests {
         let err = tm.push_row(&row).unwrap_err();
         assert!(matches!(err, Error::RingBufferFull));
     }
+
+    #[test]
+    fn image_smaller_than_lookahead_still_processes() {
+        // h = 4 rows, lookahead = 64. Must not deadlock or lose rows.
+        let w = 8_u32;
+        let h = 4_u32;
+        let mut tm = StreamingTonemapper::new(w, h, 3, StreamingTonemapConfig::default()).unwrap();
+        let row = alloc::vec![0.5_f32; tm.row_stride()];
+        let mut emitted = 0_u32;
+        let mut out = alloc::vec![0.0_f32; tm.row_stride()];
+        for _ in 0..h {
+            tm.push_row(&row).unwrap();
+            while tm.pull_row(&mut out).unwrap().is_some() {
+                emitted += 1;
+            }
+        }
+        tm.finish();
+        while tm.pull_row(&mut out).unwrap().is_some() {
+            emitted += 1;
+        }
+        assert_eq!(emitted, h, "tiny image should emit all rows");
+    }
+
+    #[test]
+    fn height_not_multiple_of_cell_size() {
+        // h = 13, cell_size = 8 → last row-cell is partial.
+        let cfg = StreamingTonemapConfig {
+            cell_size: 8,
+            ..Default::default()
+        };
+        let w = 16_u32;
+        let h = 13_u32;
+        let mut tm = StreamingTonemapper::new(w, h, 3, cfg).unwrap();
+        let row = alloc::vec![0.3_f32; tm.row_stride()];
+        let mut out = alloc::vec![0.0_f32; tm.row_stride()];
+        let mut emitted = 0_u32;
+        for _ in 0..h {
+            tm.push_row(&row).unwrap();
+            while tm.pull_row(&mut out).unwrap().is_some() {
+                emitted += 1;
+            }
+        }
+        tm.finish();
+        while tm.pull_row(&mut out).unwrap().is_some() {
+            emitted += 1;
+        }
+        assert_eq!(emitted, h);
+    }
+
+    #[test]
+    fn custom_cell_size_and_lookahead() {
+        // Non-default cell_size and lookahead_rows. Verify the pipeline
+        // still completes and emits every row.
+        let cfg = StreamingTonemapConfig {
+            cell_size: 4,
+            lookahead_rows: 16,
+            ..Default::default()
+        };
+        let w = 64_u32;
+        let h = 32_u32;
+        let mut tm = StreamingTonemapper::new(w, h, 4, cfg).unwrap();
+        let row: Vec<f32> = (0..w).flat_map(|_| [0.4_f32, 0.5, 0.6, 0.9]).collect();
+        let mut out = alloc::vec![0.0_f32; tm.row_stride()];
+        let mut emitted = 0_u32;
+        for _ in 0..h {
+            tm.push_row(&row).unwrap();
+            while tm.pull_row(&mut out).unwrap().is_some() {
+                emitted += 1;
+            }
+        }
+        tm.finish();
+        while tm.pull_row(&mut out).unwrap().is_some() {
+            emitted += 1;
+        }
+        assert_eq!(emitted, h);
+    }
+
+    #[test]
+    fn row_stride_matches_width_times_channels() {
+        let tm3 = StreamingTonemapper::new(120, 10, 3, StreamingTonemapConfig::default()).unwrap();
+        assert_eq!(tm3.row_stride(), 360);
+        assert_eq!(tm3.channels(), 3);
+        let tm4 = StreamingTonemapper::new(120, 10, 4, StreamingTonemapConfig::default()).unwrap();
+        assert_eq!(tm4.row_stride(), 480);
+        assert_eq!(tm4.channels(), 4);
+    }
+
+    #[test]
+    fn progress_reports_rows_output() {
+        let w = 16_u32;
+        let h = 8_u32;
+        let mut tm = StreamingTonemapper::new(w, h, 3, StreamingTonemapConfig::default()).unwrap();
+        let row = alloc::vec![0.5_f32; tm.row_stride()];
+        let mut out = alloc::vec![0.0_f32; tm.row_stride()];
+        for _ in 0..h {
+            tm.push_row(&row).unwrap();
+            while tm.pull_row(&mut out).unwrap().is_some() {}
+        }
+        tm.finish();
+        while tm.pull_row(&mut out).unwrap().is_some() {}
+
+        let (done, total) = tm.progress();
+        assert_eq!(done, h);
+        assert_eq!(total, h);
+    }
 }

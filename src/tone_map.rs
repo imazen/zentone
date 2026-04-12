@@ -17,6 +17,7 @@ pub trait ToneMap {
     /// Most curves produce output in `[0, 1]`; some (unclamped variants) may
     /// exceed this range. Callers that need a strict display-gamut guarantee
     /// should clamp themselves or apply an OETF that handles over-range input.
+    #[must_use]
     fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3];
 
     /// Tonemap a row of interleaved linear f32 pixels in place.
@@ -72,5 +73,186 @@ pub fn map_into_cn<const CN: usize, T: ToneMap + ?Sized>(tm: &T, src: &[f32], ds
         if CN == 4 {
             d[3] = s[3];
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AgxLook, LUMA_BT709, ToneMapCurve};
+
+    /// Build an RGB test row: interleaved triples in `[0, 4]` HDR range.
+    fn synth_row_rgb(pixels: usize) -> alloc::vec::Vec<f32> {
+        let mut row = alloc::vec::Vec::with_capacity(pixels * 3);
+        for i in 0..pixels {
+            let t = i as f32 / pixels as f32;
+            row.push(t * 4.0);
+            row.push((1.0 - t) * 3.5);
+            row.push(t * t * 2.0);
+        }
+        row
+    }
+
+    /// Build an RGBA test row with explicit alpha. Pixels match `synth_row_rgb`
+    /// so we can cross-check against the 3-channel result.
+    fn synth_row_rgba(pixels: usize) -> alloc::vec::Vec<f32> {
+        let mut row = alloc::vec::Vec::with_capacity(pixels * 4);
+        for i in 0..pixels {
+            let t = i as f32 / pixels as f32;
+            row.push(t * 4.0);
+            row.push((1.0 - t) * 3.5);
+            row.push(t * t * 2.0);
+            row.push(0.25 + t * 0.5);
+        }
+        row
+    }
+
+    /// A fixed, arbitrary selection of curves that exercise all the internal
+    /// dispatch branches.
+    fn sample_curves() -> [ToneMapCurve; 7] {
+        [
+            ToneMapCurve::Reinhard,
+            ToneMapCurve::ExtendedReinhard {
+                l_max: 4.0,
+                luma: LUMA_BT709,
+            },
+            ToneMapCurve::ReinhardJodie { luma: LUMA_BT709 },
+            ToneMapCurve::Narkowicz,
+            ToneMapCurve::Uncharted2,
+            ToneMapCurve::AcesAp1,
+            ToneMapCurve::Agx(AgxLook::Default),
+        ]
+    }
+
+    /// `map_row` must be equivalent to iterating `map_rgb` manually.
+    #[test]
+    fn map_row_rgb_matches_manual_loop() {
+        for curve in sample_curves() {
+            let src = synth_row_rgb(17); // prime count, not power of two
+            let mut via_row = src.clone();
+            curve.map_row(&mut via_row, 3);
+
+            let mut via_manual = src.clone();
+            for chunk in via_manual.chunks_exact_mut(3) {
+                let out = curve.map_rgb([chunk[0], chunk[1], chunk[2]]);
+                chunk[0] = out[0];
+                chunk[1] = out[1];
+                chunk[2] = out[2];
+            }
+
+            assert_eq!(via_row, via_manual, "curve {curve:?} diverged RGB");
+        }
+    }
+
+    /// `map_row` on RGBA must match a manual per-pixel loop and must preserve alpha.
+    #[test]
+    fn map_row_rgba_matches_manual_loop_and_keeps_alpha() {
+        for curve in sample_curves() {
+            let src = synth_row_rgba(17);
+            let mut via_row = src.clone();
+            curve.map_row(&mut via_row, 4);
+
+            let mut via_manual = src.clone();
+            for chunk in via_manual.chunks_exact_mut(4) {
+                let out = curve.map_rgb([chunk[0], chunk[1], chunk[2]]);
+                chunk[0] = out[0];
+                chunk[1] = out[1];
+                chunk[2] = out[2];
+                // alpha untouched
+            }
+
+            assert_eq!(via_row, via_manual, "curve {curve:?} diverged RGBA");
+            // Sanity: alpha values are the originals
+            for (i, pixel) in via_row.chunks_exact(4).enumerate() {
+                let expected_alpha = 0.25 + (i as f32 / 17.0) * 0.5;
+                assert!(
+                    (pixel[3] - expected_alpha).abs() < 1e-6,
+                    "curve {curve:?} pixel {i} alpha drift: {}",
+                    pixel[3]
+                );
+            }
+        }
+    }
+
+    /// `map_into` on RGB must match `copy_from_slice` followed by `map_row`.
+    #[test]
+    fn map_into_rgb_matches_copy_then_map_row() {
+        for curve in sample_curves() {
+            let src = synth_row_rgb(17);
+            let mut via_copy = src.clone();
+            curve.map_row(&mut via_copy, 3);
+
+            let mut via_into = alloc::vec![0.0_f32; src.len()];
+            curve.map_into(&src, &mut via_into, 3);
+
+            assert_eq!(via_copy, via_into, "curve {curve:?} map_into != map_row");
+        }
+    }
+
+    /// `map_into` on RGBA must copy alpha from src, not from dst.
+    #[test]
+    fn map_into_rgba_writes_src_alpha_to_dst() {
+        let curve = ToneMapCurve::Reinhard;
+        let src = synth_row_rgba(4);
+        // Pre-populate dst with a distinctly wrong alpha so we can tell
+        // whether map_into overwrites it.
+        let mut dst = alloc::vec![0.99_f32; src.len()];
+        curve.map_into(&src, &mut dst, 4);
+        for (i, (s, d)) in src.chunks_exact(4).zip(dst.chunks_exact(4)).enumerate() {
+            assert!(
+                (d[3] - s[3]).abs() < 1e-6,
+                "pixel {i}: dst alpha {} != src alpha {}",
+                d[3],
+                s[3]
+            );
+        }
+    }
+
+    /// `map_row_cn::<3>` called directly must agree with the trait dispatch.
+    #[test]
+    fn map_row_cn_direct_matches_trait_dispatch() {
+        let curve = ToneMapCurve::AcesAp1;
+        let src = synth_row_rgb(32);
+
+        let mut via_trait = src.clone();
+        curve.map_row(&mut via_trait, 3);
+
+        let mut via_direct = src.clone();
+        map_row_cn::<3, _>(&curve, &mut via_direct);
+
+        assert_eq!(via_trait, via_direct);
+    }
+
+    /// Trait object (dyn ToneMap) round-trip: the same curve as `dyn ToneMap`
+    /// must produce the same pixels as the concrete type.
+    #[test]
+    fn dyn_tone_map_matches_concrete() {
+        let curve = ToneMapCurve::Uncharted2;
+        let src = synth_row_rgb(8);
+
+        let mut via_concrete = src.clone();
+        curve.map_row(&mut via_concrete, 3);
+
+        let obj: &dyn ToneMap = &curve;
+        let mut via_dyn = src.clone();
+        obj.map_row(&mut via_dyn, 3);
+
+        assert_eq!(via_concrete, via_dyn);
+    }
+
+    /// Passing a non-3-non-4 channel count should panic consistently.
+    #[test]
+    #[should_panic(expected = "channels must be 3 or 4")]
+    fn map_row_panics_on_bad_channels() {
+        let mut row = [0.1_f32; 12];
+        ToneMapCurve::Reinhard.map_row(&mut row, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "channels must be 3 or 4")]
+    fn map_into_panics_on_bad_channels() {
+        let src = [0.1_f32; 12];
+        let mut dst = [0.0_f32; 12];
+        ToneMapCurve::Reinhard.map_into(&src, &mut dst, 5);
     }
 }

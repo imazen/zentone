@@ -233,4 +233,99 @@ mod tests {
             assert!((0.0..=1.0).contains(&c));
         }
     }
+
+    /// Build a realistic 257-point DNG-style S-curve over [0, 1].
+    /// Shape: smooth sigmoid that lifts shadows and rolls off highlights.
+    fn dng_shape_257_points() -> alloc::vec::Vec<f32> {
+        let mut pts = alloc::vec::Vec::with_capacity(257 * 2);
+        for i in 0..257 {
+            let x = i as f32 / 256.0;
+            // Sigmoid-ish: slightly punchier than identity
+            let y = x * x * (3.0 - 2.0 * x); // smoothstep
+            pts.push(x);
+            pts.push(y);
+        }
+        pts
+    }
+
+    #[test]
+    fn realistic_257_point_curve_is_monotonic_and_smooth() {
+        let curve = ProfileToneCurve::from_xy_pairs(&dng_shape_257_points()).unwrap();
+
+        // Monotonic: higher input → higher output
+        let mut last = curve.eval(0.0);
+        for i in 1..=100 {
+            let x = i as f32 / 100.0;
+            let y = curve.eval(x);
+            assert!(
+                y >= last - 1e-6,
+                "profile curve not monotonic at x={x}: {y} < previous {last}"
+            );
+            last = y;
+        }
+
+        // Endpoints close to identity at 0 and 1
+        assert!(curve.eval(0.0).abs() < 1e-3);
+        assert!((curve.eval(1.0) - 1.0).abs() < 1e-3);
+
+        // Smoothstep is flatter than identity in the middle: eval(0.5)
+        // should equal 0.5 exactly for smoothstep.
+        assert!((curve.eval(0.5) - 0.5).abs() < 1e-2);
+    }
+
+    #[test]
+    fn per_channel_view_applies_curve_independently() {
+        let curve = ProfileToneCurve::from_xy_pairs(&dng_shape_257_points()).unwrap();
+        let view = curve.per_channel();
+        // Each channel should be eval'd independently, so a mixed
+        // color input produces a per-channel-curved output.
+        let out = view.map_rgb([0.25, 0.5, 0.75]);
+        assert!((out[0] - curve.eval(0.25)).abs() < 1e-6);
+        assert!((out[1] - curve.eval(0.50)).abs() < 1e-6);
+        assert!((out[2] - curve.eval(0.75)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn luminance_view_ratio_preserves_relative_rgb() {
+        let curve = ProfileToneCurve::from_xy_pairs(&dng_shape_257_points()).unwrap();
+        let view = curve.luminance(LUMA_BT709);
+        let rgb = [0.2_f32, 0.4, 0.1];
+        let out = view.map_rgb(rgb);
+
+        // Luminance ratio should be preserved as long as the curve is
+        // not saturating. Check that out[0]/out[1] ≈ rgb[0]/rgb[1]
+        // within clamp tolerance.
+        let ratio_in = rgb[0] / rgb[1];
+        let ratio_out = out[0] / out[1];
+        assert!(
+            (ratio_in - ratio_out).abs() < 1e-3,
+            "hue drift in luminance-preserving mode: in ratio {ratio_in}, out ratio {ratio_out}"
+        );
+    }
+
+    #[test]
+    fn from_lut_roundtrip() {
+        // Build a LUT explicitly and confirm eval reproduces it.
+        let mut lut = alloc::vec::Vec::with_capacity(4097);
+        for i in 0..=4096 {
+            let x = i as f32 / 4096.0;
+            lut.push(x * 0.8); // simple scale
+        }
+        let curve = ProfileToneCurve::from_lut(lut).unwrap();
+
+        for probe in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+            let y = curve.eval(probe);
+            assert!(
+                (y - probe * 0.8).abs() < 1e-3,
+                "from_lut eval({probe}) = {y}, expected {}",
+                probe * 0.8
+            );
+        }
+    }
+
+    #[test]
+    fn from_xy_pairs_rejects_single_point() {
+        let too_short = alloc::vec![0.5_f32, 0.5];
+        assert!(ProfileToneCurve::from_xy_pairs(&too_short).is_none());
+    }
 }

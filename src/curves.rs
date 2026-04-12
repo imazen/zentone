@@ -458,6 +458,33 @@ mod tests {
     }
 
     #[test]
+    fn bt2390_min_lum_lifts_shadows() {
+        // min_lum adds a soft shadow lift: very dark input that would
+        // tonemap to near-zero should be nudged upward by the min_lum
+        // factor.
+        let dark_input = 0.001_f32;
+        let plain = bt2390_tonemap(dark_input, 1000.0, 100.0);
+        let lifted = bt2390_tonemap_ext(dark_input, 1000.0, 100.0, Some(0.05));
+
+        assert!(
+            lifted > plain,
+            "min_lum should lift near-black: plain={plain}, lifted={lifted}"
+        );
+    }
+
+    #[test]
+    fn bt2390_min_lum_does_not_affect_highlights() {
+        // At the top end, (1 - e2)^4 ≈ 0, so the min_lum correction
+        // should barely move the output.
+        let plain = bt2390_tonemap(0.99, 1000.0, 100.0);
+        let lifted = bt2390_tonemap_ext(0.99, 1000.0, 100.0, Some(0.05));
+        assert!(
+            (plain - lifted).abs() < 0.005,
+            "min_lum should leave highlights ~unchanged: plain={plain}, lifted={lifted}"
+        );
+    }
+
+    #[test]
     fn map_row_rgb_in_place() {
         let mut row = [0.1_f32, 0.5, 2.0, 0.3, 0.8, 4.0];
         ToneMapCurve::Reinhard.map_row(&mut row, 3);
