@@ -46,6 +46,7 @@
 extern crate alloc;
 
 mod bt2408;
+mod bt2446a;
 mod curves;
 mod error;
 mod filmic_spline;
@@ -57,6 +58,7 @@ mod tone_map;
 pub mod experimental;
 
 pub use bt2408::{Bt2408Tonemapper, EetfSpace};
+pub use bt2446a::Bt2446A;
 pub use curves::{
     AgxLook, ToneMapCurve, aces_ap1, agx_tonemap, bt2390_tonemap, bt2390_tonemap_ext,
     filmic_narkowicz, reinhard_extended, reinhard_jodie, reinhard_simple, uncharted2_filmic,
