@@ -9,6 +9,37 @@ use linear_srgb::tf::{linear_to_pq as pq_oetf, pq_to_linear as pq_eotf};
 
 use crate::{LUMA_BT709, ToneMap};
 
+/// Color space in which the EETF tone mapping is applied.
+///
+/// BT.2408 Annex 5 §A5.1 documents five options. zentone supports the
+/// two that don't require gamut mapping:
+///
+/// | Space | Desaturation | Gamut-safe? | Use case |
+/// |---|---|---|---|
+/// | `Yrgb` | Excessive on saturated highlights | Yes | Default, simple |
+/// | `MaxRgb` | None (preserves chromaticity) | Yes | Better for saturated content |
+///
+/// `MaxRgb` applies the EETF to `max(R,G,B)` and scales all channels
+/// uniformly. It preserves chromaticity exactly but can produce very
+/// saturated highlights. `Yrgb` applies to BT.709/BT.2020 luminance and
+/// scales uniformly, which over-desaturates bright blues (low luminance
+/// weight) but keeps overall brightness natural.
+///
+/// BT.2408 recommends blending both: use `MaxRgb` for the signal and
+/// `Yrgb` for the desaturation amount. zentone doesn't implement the
+/// blend yet (issue #2) but offers either space individually.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EetfSpace {
+    /// YRGB: compute BT.709/BT.2020 luminance, apply EETF, scale all
+    /// channels by luma ratio. Default.
+    #[default]
+    Yrgb,
+    /// maxRGB: compute `max(R, G, B)`, apply EETF, scale all channels
+    /// by max ratio. Preserves chromaticity; avoids YRGB blow-up on
+    /// saturated colors with low luminance weight.
+    MaxRgb,
+}
+
 /// BT.2408 tone mapper operating in PQ perceptual domain.
 ///
 /// Precomputes PQ-domain constants from content and display peak nits.
@@ -28,6 +59,7 @@ pub struct Bt2408Tonemapper {
     content_max_nits: f32,
     display_max_nits: f32,
     luma: [f32; 3],
+    space: EetfSpace,
 }
 
 impl Bt2408Tonemapper {
@@ -37,6 +69,19 @@ impl Bt2408Tonemapper {
     /// - `display_max_nits` — peak luminance of target display (e.g. 1000).
     pub fn new(content_max_nits: f32, display_max_nits: f32) -> Self {
         Self::with_luma(content_max_nits, display_max_nits, LUMA_BT709)
+    }
+
+    /// Create a new BT.2408 tonemapper with explicit luminance coefficients.
+    ///
+    /// Pass [`LUMA_BT709`] or [`LUMA_BT2020`](crate::LUMA_BT2020) depending
+    /// on the source gamut.
+    /// Create with maxRGB application space (preserves chromaticity on
+    /// saturated highlights). Uses BT.709 luminance for the `tonemap_nits`
+    /// helper.
+    pub fn max_rgb(content_max_nits: f32, display_max_nits: f32) -> Self {
+        let mut s = Self::with_luma(content_max_nits, display_max_nits, LUMA_BT709);
+        s.space = EetfSpace::MaxRgb;
+        s
     }
 
     /// Create a new BT.2408 tonemapper with explicit luminance coefficients.
@@ -83,7 +128,14 @@ impl Bt2408Tonemapper {
             content_max_nits,
             display_max_nits,
             luma,
+            space: EetfSpace::Yrgb,
         }
+    }
+
+    /// Configured EETF application space.
+    #[inline]
+    pub fn space(&self) -> EetfSpace {
+        self.space
     }
 
     /// Configured content peak luminance (nits).
@@ -181,12 +233,17 @@ impl Bt2408Tonemapper {
 
 impl ToneMap for Bt2408Tonemapper {
     fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
-        let luma = self.luma[0] * rgb[0] + self.luma[1] * rgb[1] + self.luma[2] * rgb[2];
-        let luma_nits = luma * self.content_max_nits;
-        if luma_nits <= 0.0 {
+        let signal = match self.space {
+            EetfSpace::Yrgb => {
+                self.luma[0] * rgb[0] + self.luma[1] * rgb[1] + self.luma[2] * rgb[2]
+            }
+            EetfSpace::MaxRgb => rgb[0].max(rgb[1]).max(rgb[2]),
+        };
+        let signal_nits = signal * self.content_max_nits;
+        if signal_nits <= 0.0 {
             return [0.0, 0.0, 0.0];
         }
-        let scale = self.make_luma_scale(luma_nits);
+        let scale = self.make_luma_scale(signal_nits);
         [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale]
     }
 }
@@ -305,5 +362,53 @@ mod tests {
     fn luma_accessor_returns_configured_coefficients() {
         let tm = Bt2408Tonemapper::with_luma(4000.0, 1000.0, [0.3, 0.5, 0.2]);
         assert_eq!(tm.luma(), [0.3, 0.5, 0.2]);
+    }
+
+    #[test]
+    fn max_rgb_fixes_saturated_blue_blowup() {
+        // YRGB blows up on saturated blue because luma = 0.0722*0.5 = 0.036,
+        // scale = ~4× → output blue = 2.0. maxRGB uses max(R,G,B) = 0.5,
+        // scale = ~1× → output blue ≤ 1.0.
+        let yrgb = Bt2408Tonemapper::new(4000.0, 1000.0);
+        let max_rgb = Bt2408Tonemapper::max_rgb(4000.0, 1000.0);
+
+        let pure_blue = [0.0_f32, 0.0, 0.5];
+        let yrgb_out = yrgb.map_rgb(pure_blue);
+        let maxrgb_out = max_rgb.map_rgb(pure_blue);
+
+        // YRGB produces >1 on blue channel (known limitation)
+        assert!(
+            yrgb_out[2] > 1.5,
+            "YRGB should blow up on blue: got {}",
+            yrgb_out[2]
+        );
+
+        // maxRGB keeps all channels bounded
+        for (i, c) in maxrgb_out.iter().enumerate() {
+            assert!(*c >= 0.0 && *c <= 1.001, "maxRGB[{i}] out of [0,1]: {c}");
+        }
+    }
+
+    #[test]
+    fn max_rgb_preserves_chromaticity() {
+        let tm = Bt2408Tonemapper::max_rgb(4000.0, 1000.0);
+        let rgb = [0.3_f32, 0.6, 0.15];
+        let out = tm.map_rgb(rgb);
+        // maxRGB scales uniformly by max-channel ratio, so R/G and B/G
+        // ratios should be preserved.
+        let ratio_in = rgb[0] / rgb[1];
+        let ratio_out = out[0] / out[1];
+        assert!(
+            (ratio_in - ratio_out).abs() < 1e-5,
+            "maxRGB should preserve chromaticity: in={ratio_in}, out={ratio_out}"
+        );
+    }
+
+    #[test]
+    fn space_accessor() {
+        let yrgb = Bt2408Tonemapper::new(4000.0, 1000.0);
+        assert_eq!(yrgb.space(), EetfSpace::Yrgb);
+        let max_rgb = Bt2408Tonemapper::max_rgb(4000.0, 1000.0);
+        assert_eq!(max_rgb.space(), EetfSpace::MaxRgb);
     }
 }

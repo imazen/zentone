@@ -49,13 +49,14 @@ mod bt2408;
 mod curves;
 mod error;
 mod filmic_spline;
+pub mod hlg;
 mod math;
 mod tone_map;
 
 #[cfg(feature = "experimental")]
 pub mod experimental;
 
-pub use bt2408::Bt2408Tonemapper;
+pub use bt2408::{Bt2408Tonemapper, EetfSpace};
 pub use curves::{
     AgxLook, ToneMapCurve, aces_ap1, agx_tonemap, bt2390_tonemap, bt2390_tonemap_ext,
     filmic_narkowicz, reinhard_extended, reinhard_jodie, reinhard_simple, uncharted2_filmic,
