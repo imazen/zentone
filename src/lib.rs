@@ -1,31 +1,41 @@
 //! HDR → SDR tone mapping: classical curves, BT.2408, filmic spline,
 //! plus experimental adaptive and streaming tonemappers.
 //!
-//! # Stable API
+//! # Core trait
 //!
-//! The default feature set exposes well-tested classical tone mapping:
+//! Every tonemapper implements [`ToneMap`]. Once constructed, apply it with
+//! [`map_rgb`](ToneMap::map_rgb) per pixel, [`map_row`](ToneMap::map_row) for
+//! in-place row work, or [`map_into`](ToneMap::map_into) to copy. The row
+//! methods dispatch to const-generic inner loops on `channels` (3 or 4), so
+//! the alpha branch and stride arithmetic are compile-time folded.
 //!
-//! - [`ToneMapCurve`] — enum dispatch over Reinhard variants, Uncharted 2
-//!   (Hable), Narkowicz filmic, ACES AP1, AgX (with Default/Punchy/Golden
-//!   looks), BT.2390 EETF, and Clamp.
-//! - [`Bt2408Tonemapper`] — ITU-R BT.2408 PQ-domain Hermite spline with
-//!   content and display peak nits.
-//! - [`CompiledFilmicSpline`] — darktable/Blender Filmic-style parametric
-//!   spline (latitude / balance / saturation).
-//! - [`tonemap_row`] / [`tonemap_rgb_curve`] — row and per-pixel dispatch.
+//! ```
+//! use zentone::{ToneMap, ToneMapCurve};
+//! let mut row = [0.5_f32, 1.2, 0.3, 0.8, 2.0, 0.1];
+//! ToneMapCurve::Narkowicz.map_row(&mut row, 3);
+//! ```
 //!
-//! # Experimental API (`experimental` feature)
+//! # Implementations
 //!
-//! Behind the `experimental` feature flag, zentone also provides primitives
-//! with lighter test coverage:
+//! - [`ToneMapCurve`] — classical curve dispatch (Reinhard variants, Hable,
+//!   Narkowicz, ACES AP1, AgX, BT.2390, clamp).
+//! - [`Bt2408Tonemapper`] — ITU-R BT.2408 PQ-domain Hermite spline.
+//! - [`CompiledFilmicSpline`] — darktable/Blender-style filmic spline.
 //!
-//! - [`experimental::AdaptiveTonemapper`] — learns a LUT from an HDR/SDR
-//!   pair, used to preserve artistic intent when re-encoding edited HDR.
-//! - [`experimental::StreamingTonemapper`] — single-pass spatially-local
-//!   tonemapper with a lookahead row buffer.
-//! - [`experimental::ProfileToneCurve`] — DNG camera profile tone curve.
+//! Variants / types that need RGB→luminance weights take them at construction
+//! time (via [`LUMA_BT709`] or [`LUMA_BT2020`]) so the per-pixel call site
+//! doesn't have to thread them through.
 //!
-//! These APIs may change without semver bumps until stabilized.
+//! # Experimental (`experimental` feature)
+//!
+//! - [`experimental::AdaptiveTonemapper`] — fits a LUT from an HDR/SDR pair.
+//! - [`experimental::StreamingTonemapper`] — spatially-local, single-pass,
+//!   bounded-memory, pull API.
+//! - [`experimental::ProfileToneCurve`] — DNG camera profile tone curve;
+//!   expose per-channel or luminance-preserving views via the [`ToneMap`]
+//!   trait.
+//!
+//! Lightly tested; API may change without semver bumps until stabilized.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -40,6 +50,7 @@ mod curves;
 mod error;
 mod filmic_spline;
 mod math;
+mod tone_map;
 
 #[cfg(feature = "experimental")]
 pub mod experimental;
@@ -48,12 +59,13 @@ pub use bt2408::Bt2408Tonemapper;
 pub use curves::{
     AgxLook, ToneMapCurve, aces_ap1, agx_tonemap, bt2390_tonemap, bt2390_tonemap_ext,
     clamp_tonemap, filmic_narkowicz, reinhard_extended, reinhard_jodie, reinhard_simple,
-    tonemap_rgb_curve, tonemap_row, tuned_reinhard, uncharted2_filmic,
+    tuned_reinhard, uncharted2_filmic,
 };
 pub use error::{Error, Result};
 pub use filmic_spline::{CompiledFilmicSpline, FilmicSplineConfig};
+pub use tone_map::{ToneMap, map_into_cn, map_row_cn};
 
-/// BT.709 luminance coefficients `[0.2126, 0.7152, 0.0722]`.
+/// BT.709 / sRGB luminance coefficients `[0.2126, 0.7152, 0.0722]`.
 pub const LUMA_BT709: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
 /// BT.2020 luminance coefficients `[0.2627, 0.6780, 0.0593]`.

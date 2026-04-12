@@ -4,6 +4,7 @@
 //! `[0, 1]` or `[0, ~1]` depending on the curve; apply an OETF (sRGB, BT.709,
 //! …) afterwards for display-encoded output.
 
+use crate::ToneMap;
 use crate::math::{log2f, powf};
 
 // ============================================================================
@@ -277,6 +278,12 @@ pub fn bt2390_tonemap_ext(
 // ============================================================================
 
 /// Enumeration of all supported tone mapping curves.
+///
+/// Variants that need per-pixel luminance carry luma coefficients inline so
+/// the curve is self-contained — a caller constructs it once with the desired
+/// RGB→Y weights ([`LUMA_BT709`](crate::LUMA_BT709) or
+/// [`LUMA_BT2020`](crate::LUMA_BT2020)) and applies it without threading luma
+/// through every call.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ToneMapCurve {
     /// Simple per-channel Reinhard: `x / (1 + x)`.
@@ -285,15 +292,22 @@ pub enum ToneMapCurve {
     ExtendedReinhard {
         /// Maximum expected luminance.
         l_max: f32,
+        /// RGB→luminance weights.
+        luma: [f32; 3],
     },
     /// Reinhard-Jodie (luminance-aware per-channel).
-    ReinhardJodie,
+    ReinhardJodie {
+        /// RGB→luminance weights.
+        luma: [f32; 3],
+    },
     /// Tuned Reinhard with display-aware weights (content/display peak nits).
     TunedReinhard {
         /// Content peak luminance in nits.
-        content_max: f32,
+        content_max_nits: f32,
         /// Display peak luminance in nits.
-        display_max: f32,
+        display_max_nits: f32,
+        /// RGB→luminance weights.
+        luma: [f32; 3],
     },
     /// Narkowicz filmic (ACES-inspired S-curve).
     Narkowicz,
@@ -303,9 +317,9 @@ pub enum ToneMapCurve {
     AcesAp1,
     /// BT.2390 EETF in scene-linear domain.
     Bt2390 {
-        /// Source peak luminance (normalized).
+        /// Source peak luminance (normalized, in `[0, 1]`).
         source_peak: f32,
-        /// Target peak luminance (normalized).
+        /// Target peak luminance (normalized, in `[0, 1]`).
         target_peak: f32,
     },
     /// AgX (Blender) with a named look.
@@ -314,91 +328,76 @@ pub enum ToneMapCurve {
     Clamp,
 }
 
-/// Apply a tone mapping curve to an RGB triple.
-pub fn tonemap_rgb_curve(curve: &ToneMapCurve, rgb: [f32; 3], luma_coeffs: [f32; 3]) -> [f32; 3] {
-    match *curve {
-        ToneMapCurve::Reinhard => [
-            reinhard_simple(rgb[0]).min(1.0),
-            reinhard_simple(rgb[1]).min(1.0),
-            reinhard_simple(rgb[2]).min(1.0),
-        ],
-        ToneMapCurve::ExtendedReinhard { l_max } => {
-            let l = rgb[0] * luma_coeffs[0] + rgb[1] * luma_coeffs[1] + rgb[2] * luma_coeffs[2];
-            if l <= 0.0 {
-                return [0.0, 0.0, 0.0];
+impl ToneMap for ToneMapCurve {
+    fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
+        match *self {
+            ToneMapCurve::Reinhard => [
+                reinhard_simple(rgb[0]).min(1.0),
+                reinhard_simple(rgb[1]).min(1.0),
+                reinhard_simple(rgb[2]).min(1.0),
+            ],
+            ToneMapCurve::ExtendedReinhard { l_max, luma } => {
+                let l = rgb[0] * luma[0] + rgb[1] * luma[1] + rgb[2] * luma[2];
+                if l <= 0.0 {
+                    return [0.0, 0.0, 0.0];
+                }
+                let scale = reinhard_extended(l, l_max) / l;
+                [
+                    (rgb[0] * scale).min(1.0),
+                    (rgb[1] * scale).min(1.0),
+                    (rgb[2] * scale).min(1.0),
+                ]
             }
-            let new_l = reinhard_extended(l, l_max);
-            let scale = new_l / l;
-            [
-                (rgb[0] * scale).min(1.0),
-                (rgb[1] * scale).min(1.0),
-                (rgb[2] * scale).min(1.0),
-            ]
-        }
-        ToneMapCurve::ReinhardJodie => reinhard_jodie(rgb, luma_coeffs),
-        ToneMapCurve::TunedReinhard {
-            content_max,
-            display_max,
-        } => {
-            let l = rgb[0] * luma_coeffs[0] + rgb[1] * luma_coeffs[1] + rgb[2] * luma_coeffs[2];
-            if l <= 0.0 {
-                return [0.0, 0.0, 0.0];
+            ToneMapCurve::ReinhardJodie { luma } => reinhard_jodie(rgb, luma),
+            ToneMapCurve::TunedReinhard {
+                content_max_nits,
+                display_max_nits,
+                luma,
+            } => {
+                let l = rgb[0] * luma[0] + rgb[1] * luma[1] + rgb[2] * luma[2];
+                if l <= 0.0 {
+                    return [0.0, 0.0, 0.0];
+                }
+                let scale = tuned_reinhard(l, content_max_nits, display_max_nits);
+                [
+                    (rgb[0] * scale).min(1.0),
+                    (rgb[1] * scale).min(1.0),
+                    (rgb[2] * scale).min(1.0),
+                ]
             }
-            let scale = tuned_reinhard(l, content_max, display_max);
-            [
-                (rgb[0] * scale).min(1.0),
-                (rgb[1] * scale).min(1.0),
-                (rgb[2] * scale).min(1.0),
-            ]
+            ToneMapCurve::Narkowicz => [
+                filmic_narkowicz(rgb[0]),
+                filmic_narkowicz(rgb[1]),
+                filmic_narkowicz(rgb[2]),
+            ],
+            ToneMapCurve::Uncharted2 => [
+                uncharted2_filmic(rgb[0]),
+                uncharted2_filmic(rgb[1]),
+                uncharted2_filmic(rgb[2]),
+            ],
+            ToneMapCurve::AcesAp1 => aces_ap1(rgb),
+            ToneMapCurve::Bt2390 {
+                source_peak,
+                target_peak,
+            } => [
+                bt2390_tonemap(rgb[0], source_peak, target_peak),
+                bt2390_tonemap(rgb[1], source_peak, target_peak),
+                bt2390_tonemap(rgb[2], source_peak, target_peak),
+            ],
+            ToneMapCurve::Agx(look) => agx_tonemap(rgb, look),
+            ToneMapCurve::Clamp => [
+                clamp_tonemap(rgb[0]),
+                clamp_tonemap(rgb[1]),
+                clamp_tonemap(rgb[2]),
+            ],
         }
-        ToneMapCurve::Narkowicz => [
-            filmic_narkowicz(rgb[0]),
-            filmic_narkowicz(rgb[1]),
-            filmic_narkowicz(rgb[2]),
-        ],
-        ToneMapCurve::Uncharted2 => [
-            uncharted2_filmic(rgb[0]),
-            uncharted2_filmic(rgb[1]),
-            uncharted2_filmic(rgb[2]),
-        ],
-        ToneMapCurve::AcesAp1 => aces_ap1(rgb),
-        ToneMapCurve::Bt2390 {
-            source_peak,
-            target_peak,
-        } => [
-            bt2390_tonemap(rgb[0], source_peak, target_peak),
-            bt2390_tonemap(rgb[1], source_peak, target_peak),
-            bt2390_tonemap(rgb[2], source_peak, target_peak),
-        ],
-        ToneMapCurve::Agx(look) => agx_tonemap(rgb, look),
-        ToneMapCurve::Clamp => [
-            clamp_tonemap(rgb[0]),
-            clamp_tonemap(rgb[1]),
-            clamp_tonemap(rgb[2]),
-        ],
-    }
-}
-
-/// Apply a tone mapping curve to a row of interleaved float pixel data.
-///
-/// `channels` must be 3 or 4. Alpha (channel index 3) is passed through
-/// unchanged when `channels == 4`.
-pub fn tonemap_row(curve: &ToneMapCurve, row: &mut [f32], channels: usize, luma_coeffs: [f32; 3]) {
-    debug_assert!(channels == 3 || channels == 4, "channels must be 3 or 4");
-    for chunk in row.chunks_exact_mut(channels) {
-        let rgb = [chunk[0], chunk[1], chunk[2]];
-        let mapped = tonemap_rgb_curve(curve, rgb, luma_coeffs);
-        chunk[0] = mapped[0];
-        chunk[1] = mapped[1];
-        chunk[2] = mapped[2];
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
+    use crate::LUMA_BT709;
 
     #[test]
     fn reinhard_monotonic() {
@@ -459,41 +458,53 @@ mod tests {
     }
 
     #[test]
-    fn tonemap_row_rgb_length_preserved() {
+    fn map_row_rgb_in_place() {
         let mut row = [0.1_f32, 0.5, 2.0, 0.3, 0.8, 4.0];
-        tonemap_row(&ToneMapCurve::Reinhard, &mut row, 3, LUMA);
+        ToneMapCurve::Reinhard.map_row(&mut row, 3);
         for v in row {
             assert!((0.0..=1.0).contains(&v));
         }
     }
 
     #[test]
-    fn tonemap_row_rgba_preserves_alpha() {
+    fn map_row_rgba_preserves_alpha() {
         let mut row = [0.5_f32, 0.5, 0.5, 0.42, 1.0, 2.0, 3.0, 0.77];
-        tonemap_row(&ToneMapCurve::Reinhard, &mut row, 4, LUMA);
+        ToneMapCurve::Reinhard.map_row(&mut row, 4);
         assert!((row[3] - 0.42).abs() < 1e-6);
         assert!((row[7] - 0.77).abs() < 1e-6);
     }
 
     #[test]
+    fn map_into_copies_and_preserves_alpha() {
+        let src = [0.5_f32, 0.5, 0.5, 0.42];
+        let mut dst = [0.0_f32; 4];
+        ToneMapCurve::Reinhard.map_into(&src, &mut dst, 4);
+        assert!((dst[3] - 0.42).abs() < 1e-6);
+        assert!(dst[0] > 0.0 && dst[0] < 1.0);
+    }
+
+    #[test]
     fn reinhard_jodie_zero_input() {
-        let out = reinhard_jodie([0.0, 0.0, 0.0], LUMA);
+        let out = reinhard_jodie([0.0, 0.0, 0.0], LUMA_BT709);
         assert_eq!(out, [0.0, 0.0, 0.0]);
     }
 
     #[test]
-    fn tonemap_rgb_curve_dispatches_all_variants() {
-        // Scene-linear in [0, ~3], which all curves accept. BT.2390 wants
-        // input normalized to source_peak, so we pick a source_peak above
-        // the largest input.
+    fn all_variants_dispatch() {
+        // Scene-linear in [0, ~3]. BT.2390 wants input normalized to
+        // source_peak, so excluded here and tested separately.
         let rgb = [1.5_f32, 2.5, 0.8];
         let curves = [
             ToneMapCurve::Reinhard,
-            ToneMapCurve::ExtendedReinhard { l_max: 4.0 },
-            ToneMapCurve::ReinhardJodie,
+            ToneMapCurve::ExtendedReinhard {
+                l_max: 4.0,
+                luma: LUMA_BT709,
+            },
+            ToneMapCurve::ReinhardJodie { luma: LUMA_BT709 },
             ToneMapCurve::TunedReinhard {
-                content_max: 1000.0,
-                display_max: 250.0,
+                content_max_nits: 1000.0,
+                display_max_nits: 250.0,
+                luma: LUMA_BT709,
             },
             ToneMapCurve::Narkowicz,
             ToneMapCurve::Uncharted2,
@@ -502,7 +513,7 @@ mod tests {
             ToneMapCurve::Clamp,
         ];
         for c in curves {
-            let out = tonemap_rgb_curve(&c, rgb, LUMA);
+            let out = c.map_rgb(rgb);
             for v in out {
                 assert!(v.is_finite(), "curve {c:?} produced non-finite {v}");
                 assert!((0.0..=1.0).contains(&v), "curve {c:?} out of [0,1]: {v}");
@@ -512,13 +523,12 @@ mod tests {
 
     #[test]
     fn bt2390_dispatch_in_range_input() {
-        // BT.2390 expects input normalized to [0, 1] where 1.0 = source_peak.
         let rgb = [0.5_f32, 0.7, 0.2];
         let curve = ToneMapCurve::Bt2390 {
             source_peak: 1.0,
             target_peak: 0.5,
         };
-        let out = tonemap_rgb_curve(&curve, rgb, LUMA);
+        let out = curve.map_rgb(rgb);
         for v in out {
             assert!(v.is_finite(), "bt2390 non-finite {v}");
             assert!((0.0..=0.5).contains(&v), "bt2390 out of [0, target]: {v}");

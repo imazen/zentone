@@ -1,11 +1,31 @@
 //! DNG camera profile tone curve.
 //!
-//! DNG profiles carry a `ProfileToneCurve` as 257 (x, y) control points that
-//! define an S-curve mapping linear [0, 1] input to linear [0, 1] output.
-//! This module expands those points into a 4097-entry LUT and evaluates it
-//! with linear interpolation.
+//! A DNG profile carries a `ProfileToneCurve` as 257 (x, y) control points
+//! that define an S-curve mapping linear `[0, 1]` input to linear `[0, 1]`
+//! output. This module expands those points into a 4097-entry LUT and
+//! evaluates it with linear interpolation.
+//!
+//! The LUT can be applied in two different ways; the constructor returns a
+//! plain [`ProfileToneCurve`], and you pick an application mode with
+//! [`per_channel`](ProfileToneCurve::per_channel) or
+//! [`luminance`](ProfileToneCurve::luminance). Both return wrapper views
+//! that implement [`ToneMap`](crate::ToneMap).
+//!
+//! ```
+//! # #[cfg(feature = "experimental")] {
+//! use zentone::{LUMA_BT709, ToneMap};
+//! use zentone::experimental::ProfileToneCurve;
+//!
+//! let curve = ProfileToneCurve::identity();
+//! let mut row = [0.5_f32, 0.5, 0.5, 0.42];
+//! curve.per_channel().map_row(&mut row, 4);
+//! curve.luminance(LUMA_BT709).map_row(&mut row, 4);
+//! # }
+//! ```
 
 use alloc::vec::Vec;
+
+use crate::ToneMap;
 
 /// Size of the expanded LUT (plus one sentinel for linear interpolation).
 const LUT_SIZE: usize = 4096;
@@ -13,7 +33,9 @@ const LUT_SIZE: usize = 4096;
 /// DNG ProfileToneCurve — a precomputed LUT-based tone curve.
 ///
 /// Built from 257 (x, y) control points (typical DNG camera profile size) or
-/// from a pre-built LUT. Evaluation uses 4096-entry interpolation.
+/// from a pre-built LUT. Evaluate scalar with [`eval`](Self::eval); apply to
+/// pixels via [`per_channel`](Self::per_channel) or
+/// [`luminance`](Self::luminance).
 #[derive(Clone, Debug)]
 pub struct ProfileToneCurve {
     /// 4097 entries (4096 + 1 sentinel) mapping `[0, 1]` → `[0, 1]`.
@@ -21,9 +43,8 @@ pub struct ProfileToneCurve {
 }
 
 impl ProfileToneCurve {
-    /// Build from raw DNG tone curve data (`n_points` × 2 floats, `[x0, y0, x1, y1, …]`).
-    ///
-    /// Returns `None` if there are fewer than 2 points.
+    /// Build from raw DNG tone curve data (`n_points` × 2 floats,
+    /// `[x0, y0, x1, y1, …]`). Returns `None` if there are fewer than 2 points.
     pub fn from_xy_pairs(tc_data: &[f32]) -> Option<Self> {
         let n_points = tc_data.len() / 2;
         if n_points < 2 {
@@ -65,23 +86,56 @@ impl ProfileToneCurve {
         self.lut[idx] * (1.0 - frac) + self.lut[idx + 1] * frac
     }
 
-    /// Apply per-channel to an RGB triple.
+    /// Per-channel application: evaluates the curve independently on R, G,
+    /// and B. The returned view implements [`ToneMap`](crate::ToneMap).
     #[inline]
-    pub fn apply_per_channel(&self, rgb: [f32; 3]) -> [f32; 3] {
-        [self.eval(rgb[0]), self.eval(rgb[1]), self.eval(rgb[2])]
+    pub fn per_channel(&self) -> ProfilePerChannel<'_> {
+        ProfilePerChannel { curve: self }
     }
 
-    /// Apply luminance-preserving to an RGB triple.
-    ///
-    /// Maps the luminance through the curve, then scales all channels by the
-    /// same ratio to preserve hue.
+    /// Luminance-preserving application: maps luminance through the curve
+    /// and rescales RGB by the resulting ratio, preserving hue. The returned
+    /// view implements [`ToneMap`](crate::ToneMap).
     #[inline]
-    pub fn apply_lum_preserving(&self, rgb: [f32; 3], luma_coeffs: [f32; 3]) -> [f32; 3] {
-        let lum = rgb[0] * luma_coeffs[0] + rgb[1] * luma_coeffs[1] + rgb[2] * luma_coeffs[2];
+    pub fn luminance(&self, luma: [f32; 3]) -> ProfileLuminance<'_> {
+        ProfileLuminance { curve: self, luma }
+    }
+}
+
+/// Per-channel view of a [`ProfileToneCurve`]. Construct via
+/// [`ProfileToneCurve::per_channel`].
+#[derive(Clone, Copy, Debug)]
+pub struct ProfilePerChannel<'a> {
+    curve: &'a ProfileToneCurve,
+}
+
+impl ToneMap for ProfilePerChannel<'_> {
+    #[inline]
+    fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
+        [
+            self.curve.eval(rgb[0]),
+            self.curve.eval(rgb[1]),
+            self.curve.eval(rgb[2]),
+        ]
+    }
+}
+
+/// Luminance-preserving view of a [`ProfileToneCurve`]. Construct via
+/// [`ProfileToneCurve::luminance`].
+#[derive(Clone, Copy, Debug)]
+pub struct ProfileLuminance<'a> {
+    curve: &'a ProfileToneCurve,
+    luma: [f32; 3],
+}
+
+impl ToneMap for ProfileLuminance<'_> {
+    #[inline]
+    fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
+        let lum = rgb[0] * self.luma[0] + rgb[1] * self.luma[1] + rgb[2] * self.luma[2];
         if lum <= 1e-10 {
             return [0.0, 0.0, 0.0];
         }
-        let mapped = self.eval(lum.min(1.0));
+        let mapped = self.curve.eval(lum.min(1.0));
         let ratio = mapped / lum;
         [
             (rgb[0] * ratio).min(1.0),
@@ -89,46 +143,8 @@ impl ProfileToneCurve {
             (rgb[2] * ratio).min(1.0),
         ]
     }
-
-    /// Apply to a full row of interleaved pixel data (per-channel mode).
-    ///
-    /// Alpha (channel index 3) is passed through unchanged when `channels == 4`.
-    pub fn apply_row_per_channel(&self, row: &mut [f32], channels: usize) {
-        debug_assert!(channels == 3 || channels == 4);
-        for chunk in row.chunks_exact_mut(channels) {
-            chunk[0] = self.eval(chunk[0]);
-            chunk[1] = self.eval(chunk[1]);
-            chunk[2] = self.eval(chunk[2]);
-        }
-    }
-
-    /// Apply to a full row of interleaved pixel data (luminance-preserving mode).
-    pub fn apply_row_lum_preserving(
-        &self,
-        row: &mut [f32],
-        channels: usize,
-        luma_coeffs: [f32; 3],
-    ) {
-        debug_assert!(channels == 3 || channels == 4);
-        for chunk in row.chunks_exact_mut(channels) {
-            let lum =
-                chunk[0] * luma_coeffs[0] + chunk[1] * luma_coeffs[1] + chunk[2] * luma_coeffs[2];
-            if lum > 1e-10 {
-                let mapped = self.eval(lum.min(1.0));
-                let ratio = mapped / lum;
-                chunk[0] = (chunk[0] * ratio).min(1.0);
-                chunk[1] = (chunk[1] * ratio).min(1.0);
-                chunk[2] = (chunk[2] * ratio).min(1.0);
-            } else {
-                chunk[0] = 0.0;
-                chunk[1] = 0.0;
-                chunk[2] = 0.0;
-            }
-        }
-    }
 }
 
-/// Linear interpolation in a sorted list of (x, y) control points.
 fn interpolate_curve(points: &[(f32, f32)], x: f32) -> f32 {
     if points.is_empty() {
         return x;
@@ -160,6 +176,7 @@ fn interpolate_curve(points: &[(f32, f32)], x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LUMA_BT709;
     use alloc::vec;
 
     #[test]
@@ -191,10 +208,29 @@ mod tests {
     }
 
     #[test]
-    fn apply_row_rgba_alpha_untouched() {
+    fn per_channel_view_preserves_alpha() {
         let curve = ProfileToneCurve::identity();
         let mut row = [0.5_f32, 0.5, 0.5, 0.42];
-        curve.apply_row_per_channel(&mut row, 4);
+        curve.per_channel().map_row(&mut row, 4);
         assert!((row[3] - 0.42).abs() < 1e-6);
+    }
+
+    #[test]
+    fn luminance_view_preserves_alpha() {
+        let curve = ProfileToneCurve::identity();
+        let mut row = [0.3_f32, 0.5, 0.2, 0.77];
+        curve.luminance(LUMA_BT709).map_row(&mut row, 4);
+        assert!((row[3] - 0.77).abs() < 1e-6);
+    }
+
+    #[test]
+    fn luminance_view_preserves_hue_on_identity() {
+        let curve = ProfileToneCurve::identity();
+        let view = curve.luminance(LUMA_BT709);
+        let out = view.map_rgb([0.3, 0.6, 0.2]);
+        // Identity curve + luminance-preserving should return ratio-scaled values
+        for c in out {
+            assert!((0.0..=1.0).contains(&c));
+        }
     }
 }

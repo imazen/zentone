@@ -6,6 +6,7 @@
 //! pulls highlights toward white.
 
 use crate::math::{expf, log2f, powf, sqrtf};
+use crate::{LUMA_BT709, ToneMap};
 
 /// Filmic spline configuration parameters.
 ///
@@ -66,11 +67,17 @@ pub struct CompiledFilmicSpline {
     sigma_toe: f32,
     sigma_shoulder: f32,
     saturation: f32,
+    luma: [f32; 3],
 }
 
 impl CompiledFilmicSpline {
-    /// Build a compiled spline from parameters.
+    /// Build a compiled spline from parameters with BT.709 luminance weights.
     pub fn new(p: &FilmicSplineConfig) -> Self {
+        Self::with_luma(p, LUMA_BT709)
+    }
+
+    /// Build a compiled spline with explicit luminance weights.
+    pub fn with_luma(p: &FilmicSplineConfig, luma: [f32; 3]) -> Self {
         let hardness = p.output_power;
         let grey_display = powf(0.1845, 1.0 / hardness);
         let latitude = p.latitude.clamp(0.0, 100.0) / 100.0;
@@ -152,7 +159,14 @@ impl CompiledFilmicSpline {
             sigma_toe,
             sigma_shoulder,
             saturation,
+            luma,
         }
+    }
+
+    /// Configured RGB→luminance weights.
+    #[inline]
+    pub fn luma(&self) -> [f32; 3] {
+        self.luma
     }
 
     fn compute_rational(p1: [f32; 2], p0: [f32; 2], g: f32) -> (f32, f32, f32, f32) {
@@ -197,15 +211,12 @@ impl CompiledFilmicSpline {
         let key_shoulder = expf(-radius_shoulder * radius_shoulder / self.sigma_shoulder * sat2);
         self.saturation - (key_toe + key_shoulder) * self.saturation
     }
+}
 
-    /// Tone map an RGB triple through the filmic spline.
-    ///
-    /// `luma_coeffs` are the RGB→luminance weights
-    /// (typically [`crate::LUMA_BT709`]).
-    pub fn tonemap_rgb(&self, rgb: [f32; 3], luma_coeffs: [f32; 3]) -> [f32; 3] {
-        let mut norm =
-            (rgb[0] * luma_coeffs[0] + rgb[1] * luma_coeffs[1] + rgb[2] * luma_coeffs[2])
-                .max(1.525879e-05);
+impl ToneMap for CompiledFilmicSpline {
+    fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
+        let mut norm = (rgb[0] * self.luma[0] + rgb[1] * self.luma[1] + rgb[2] * self.luma[2])
+            .max(1.525879e-05);
         let mut ratios = [rgb[0] / norm, rgb[1] / norm, rgb[2] / norm];
         let min_ratio = ratios[0].min(ratios[1]).min(ratios[2]);
         if min_ratio < 0.0 {
@@ -227,7 +238,6 @@ impl CompiledFilmicSpline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::LUMA_BT709;
 
     #[test]
     fn default_compiles() {
@@ -237,7 +247,7 @@ mod tests {
     #[test]
     fn default_maps_black_to_near_black() {
         let spline = CompiledFilmicSpline::new(&FilmicSplineConfig::default());
-        let out = spline.tonemap_rgb([0.0, 0.0, 0.0], LUMA_BT709);
+        let out = spline.map_rgb([0.0, 0.0, 0.0]);
         for c in out {
             assert!((0.0..0.05).contains(&c), "black should stay dark: {c}");
         }
@@ -246,7 +256,7 @@ mod tests {
     #[test]
     fn default_maps_unit_to_unit_range() {
         let spline = CompiledFilmicSpline::new(&FilmicSplineConfig::default());
-        let out = spline.tonemap_rgb([1.0, 1.0, 1.0], LUMA_BT709);
+        let out = spline.map_rgb([1.0, 1.0, 1.0]);
         for c in out {
             assert!((0.0..=1.0).contains(&c), "out of range: {c}");
         }
@@ -255,9 +265,17 @@ mod tests {
     #[test]
     fn hdr_input_clamps_in_range() {
         let spline = CompiledFilmicSpline::new(&FilmicSplineConfig::default());
-        let out = spline.tonemap_rgb([8.0, 4.0, 2.0], LUMA_BT709);
+        let out = spline.map_rgb([8.0, 4.0, 2.0]);
         for c in out {
             assert!((0.0..=1.0).contains(&c), "HDR out of range: {c}");
         }
+    }
+
+    #[test]
+    fn row_api_preserves_alpha() {
+        let spline = CompiledFilmicSpline::new(&FilmicSplineConfig::default());
+        let mut row = [0.5_f32, 0.5, 0.5, 0.42];
+        spline.map_row(&mut row, 4);
+        assert!((row[3] - 0.42).abs() < 1e-6);
     }
 }

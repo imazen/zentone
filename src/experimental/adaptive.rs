@@ -2,23 +2,27 @@
 //!
 //! Use case: re-encoding edited HDR content while preserving the artistic
 //! intent of the original SDR rendition. The fitter samples the HDR→SDR
-//! relationship in the source pair and fits either a luminance-domain LUT
+//! relationship in the training pair and fits either a luminance-domain LUT
 //! (hue-preserving) or per-channel LUTs (highest fidelity for round-trips).
 //!
 //! # Status
 //!
 //! Lightly tested. API may change. Inputs are tightly-packed interleaved
-//! linear f32 buffers; stride equals `width * channels`.
+//! linear f32 buffers of `pixels * channels` elements.
 
 use alloc::boxed::Box;
 
 use crate::error::{Error, Result};
 use crate::math::roundf;
+use crate::{LUMA_BT709, ToneMap};
 
 /// LUT resolution for adaptive tone curves.
 const LUT_SIZE: usize = 4096;
 
-/// Adaptive tonemapper that learns from HDR/SDR pairs.
+/// Adaptive tonemapper fitted from an HDR/SDR training pair.
+///
+/// Implements [`ToneMap`] — once fitted, use `map_rgb` / `map_row` /
+/// `map_into` to apply the learned curve.
 #[derive(Debug, Clone)]
 pub struct AdaptiveTonemapper {
     mode: TonemapMode,
@@ -26,25 +30,26 @@ pub struct AdaptiveTonemapper {
     stats: FitStats,
 }
 
-/// Tonemapping mode (how the curve is represented).
+/// Representation of a fitted tonemapping curve.
 #[derive(Debug, Clone)]
 pub enum TonemapMode {
-    /// Luminance-based curve with saturation preservation.
-    /// Hue-preserving, most natural for edits.
+    /// Hue-preserving luminance-based curve.
     Luminance(LuminanceCurve),
-    /// Per-channel LUTs. Most accurate for round-trips; may shift hues.
+    /// Per-channel LUTs; highest fidelity, may shift hues.
     PerChannel(PerChannelLut),
 }
 
 /// Luminance-based tone curve.
 #[derive(Debug, Clone)]
 pub struct LuminanceCurve {
-    /// LUT mapping HDR luminance [0, max_hdr] → SDR luminance [0, 1].
+    /// LUT mapping HDR luminance `[0, max_hdr]` → SDR luminance `[0, 1]`.
     lut: Box<[f32; LUT_SIZE]>,
     /// Maximum HDR luminance covered by the LUT.
     max_hdr: f32,
     /// Saturation adjustment (1.0 = preserve, >1 = boost, <1 = reduce).
     saturation: f32,
+    /// RGB→luminance weights captured from the fit config.
+    luma: [f32; 3],
 }
 
 /// Per-channel tone curves.
@@ -59,186 +64,82 @@ pub struct PerChannelLut {
 /// Statistics from the fitting process.
 #[derive(Debug, Clone, Default)]
 pub struct FitStats {
-    /// Number of pixel samples used.
+    /// Number of pixel samples used (after sub-sampling).
     pub samples: usize,
-    /// Mean absolute error of the fit.
-    pub mae: f32,
-    /// Maximum observed HDR luminance.
-    pub max_hdr_luminance: f32,
-    /// Detected saturation change (SDR_sat / HDR_sat).
+    /// Maximum observed HDR luminance (luminance fit) or RGB value
+    /// (per-channel fit).
+    pub max_hdr: f32,
+    /// Detected saturation change (SDR_sat / HDR_sat). `1.0` if saturation
+    /// detection was disabled or no valid samples were found.
     pub saturation_ratio: f32,
+    /// Mean absolute error of the fit. `None` unless
+    /// [`FitConfig::compute_mae`] was enabled.
+    pub mae: Option<f32>,
 }
 
 /// Configuration for fitting an adaptive tonemapper.
+///
+/// Defaults: 100k sub-sampled pixels, saturation detection on, MAE off,
+/// BT.709 luminance weights.
 #[derive(Debug, Clone)]
 pub struct FitConfig {
-    /// Fitting mode.
-    pub mode: FitMode,
-    /// Maximum number of samples (0 = all pixels).
+    /// Maximum number of samples to process. `0` = use every pixel.
     pub max_samples: usize,
-    /// Whether to detect and apply saturation changes (one extra pass).
+    /// Whether to detect and apply saturation changes
+    /// ([`LuminanceCurve`] only).
     pub detect_saturation: bool,
-    /// If true, compute mean absolute error as a diagnostic. Default: false.
-    /// Enabling this adds a third pass over the source buffers.
+    /// If true, compute mean absolute error as a diagnostic
+    /// ([`LuminanceCurve`] only). Adds one extra pass over the source.
     pub compute_mae: bool,
+    /// RGB→luminance weights ([`LuminanceCurve`] only).
+    pub luma_coeffs: [f32; 3],
 }
 
 impl Default for FitConfig {
     fn default() -> Self {
         Self {
-            mode: FitMode::Luminance,
             max_samples: 100_000,
             detect_saturation: true,
             compute_mae: false,
+            luma_coeffs: LUMA_BT709,
         }
     }
-}
-
-/// Which type of curve to fit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FitMode {
-    /// Luminance-based (recommended for most use cases).
-    #[default]
-    Luminance,
-    /// Per-channel LUTs.
-    PerChannel,
 }
 
 impl AdaptiveTonemapper {
-    /// Fit a tonemapper from an HDR/SDR pair using default configuration.
+    /// Fit a luminance-based tonemapper from an HDR/SDR pair.
     ///
-    /// Both buffers are interleaved linear f32, tightly packed (stride =
-    /// `width * channels`). `channels` must be 3 or 4; alpha is ignored.
-    pub fn fit(hdr: &[f32], sdr: &[f32], width: u32, height: u32, channels: u8) -> Result<Self> {
-        Self::fit_with_config(hdr, sdr, width, height, channels, &FitConfig::default())
-    }
-
-    /// Fit with a custom configuration.
-    pub fn fit_with_config(
-        hdr: &[f32],
-        sdr: &[f32],
-        width: u32,
-        height: u32,
-        channels: u8,
-        config: &FitConfig,
-    ) -> Result<Self> {
-        if channels != 3 && channels != 4 {
-            return Err(Error::InvalidConfig("channels must be 3 or 4"));
-        }
-        let required = (width as usize) * (height as usize) * channels as usize;
-        if hdr.len() < required {
-            return Err(Error::BufferTooSmall {
-                required,
-                actual: hdr.len(),
-            });
-        }
-        if sdr.len() < required {
-            return Err(Error::BufferTooSmall {
-                required,
-                actual: sdr.len(),
-            });
-        }
-        match config.mode {
-            FitMode::Luminance => Self::fit_luminance(hdr, sdr, width, height, channels, config),
-            FitMode::PerChannel => Self::fit_per_channel(hdr, sdr, width, height, channels, config),
-        }
-    }
-
-    /// Apply the tonemapper to a pre-allocated SDR buffer.
+    /// Both buffers must have the same length and contain `pixels * channels`
+    /// interleaved linear f32 elements (`channels` = 3 for RGB, 4 for RGBA;
+    /// alpha is ignored during fit). Pixel count is inferred from the slice
+    /// length.
     ///
-    /// `hdr_in` and `sdr_out` must have matching layout: interleaved f32,
-    /// tightly packed, `width * height * channels` elements.
-    pub fn apply(
-        &self,
-        hdr_in: &[f32],
-        sdr_out: &mut [f32],
-        width: u32,
-        height: u32,
-        channels: u8,
-    ) -> Result<()> {
-        if channels != 3 && channels != 4 {
-            return Err(Error::InvalidConfig("channels must be 3 or 4"));
-        }
-        let required = (width as usize) * (height as usize) * channels as usize;
-        if hdr_in.len() < required {
-            return Err(Error::BufferTooSmall {
-                required,
-                actual: hdr_in.len(),
-            });
-        }
-        if sdr_out.len() < required {
-            return Err(Error::BufferTooSmall {
-                required,
-                actual: sdr_out.len(),
-            });
-        }
-        let ch = channels as usize;
-        for (src, dst) in hdr_in.chunks_exact(ch).zip(sdr_out.chunks_exact_mut(ch)) {
-            let hdr = [src[0], src[1], src[2]];
-            let mapped = self.tonemap_pixel(hdr);
-            dst[0] = mapped[0];
-            dst[1] = mapped[1];
-            dst[2] = mapped[2];
-            if ch == 4 {
-                dst[3] = src[3];
-            }
-        }
-        Ok(())
-    }
-
-    /// Tonemap a single linear HDR pixel to linear SDR.
-    pub fn tonemap_pixel(&self, hdr_linear: [f32; 3]) -> [f32; 3] {
-        match &self.mode {
-            TonemapMode::Luminance(curve) => curve.apply(hdr_linear),
-            TonemapMode::PerChannel(luts) => luts.apply(hdr_linear),
-        }
-    }
-
-    /// Fitting statistics.
-    pub fn stats(&self) -> &FitStats {
-        &self.stats
-    }
-
-    /// Maximum HDR value observed during fitting.
-    pub fn max_hdr_observed(&self) -> f32 {
-        self.max_hdr_observed
-    }
-
-    /// Representation of the fit curve.
-    pub fn mode(&self) -> &TonemapMode {
-        &self.mode
-    }
-
-    fn fit_luminance(
-        hdr: &[f32],
-        sdr: &[f32],
-        width: u32,
-        height: u32,
-        channels: u8,
-        config: &FitConfig,
-    ) -> Result<Self> {
-        let ch = channels as usize;
-        let total_pixels = (width as usize) * (height as usize);
-        let step = sample_step(total_pixels, config.max_samples);
+    /// The result implements [`ToneMap`] — apply with
+    /// [`map_rgb`](ToneMap::map_rgb), [`map_row`](ToneMap::map_row), or
+    /// [`map_into`](ToneMap::map_into).
+    pub fn fit_luminance(hdr: &[f32], sdr: &[f32], channels: u8, cfg: &FitConfig) -> Result<Self> {
+        let (ch, pixels) = validate_pair(hdr, sdr, channels)?;
 
         // Pass 1: find max_hdr (+ optional saturation detection)
         let mut max_hdr = 0.0_f32;
         let mut saturation_sum = 0.0_f32;
         let mut saturation_count = 0_usize;
         let mut sample_count = 0_usize;
+        let step = sample_step(pixels, cfg.max_samples);
+        let luma = cfg.luma_coeffs;
 
-        for i in (0..total_pixels).step_by(step) {
+        for i in (0..pixels).step_by(step) {
             let off = i * ch;
             let hdr_rgb = [hdr[off], hdr[off + 1], hdr[off + 2]];
             let sdr_rgb = [sdr[off], sdr[off + 1], sdr[off + 2]];
-            let l_hdr = luminance(hdr_rgb);
-            let l_sdr = luminance(sdr_rgb);
+            let l_hdr = dot3(hdr_rgb, luma);
+            let l_sdr = dot3(sdr_rgb, luma);
             if l_hdr > 0.001 && l_sdr > 0.001 {
                 sample_count += 1;
                 if l_hdr > max_hdr {
                     max_hdr = l_hdr;
                 }
-                if config.detect_saturation && l_hdr > 0.01 && l_sdr > 0.01 {
+                if cfg.detect_saturation && l_hdr > 0.01 && l_sdr > 0.01 {
                     let sat_hdr = compute_saturation(hdr_rgb, l_hdr);
                     let sat_sdr = compute_saturation(sdr_rgb, l_sdr);
                     if sat_hdr > 0.01 {
@@ -258,23 +159,17 @@ impl AdaptiveTonemapper {
         let mut counts = [0_u32; LUT_SIZE];
         let max_idx = (LUT_SIZE - 1) as f32;
 
-        for i in (0..total_pixels).step_by(step) {
+        for i in (0..pixels).step_by(step) {
             let off = i * ch;
-            let l_hdr = luminance([hdr[off], hdr[off + 1], hdr[off + 2]]);
-            let l_sdr = luminance([sdr[off], sdr[off + 1], sdr[off + 2]]);
+            let l_hdr = dot3([hdr[off], hdr[off + 1], hdr[off + 2]], luma);
+            let l_sdr = dot3([sdr[off], sdr[off + 1], sdr[off + 2]], luma);
             if l_hdr > 0.001 && l_sdr > 0.001 {
                 let idx = roundf((l_hdr / max_hdr) * max_idx).clamp(0.0, max_idx) as usize;
                 lut[idx] += l_sdr;
                 counts[idx] += 1;
             }
         }
-        for i in 0..LUT_SIZE {
-            if counts[i] > 0 {
-                lut[i] /= counts[i] as f32;
-            }
-        }
-        fill_lut_gaps(&mut lut, &counts);
-        enforce_monotonicity(&mut lut);
+        finalize_bucketed_lut(&mut lut, &counts);
 
         let saturation = if saturation_count > 0 {
             (saturation_sum / saturation_count as f32).clamp(0.5, 2.0)
@@ -283,13 +178,13 @@ impl AdaptiveTonemapper {
         };
 
         // Optional pass 3: MAE (off by default)
-        let mae = if config.compute_mae {
+        let mae = if cfg.compute_mae {
             let mut mae_sum = 0.0_f32;
             let mut mae_count = 0_usize;
-            for i in (0..total_pixels).step_by(step) {
+            for i in (0..pixels).step_by(step) {
                 let off = i * ch;
-                let l_hdr = luminance([hdr[off], hdr[off + 1], hdr[off + 2]]);
-                let l_sdr = luminance([sdr[off], sdr[off + 1], sdr[off + 2]]);
+                let l_hdr = dot3([hdr[off], hdr[off + 1], hdr[off + 2]], luma);
+                let l_sdr = dot3([sdr[off], sdr[off + 1], sdr[off + 2]], luma);
                 if l_hdr > 0.001 && l_sdr > 0.001 {
                     let idx = roundf((l_hdr / max_hdr) * max_idx).clamp(0.0, max_idx) as usize;
                     mae_sum += (lut[idx] - l_sdr).abs();
@@ -297,12 +192,12 @@ impl AdaptiveTonemapper {
                 }
             }
             if mae_count > 0 {
-                mae_sum / mae_count as f32
+                Some(mae_sum / mae_count as f32)
             } else {
-                0.0
+                Some(0.0)
             }
         } else {
-            0.0
+            None
         };
 
         Ok(Self {
@@ -310,40 +205,54 @@ impl AdaptiveTonemapper {
                 lut,
                 max_hdr,
                 saturation,
+                luma,
             }),
             max_hdr_observed: max_hdr,
             stats: FitStats {
                 samples: sample_count,
-                mae,
-                max_hdr_luminance: max_hdr,
+                max_hdr,
                 saturation_ratio: saturation,
+                mae,
             },
         })
     }
 
-    fn fit_per_channel(
+    /// Fit per-channel tonemappers from an HDR/SDR pair.
+    ///
+    /// Returns [`Error::EmptyChannel`] if any of R/G/B has no valid samples
+    /// — per-channel mode can't fabricate a mapping from nothing. Fall back
+    /// to [`fit_luminance`](Self::fit_luminance) in that case.
+    ///
+    /// `cfg.detect_saturation`, `cfg.compute_mae`, and `cfg.luma_coeffs` are
+    /// ignored in per-channel mode.
+    pub fn fit_per_channel(
         hdr: &[f32],
         sdr: &[f32],
-        width: u32,
-        height: u32,
         channels: u8,
-        config: &FitConfig,
+        cfg: &FitConfig,
     ) -> Result<Self> {
-        let ch = channels as usize;
-        let total_pixels = (width as usize) * (height as usize);
-        let step = sample_step(total_pixels, config.max_samples);
+        let (ch, pixels) = validate_pair(hdr, sdr, channels)?;
+        let step = sample_step(pixels, cfg.max_samples);
         let max_idx = (LUT_SIZE - 1) as f32;
 
-        // Pass 1: find max_hdr (shared across channels)
+        // Pass 1: find max_hdr (shared across channels) + per-channel counts
         let mut max_hdr = 0.0_f32;
-        let mut any_sample = false;
-        for i in (0..total_pixels).step_by(step) {
+        let mut n_r = 0_usize;
+        let mut n_g = 0_usize;
+        let mut n_b = 0_usize;
+        for i in (0..pixels).step_by(step) {
             let off = i * ch;
             let hr = hdr[off];
             let hg = hdr[off + 1];
             let hb = hdr[off + 2];
-            if hr > 0.001 || hg > 0.001 || hb > 0.001 {
-                any_sample = true;
+            if hr > 0.001 {
+                n_r += 1;
+            }
+            if hg > 0.001 {
+                n_g += 1;
+            }
+            if hb > 0.001 {
+                n_b += 1;
             }
             if hr > max_hdr {
                 max_hdr = hr;
@@ -355,8 +264,17 @@ impl AdaptiveTonemapper {
                 max_hdr = hb;
             }
         }
-        if !any_sample || max_hdr <= 0.0 {
+        if max_hdr <= 0.0 {
             return Err(Error::NoValidSamples);
+        }
+        if n_r == 0 {
+            return Err(Error::EmptyChannel { channel: 0 });
+        }
+        if n_g == 0 {
+            return Err(Error::EmptyChannel { channel: 1 });
+        }
+        if n_b == 0 {
+            return Err(Error::EmptyChannel { channel: 2 });
         }
 
         // Pass 2: bucket each channel directly into its LUT
@@ -366,9 +284,8 @@ impl AdaptiveTonemapper {
         let mut cnt_r = [0_u32; LUT_SIZE];
         let mut cnt_g = [0_u32; LUT_SIZE];
         let mut cnt_b = [0_u32; LUT_SIZE];
-        let mut sample_count = 0_usize;
 
-        for i in (0..total_pixels).step_by(step) {
+        for i in (0..pixels).step_by(step) {
             let off = i * ch;
             let hr = hdr[off];
             let hg = hdr[off + 1];
@@ -376,24 +293,20 @@ impl AdaptiveTonemapper {
             let sr = sdr[off];
             let sg = sdr[off + 1];
             let sb = sdr[off + 2];
-
             if hr > 0.001 {
                 let idx = roundf((hr / max_hdr) * max_idx).clamp(0.0, max_idx) as usize;
                 lut_r[idx] += sr;
                 cnt_r[idx] += 1;
-                sample_count += 1;
             }
             if hg > 0.001 {
                 let idx = roundf((hg / max_hdr) * max_idx).clamp(0.0, max_idx) as usize;
                 lut_g[idx] += sg;
                 cnt_g[idx] += 1;
-                sample_count += 1;
             }
             if hb > 0.001 {
                 let idx = roundf((hb / max_hdr) * max_idx).clamp(0.0, max_idx) as usize;
                 lut_b[idx] += sb;
                 cnt_b[idx] += 1;
-                sample_count += 1;
             }
         }
 
@@ -410,49 +323,48 @@ impl AdaptiveTonemapper {
             }),
             max_hdr_observed: max_hdr,
             stats: FitStats {
-                samples: sample_count,
-                mae: 0.0,
-                max_hdr_luminance: max_hdr,
+                samples: n_r + n_g + n_b,
+                max_hdr,
                 saturation_ratio: 1.0,
+                mae: None,
             },
         })
     }
-}
 
-#[inline]
-fn luminance(rgb: [f32; 3]) -> f32 {
-    0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
-}
+    /// Fitting statistics.
+    pub fn stats(&self) -> &FitStats {
+        &self.stats
+    }
 
-#[inline]
-fn sample_step(total_pixels: usize, max_samples: usize) -> usize {
-    if max_samples > 0 && total_pixels > max_samples {
-        (total_pixels / max_samples).max(1)
-    } else {
-        1
+    /// Maximum HDR value observed during fitting.
+    pub fn max_hdr_observed(&self) -> f32 {
+        self.max_hdr_observed
+    }
+
+    /// Representation of the fitted curve.
+    pub fn mode(&self) -> &TonemapMode {
+        &self.mode
     }
 }
 
-fn finalize_bucketed_lut(lut: &mut [f32; LUT_SIZE], counts: &[u32; LUT_SIZE]) {
-    for i in 0..LUT_SIZE {
-        if counts[i] > 0 {
-            lut[i] /= counts[i] as f32;
+impl ToneMap for AdaptiveTonemapper {
+    fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
+        match &self.mode {
+            TonemapMode::Luminance(curve) => curve.apply(rgb),
+            TonemapMode::PerChannel(luts) => luts.apply(rgb),
         }
     }
-    fill_lut_gaps(lut, counts);
-    enforce_monotonicity(lut);
 }
 
 impl LuminanceCurve {
-    fn apply(&self, hdr_linear: [f32; 3]) -> [f32; 3] {
-        let l_hdr = 0.2126 * hdr_linear[0] + 0.7152 * hdr_linear[1] + 0.0722 * hdr_linear[2];
+    fn apply(&self, hdr: [f32; 3]) -> [f32; 3] {
+        let l_hdr = dot3(hdr, self.luma);
         if l_hdr <= 0.0 {
             return [0.0, 0.0, 0.0];
         }
 
         let idx_f = (l_hdr / self.max_hdr) * (LUT_SIZE - 1) as f32;
         let l_sdr = if idx_f >= (LUT_SIZE - 1) as f32 {
-            // Extrapolate beyond LUT end
             let slope = self.lut[LUT_SIZE - 1] - self.lut[LUT_SIZE - 2];
             self.lut[LUT_SIZE - 1] + slope * (idx_f - (LUT_SIZE - 1) as f32)
         } else if idx_f <= 0.0 {
@@ -464,13 +376,9 @@ impl LuminanceCurve {
         };
 
         let ratio = (l_sdr / l_hdr).clamp(0.0, 10.0);
-        let sdr = [
-            hdr_linear[0] * ratio,
-            hdr_linear[1] * ratio,
-            hdr_linear[2] * ratio,
-        ];
+        let sdr = [hdr[0] * ratio, hdr[1] * ratio, hdr[2] * ratio];
 
-        let l_sdr_actual = 0.2126 * sdr[0] + 0.7152 * sdr[1] + 0.0722 * sdr[2];
+        let l_sdr_actual = dot3(sdr, self.luma);
         let adjusted = if self.saturation != 1.0 && l_sdr_actual > 0.001 {
             [
                 l_sdr_actual + (sdr[0] - l_sdr_actual) * self.saturation,
@@ -490,13 +398,51 @@ impl LuminanceCurve {
 }
 
 impl PerChannelLut {
-    fn apply(&self, hdr_linear: [f32; 3]) -> [f32; 3] {
+    fn apply(&self, hdr: [f32; 3]) -> [f32; 3] {
         [
-            lookup_lut(&self.lut_r, hdr_linear[0], self.max_hdr),
-            lookup_lut(&self.lut_g, hdr_linear[1], self.max_hdr),
-            lookup_lut(&self.lut_b, hdr_linear[2], self.max_hdr),
+            lookup_lut(&self.lut_r, hdr[0], self.max_hdr),
+            lookup_lut(&self.lut_g, hdr[1], self.max_hdr),
+            lookup_lut(&self.lut_b, hdr[2], self.max_hdr),
         ]
     }
+}
+
+// ============================================================================
+// Internal helpers
+// ============================================================================
+
+#[inline]
+fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+#[inline]
+fn sample_step(pixels: usize, max_samples: usize) -> usize {
+    if max_samples > 0 && pixels > max_samples {
+        (pixels / max_samples).max(1)
+    } else {
+        1
+    }
+}
+
+fn validate_pair(hdr: &[f32], sdr: &[f32], channels: u8) -> Result<(usize, usize)> {
+    if channels != 3 && channels != 4 {
+        return Err(Error::InvalidConfig("channels must be 3 or 4"));
+    }
+    if hdr.len() != sdr.len() {
+        return Err(Error::LengthMismatch {
+            hdr: hdr.len(),
+            sdr: sdr.len(),
+        });
+    }
+    let ch = channels as usize;
+    if !hdr.len().is_multiple_of(ch) {
+        return Err(Error::NotAligned {
+            len: hdr.len(),
+            channels,
+        });
+    }
+    Ok((ch, hdr.len() / ch))
 }
 
 fn compute_saturation(rgb: [f32; 3], luminance: f32) -> f32 {
@@ -509,6 +455,16 @@ fn compute_saturation(rgb: [f32; 3], luminance: f32) -> f32 {
     }
 }
 
+fn finalize_bucketed_lut(lut: &mut [f32; LUT_SIZE], counts: &[u32; LUT_SIZE]) {
+    for i in 0..LUT_SIZE {
+        if counts[i] > 0 {
+            lut[i] /= counts[i] as f32;
+        }
+    }
+    fill_lut_gaps(lut, counts);
+    enforce_monotonicity(lut);
+}
+
 fn fill_lut_gaps(lut: &mut [f32; LUT_SIZE], counts: &[u32; LUT_SIZE]) {
     let mut last_valid = 0_usize;
     let mut last_value = lut[0];
@@ -519,7 +475,6 @@ fn fill_lut_gaps(lut: &mut [f32; LUT_SIZE], counts: &[u32; LUT_SIZE]) {
                 let start_value = last_value;
                 let end_value = lut[i];
                 let gap_size = (i - last_valid) as f32;
-
                 #[allow(clippy::needless_range_loop)]
                 for j in (last_valid + 1)..i {
                     let t = (j - last_valid) as f32 / gap_size;
@@ -530,7 +485,6 @@ fn fill_lut_gaps(lut: &mut [f32; LUT_SIZE], counts: &[u32; LUT_SIZE]) {
             last_value = lut[i];
         }
     }
-
     for slot in lut.iter_mut().skip(last_valid + 1) {
         *slot = last_value;
     }
@@ -564,14 +518,13 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    fn make_pair(w: u32, h: u32) -> (Vec<f32>, Vec<f32>) {
+    fn make_pair_rgb(w: u32, h: u32) -> (Vec<f32>, Vec<f32>) {
         let n = (w * h) as usize;
         let mut hdr = Vec::with_capacity(n * 3);
         let mut sdr = Vec::with_capacity(n * 3);
         for i in 0..n {
-            let v = (i as f32 / n as f32) * 4.0; // HDR up to 4.0
+            let v = (i as f32 / n as f32) * 4.0;
             hdr.extend_from_slice(&[v, v, v]);
-            // Synthetic SDR: reinhard-like
             let s = v / (1.0 + v);
             sdr.extend_from_slice(&[s, s, s]);
         }
@@ -579,12 +532,11 @@ mod tests {
     }
 
     #[test]
-    fn fit_luminance_basic() {
-        let (hdr, sdr) = make_pair(16, 16);
-        let tm = AdaptiveTonemapper::fit(&hdr, &sdr, 16, 16, 3).unwrap();
+    fn fit_luminance_reproduces_training() {
+        let (hdr, sdr) = make_pair_rgb(16, 16);
+        let tm = AdaptiveTonemapper::fit_luminance(&hdr, &sdr, 3, &FitConfig::default()).unwrap();
         assert!(tm.stats().samples > 0);
-        let out = tm.tonemap_pixel([1.0, 1.0, 1.0]);
-        // At x=1.0, SDR synthetic = 0.5, so LUT should reproduce ~0.5
+        let out = tm.map_rgb([1.0, 1.0, 1.0]);
         for c in out {
             assert!(
                 (c - 0.5).abs() < 0.1,
@@ -594,14 +546,10 @@ mod tests {
     }
 
     #[test]
-    fn fit_per_channel_basic() {
-        let (hdr, sdr) = make_pair(16, 16);
-        let cfg = FitConfig {
-            mode: FitMode::PerChannel,
-            ..Default::default()
-        };
-        let tm = AdaptiveTonemapper::fit_with_config(&hdr, &sdr, 16, 16, 3, &cfg).unwrap();
-        let out = tm.tonemap_pixel([1.0, 1.0, 1.0]);
+    fn fit_per_channel_reproduces_training() {
+        let (hdr, sdr) = make_pair_rgb(16, 16);
+        let tm = AdaptiveTonemapper::fit_per_channel(&hdr, &sdr, 3, &FitConfig::default()).unwrap();
+        let out = tm.map_rgb([1.0, 1.0, 1.0]);
         for c in out {
             assert!((c - 0.5).abs() < 0.1, "per-channel fit wrong: {c}");
         }
@@ -610,19 +558,45 @@ mod tests {
     #[test]
     fn fit_rejects_bad_channels() {
         let buf = vec![0.0_f32; 12];
-        let err = AdaptiveTonemapper::fit(&buf, &buf, 2, 2, 2).unwrap_err();
+        let err =
+            AdaptiveTonemapper::fit_luminance(&buf, &buf, 2, &FitConfig::default()).unwrap_err();
         assert!(matches!(err, Error::InvalidConfig(_)));
     }
 
     #[test]
-    fn fit_rejects_too_small() {
-        let buf = vec![0.0_f32; 3];
-        let err = AdaptiveTonemapper::fit(&buf, &buf, 4, 4, 3).unwrap_err();
-        assert!(matches!(err, Error::BufferTooSmall { .. }));
+    fn fit_rejects_length_mismatch() {
+        let a = vec![0.0_f32; 12];
+        let b = vec![0.0_f32; 9];
+        let err = AdaptiveTonemapper::fit_luminance(&a, &b, 3, &FitConfig::default()).unwrap_err();
+        assert!(matches!(err, Error::LengthMismatch { .. }));
     }
 
     #[test]
-    fn apply_rgba_preserves_alpha() {
+    fn fit_rejects_misaligned_length() {
+        let buf = vec![0.0_f32; 13];
+        let err =
+            AdaptiveTonemapper::fit_luminance(&buf, &buf, 3, &FitConfig::default()).unwrap_err();
+        assert!(matches!(err, Error::NotAligned { .. }));
+    }
+
+    #[test]
+    fn per_channel_empty_red_errors() {
+        // Green/blue have content, red is ~zero
+        let mut hdr = Vec::new();
+        let mut sdr = Vec::new();
+        for i in 0..64 {
+            let v = (i as f32 / 64.0) * 2.0;
+            hdr.extend_from_slice(&[0.0, v, v]);
+            let s = v / (1.0 + v);
+            sdr.extend_from_slice(&[0.0, s, s]);
+        }
+        let err =
+            AdaptiveTonemapper::fit_per_channel(&hdr, &sdr, 3, &FitConfig::default()).unwrap_err();
+        assert!(matches!(err, Error::EmptyChannel { channel: 0 }));
+    }
+
+    #[test]
+    fn map_row_rgba_preserves_alpha() {
         let n = 16 * 16;
         let mut hdr_rgba = Vec::with_capacity(n * 4);
         let mut sdr_rgba = Vec::with_capacity(n * 4);
@@ -632,12 +606,43 @@ mod tests {
             let s = v / (1.0 + v);
             sdr_rgba.extend_from_slice(&[s, s, s, 1.0]);
         }
-        let tm = AdaptiveTonemapper::fit(&hdr_rgba, &sdr_rgba, 16, 16, 4).unwrap();
-        let hdr_in: Vec<f32> = (0..n).flat_map(|_| [0.5_f32, 0.5, 0.5, 0.42]).collect();
-        let mut sdr_out = vec![0.0_f32; n * 4];
-        tm.apply(&hdr_in, &mut sdr_out, 16, 16, 4).unwrap();
-        for pixel in sdr_out.chunks_exact(4) {
+        let tm = AdaptiveTonemapper::fit_luminance(&hdr_rgba, &sdr_rgba, 4, &FitConfig::default())
+            .unwrap();
+
+        let mut row: Vec<f32> = (0..16).flat_map(|_| [0.5_f32, 0.5, 0.5, 0.42]).collect();
+        tm.map_row(&mut row, 4);
+        for pixel in row.chunks_exact(4) {
             assert!((pixel[3] - 0.42).abs() < 1e-6, "alpha not preserved");
         }
+    }
+
+    #[test]
+    fn map_into_copies_and_preserves_alpha() {
+        let (hdr_rgb, sdr_rgb) = make_pair_rgb(8, 8);
+        let tm = AdaptiveTonemapper::fit_luminance(&hdr_rgb, &sdr_rgb, 3, &FitConfig::default())
+            .unwrap();
+
+        let src = [0.5_f32, 0.5, 0.5, 0.42];
+        let mut dst = [0.0_f32; 4];
+        tm.map_into(&src, &mut dst, 4);
+        assert!((dst[3] - 0.42).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_mae_populates_option() {
+        let (hdr, sdr) = make_pair_rgb(16, 16);
+        let cfg = FitConfig {
+            compute_mae: true,
+            ..Default::default()
+        };
+        let tm = AdaptiveTonemapper::fit_luminance(&hdr, &sdr, 3, &cfg).unwrap();
+        assert!(tm.stats().mae.is_some());
+    }
+
+    #[test]
+    fn mae_none_by_default() {
+        let (hdr, sdr) = make_pair_rgb(16, 16);
+        let tm = AdaptiveTonemapper::fit_luminance(&hdr, &sdr, 3, &FitConfig::default()).unwrap();
+        assert!(tm.stats().mae.is_none());
     }
 }

@@ -15,19 +15,29 @@ pub enum Error {
         /// Actual length in elements.
         actual: usize,
     },
-    /// HDR and SDR buffers disagree on dimensions.
-    DimensionMismatch {
-        /// HDR width.
-        hdr_w: u32,
-        /// HDR height.
-        hdr_h: u32,
-        /// SDR width.
-        sdr_w: u32,
-        /// SDR height.
-        sdr_h: u32,
+    /// HDR and SDR buffers disagree on length.
+    LengthMismatch {
+        /// HDR buffer length in elements.
+        hdr: usize,
+        /// SDR buffer length in elements.
+        sdr: usize,
     },
-    /// No usable pixel pairs for fitting (all samples were below threshold).
+    /// Buffer length is not a multiple of the channel count.
+    NotAligned {
+        /// Buffer length in elements.
+        len: usize,
+        /// Channel count.
+        channels: u8,
+    },
+    /// No usable pixel pairs for fitting in luminance mode.
     NoValidSamples,
+    /// No valid samples in a specific color channel during per-channel fit.
+    EmptyChannel {
+        /// 0 = R, 1 = G, 2 = B.
+        channel: u8,
+    },
+    /// The streaming ring buffer is full — pull a row before pushing more.
+    RingBufferFull,
     /// Invalid configuration parameter.
     InvalidConfig(&'static str),
 }
@@ -41,16 +51,28 @@ impl fmt::Display for Error {
                     "buffer too small: need {required} elements, got {actual}"
                 )
             }
-            Error::DimensionMismatch {
-                hdr_w,
-                hdr_h,
-                sdr_w,
-                sdr_h,
-            } => write!(
-                f,
-                "dimension mismatch: HDR {hdr_w}x{hdr_h} vs SDR {sdr_w}x{sdr_h}"
-            ),
+            Error::LengthMismatch { hdr, sdr } => {
+                write!(f, "length mismatch: HDR has {hdr} elements, SDR has {sdr}")
+            }
+            Error::NotAligned { len, channels } => {
+                write!(
+                    f,
+                    "buffer length {len} is not a multiple of channels={channels}"
+                )
+            }
             Error::NoValidSamples => write!(f, "no valid pixel pairs for fitting"),
+            Error::EmptyChannel { channel } => {
+                let name = match channel {
+                    0 => "red",
+                    1 => "green",
+                    2 => "blue",
+                    _ => "unknown",
+                };
+                write!(f, "no valid samples in {name} channel (index {channel})")
+            }
+            Error::RingBufferFull => {
+                write!(f, "streaming ring buffer full — pull a row before pushing")
+            }
             Error::InvalidConfig(msg) => write!(f, "invalid config: {msg}"),
         }
     }

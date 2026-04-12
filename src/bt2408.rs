@@ -7,6 +7,8 @@
 
 use linear_srgb::tf::{linear_to_pq as pq_oetf, pq_to_linear as pq_eotf};
 
+use crate::{LUMA_BT709, ToneMap};
+
 /// BT.2408 tone mapper operating in PQ perceptual domain.
 ///
 /// Precomputes PQ-domain constants from content and display peak nits.
@@ -25,17 +27,23 @@ pub struct Bt2408Tonemapper {
     inv_display_max: f32,
     content_max_nits: f32,
     display_max_nits: f32,
+    luma: [f32; 3],
 }
 
 impl Bt2408Tonemapper {
-    /// Create a new BT.2408 tonemapper.
+    /// Create a new BT.2408 tonemapper with BT.709 luminance coefficients.
     ///
     /// - `content_max_nits` — peak luminance of source content (e.g. 4000).
     /// - `display_max_nits` — peak luminance of target display (e.g. 1000).
-    ///
-    /// If `content_max_nits <= display_max_nits`, the tonemapper is still
-    /// constructed but will effectively pass through values within range.
     pub fn new(content_max_nits: f32, display_max_nits: f32) -> Self {
+        Self::with_luma(content_max_nits, display_max_nits, LUMA_BT709)
+    }
+
+    /// Create a new BT.2408 tonemapper with explicit luminance coefficients.
+    ///
+    /// Pass [`LUMA_BT709`] or [`LUMA_BT2020`](crate::LUMA_BT2020) depending
+    /// on the source gamut.
+    pub fn with_luma(content_max_nits: f32, display_max_nits: f32, luma: [f32; 3]) -> Self {
         let content_min_pq = pq_oetf(0.0);
         let content_max_pq = pq_oetf(content_max_nits / 10000.0);
         let content_range_pq = content_max_pq - content_min_pq;
@@ -60,6 +68,7 @@ impl Bt2408Tonemapper {
             inv_display_max: 1.0 / display_max_nits,
             content_max_nits,
             display_max_nits,
+            luma,
         }
     }
 
@@ -73,6 +82,12 @@ impl Bt2408Tonemapper {
     #[inline]
     pub fn display_max_nits(&self) -> f32 {
         self.display_max_nits
+    }
+
+    /// Configured RGB→luminance weights.
+    #[inline]
+    pub fn luma(&self) -> [f32; 3] {
+        self.luma
     }
 
     /// Tone map a single luminance value, nits in → nits out.
@@ -89,21 +104,6 @@ impl Bt2408Tonemapper {
         (content_norm * scale * self.display_max_nits)
             .min(self.display_max_nits)
             .max(0.0)
-    }
-
-    /// Tone map an RGB triple (linear light, normalized so 1.0 = 10000 nits).
-    ///
-    /// `luma_coeffs` are the RGB→luminance weights, typically [`crate::LUMA_BT709`]
-    /// for sRGB/BT.709 content and [`crate::LUMA_BT2020`] for BT.2020.
-    #[inline]
-    pub fn tonemap_rgb(&self, rgb: [f32; 3], luma_coeffs: [f32; 3]) -> [f32; 3] {
-        let luma = luma_coeffs[0] * rgb[0] + luma_coeffs[1] * rgb[1] + luma_coeffs[2] * rgb[2];
-        let luma_nits = luma * self.content_max_nits;
-        if luma_nits <= 0.0 {
-            return [0.0, 0.0, 0.0];
-        }
-        let scale = self.make_luma_scale(luma_nits);
-        [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale]
     }
 
     #[inline(always)]
@@ -145,16 +145,27 @@ impl Bt2408Tonemapper {
     }
 }
 
+impl ToneMap for Bt2408Tonemapper {
+    fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
+        let luma = self.luma[0] * rgb[0] + self.luma[1] * rgb[1] + self.luma[2] * rgb[2];
+        let luma_nits = luma * self.content_max_nits;
+        if luma_nits <= 0.0 {
+            return [0.0, 0.0, 0.0];
+        }
+        let scale = self.make_luma_scale(luma_nits);
+        [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::LUMA_BT709;
 
     #[test]
     fn black_to_black() {
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
         assert_eq!(tm.tonemap_nits(0.0), 0.0);
-        let out = tm.tonemap_rgb([0.0, 0.0, 0.0], LUMA_BT709);
+        let out = tm.map_rgb([0.0, 0.0, 0.0]);
         assert_eq!(out, [0.0, 0.0, 0.0]);
     }
 
@@ -170,7 +181,6 @@ mod tests {
 
     #[test]
     fn below_knee_near_identity_nits() {
-        // Low nits (well below ks) should map to themselves, within ~10%
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
         let low = 50.0;
         let out = tm.tonemap_nits(low);
@@ -181,15 +191,28 @@ mod tests {
     }
 
     #[test]
-    fn tonemap_rgb_peak_is_bounded() {
+    fn map_rgb_peak_is_bounded() {
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
-        // Content peak in normalized linear (1.0 = content_max)
-        let out = tm.tonemap_rgb([1.0, 1.0, 1.0], LUMA_BT709);
+        let out = tm.map_rgb([1.0, 1.0, 1.0]);
         for c in out {
             assert!(
                 (0.0..=1.0).contains(&c),
                 "rgb out of display-normalized range: {c}"
             );
         }
+    }
+
+    #[test]
+    fn with_luma_stores_coefficients() {
+        let tm = Bt2408Tonemapper::with_luma(4000.0, 1000.0, crate::LUMA_BT2020);
+        assert_eq!(tm.luma(), crate::LUMA_BT2020);
+    }
+
+    #[test]
+    fn trait_map_row_rgba_preserves_alpha() {
+        let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
+        let mut row = [0.3_f32, 0.5, 0.2, 0.7];
+        tm.map_row(&mut row, 4);
+        assert!((row[3] - 0.7).abs() < 1e-6);
     }
 }

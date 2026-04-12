@@ -23,6 +23,9 @@ use crate::error::{Error, Result};
 use crate::math::{floorf, lnf};
 
 /// Configuration for the streaming tonemapper.
+///
+/// Tunes the local adaptation and per-pixel curve. The channel count is
+/// passed separately to [`StreamingTonemapper::new`].
 #[derive(Debug, Clone)]
 pub struct StreamingTonemapConfig {
     /// Grid cell size in pixels (default: 8).
@@ -39,8 +42,6 @@ pub struct StreamingTonemapConfig {
     pub shadow_lift: f32,
     /// Highlight desaturation threshold (fraction of white point, default: 0.5).
     pub desat_threshold: f32,
-    /// Number of channels in input data (3 for RGB, 4 for RGBA). Default: 4.
-    pub channels: u8,
 }
 
 impl Default for StreamingTonemapConfig {
@@ -53,23 +54,7 @@ impl Default for StreamingTonemapConfig {
             saturation: 0.95,
             shadow_lift: 0.02,
             desat_threshold: 0.5,
-            channels: 4,
         }
-    }
-}
-
-impl StreamingTonemapConfig {
-    /// Configure for RGB input (3 channels, no alpha).
-    pub fn rgb() -> Self {
-        Self {
-            channels: 3,
-            ..Default::default()
-        }
-    }
-
-    /// Configure for RGBA input (4 channels with alpha).
-    pub fn rgba() -> Self {
-        Self::default()
     }
 }
 
@@ -316,6 +301,8 @@ pub struct StreamingTonemapper {
     config: StreamingTonemapConfig,
     width: u32,
     height: u32,
+    /// Channels per pixel (3 or 4).
+    channels: u8,
     /// Elements per row (`width * channels`).
     row_stride: usize,
     grid: AdaptationGrid,
@@ -335,8 +322,15 @@ impl StreamingTonemapper {
     ///
     /// Pre-allocates the HDR ring buffer (`lookahead_rows * width * channels`
     /// f32 elements) and the local adaptation grid.
-    pub fn new(width: u32, height: u32, config: StreamingTonemapConfig) -> Result<Self> {
-        if config.channels != 3 && config.channels != 4 {
+    ///
+    /// `channels` must be 3 (RGB) or 4 (RGBA).
+    pub fn new(
+        width: u32,
+        height: u32,
+        channels: u8,
+        config: StreamingTonemapConfig,
+    ) -> Result<Self> {
+        if channels != 3 && channels != 4 {
             return Err(Error::InvalidConfig("channels must be 3 or 4"));
         }
         if config.cell_size == 0 {
@@ -346,12 +340,13 @@ impl StreamingTonemapper {
             return Err(Error::InvalidConfig("lookahead_rows must be >= 1"));
         }
         let grid = AdaptationGrid::new(width, height, config.cell_size);
-        let row_stride = width as usize * config.channels as usize;
+        let row_stride = width as usize * channels as usize;
         let buffer_elements = row_stride * config.lookahead_rows as usize;
         Ok(Self {
             config,
             width,
             height,
+            channels,
             row_stride,
             grid,
             row_buffer: vec![0.0_f32; buffer_elements],
@@ -366,6 +361,12 @@ impl StreamingTonemapper {
     #[inline]
     pub fn row_stride(&self) -> usize {
         self.row_stride
+    }
+
+    /// Configured channel count (3 or 4).
+    #[inline]
+    pub fn channels(&self) -> u8 {
+        self.channels
     }
 
     /// Push one HDR row.
@@ -385,14 +386,14 @@ impl StreamingTonemapper {
             });
         }
         if self.buffer_count as usize >= self.config.lookahead_rows as usize {
-            return Err(Error::InvalidConfig("ring buffer full — pull a row first"));
+            return Err(Error::RingBufferFull);
         }
         let input_row = self.buffer_start_row + self.buffer_count;
         if input_row >= self.height {
             return Ok(()); // silently drop beyond image height
         }
 
-        let channels = self.config.channels as usize;
+        let channels = self.channels as usize;
         let src = &hdr_row[..self.row_stride];
 
         self.grid.add_row(src, input_row, self.width, channels);
@@ -461,7 +462,13 @@ impl StreamingTonemapper {
         let slot_start = buffer_idx * self.row_stride;
         let hdr_slice = &self.row_buffer[slot_start..slot_start + self.row_stride];
 
-        self.tonemap_row_into(hdr_slice, row_index, &mut out[..self.row_stride]);
+        // Dispatch to a const-generic inner loop so the alpha branch and
+        // fixed stride are compile-time folded.
+        match self.channels {
+            3 => self.tonemap_row_impl::<3>(hdr_slice, row_index, &mut out[..self.row_stride]),
+            4 => self.tonemap_row_impl::<4>(hdr_slice, row_index, &mut out[..self.row_stride]),
+            _ => unreachable!("channels validated in new()"),
+        }
 
         self.next_output_row += 1;
         self.buffer_start_row += 1;
@@ -470,17 +477,15 @@ impl StreamingTonemapper {
         Ok(Some(row_index))
     }
 
-    fn tonemap_row_into(&self, hdr_row: &[f32], y: u32, out: &mut [f32]) {
-        let channels = self.config.channels as usize;
+    #[inline]
+    fn tonemap_row_impl<const CN: usize>(&self, hdr_row: &[f32], y: u32, out: &mut [f32]) {
         let global = self.grid.global_params();
-
         for (x, (hdr_pixel, sdr_pixel)) in hdr_row
-            .chunks_exact(channels)
-            .zip(out.chunks_exact_mut(channels))
+            .chunks_exact(CN)
+            .zip(out.chunks_exact_mut(CN))
             .enumerate()
         {
             let local = self.grid.sample(x as f32, y as f32);
-            // Blend local with global for stability at edges
             let blend = 0.7_f32;
             let params = LocalParams {
                 key: local.key * blend + global.key * (1.0 - blend),
@@ -492,7 +497,7 @@ impl StreamingTonemapper {
             sdr_pixel[0] = rgb[0];
             sdr_pixel[1] = rgb[1];
             sdr_pixel[2] = rgb[2];
-            if channels >= 4 {
+            if CN == 4 {
                 sdr_pixel[3] = hdr_pixel[3];
             }
         }
@@ -555,11 +560,6 @@ impl StreamingTonemapper {
     pub fn progress(&self) -> (u32, u32) {
         (self.next_output_row, self.height)
     }
-
-    /// Configured number of channels.
-    pub fn channels(&self) -> u8 {
-        self.config.channels
-    }
 }
 
 #[inline]
@@ -580,24 +580,20 @@ mod tests {
 
     #[test]
     fn new_rejects_bad_channels() {
-        let cfg = StreamingTonemapConfig {
-            channels: 2,
-            ..Default::default()
-        };
-        assert!(StreamingTonemapper::new(64, 64, cfg).is_err());
+        assert!(StreamingTonemapper::new(64, 64, 2, StreamingTonemapConfig::default()).is_err());
     }
 
-    /// Drive push/pull until the image is consumed. Calls `consume` once per
-    /// tonemapped row. Reuses a single caller-owned output buffer.
+    /// Drive push/pull until the image is consumed. Reuses a single
+    /// caller-owned output buffer — zero allocation in the loop.
     fn run(
         tm: &mut StreamingTonemapper,
-        row_rgb: &[f32],
+        row: &[f32],
         height: u32,
         mut consume: impl FnMut(u32, &[f32]),
     ) {
         let mut out = alloc::vec![0.0_f32; tm.row_stride()];
         for _ in 0..height {
-            tm.push_row(row_rgb).unwrap();
+            tm.push_row(row).unwrap();
             while let Some(idx) = tm.pull_row(&mut out).unwrap() {
                 consume(idx, &out);
             }
@@ -612,7 +608,7 @@ mod tests {
     fn process_uniform_image_rgb() {
         let w = 32_u32;
         let h = 32_u32;
-        let mut tm = StreamingTonemapper::new(w, h, StreamingTonemapConfig::rgb()).unwrap();
+        let mut tm = StreamingTonemapper::new(w, h, 3, StreamingTonemapConfig::default()).unwrap();
 
         let row = alloc::vec![0.5_f32; tm.row_stride()];
         let mut emitted = 0_u32;
@@ -633,7 +629,7 @@ mod tests {
     fn rgba_alpha_preserved() {
         let w = 16_u32;
         let h = 16_u32;
-        let mut tm = StreamingTonemapper::new(w, h, StreamingTonemapConfig::rgba()).unwrap();
+        let mut tm = StreamingTonemapper::new(w, h, 4, StreamingTonemapConfig::default()).unwrap();
 
         let row: Vec<f32> = (0..w).flat_map(|_| [0.3_f32, 0.3, 0.3, 0.42]).collect();
         let mut emitted = 0_u32;
@@ -652,7 +648,7 @@ mod tests {
 
     #[test]
     fn push_row_rejects_short_slice() {
-        let mut tm = StreamingTonemapper::new(8, 8, StreamingTonemapConfig::rgb()).unwrap();
+        let mut tm = StreamingTonemapper::new(8, 8, 3, StreamingTonemapConfig::default()).unwrap();
         let bad = alloc::vec![0.0_f32; 10]; // needs 24
         let err = tm.push_row(&bad).unwrap_err();
         assert!(matches!(err, Error::BufferTooSmall { .. }));
@@ -660,7 +656,7 @@ mod tests {
 
     #[test]
     fn pull_row_rejects_short_out() {
-        let mut tm = StreamingTonemapper::new(8, 8, StreamingTonemapConfig::rgb()).unwrap();
+        let mut tm = StreamingTonemapper::new(8, 8, 3, StreamingTonemapConfig::default()).unwrap();
         let row = alloc::vec![0.5_f32; tm.row_stride()];
         for _ in 0..8 {
             tm.push_row(&row).unwrap();
@@ -677,15 +673,14 @@ mod tests {
     fn push_row_refuses_to_overflow_buffer() {
         let cfg = StreamingTonemapConfig {
             lookahead_rows: 4,
-            ..StreamingTonemapConfig::rgb()
+            ..Default::default()
         };
-        let mut tm = StreamingTonemapper::new(8, 16, cfg).unwrap();
+        let mut tm = StreamingTonemapper::new(8, 16, 3, cfg).unwrap();
         let row = alloc::vec![0.1_f32; tm.row_stride()];
         for _ in 0..4 {
             tm.push_row(&row).unwrap();
         }
-        // 5th push should fail — no pulls yet, ring buffer full
         let err = tm.push_row(&row).unwrap_err();
-        assert!(matches!(err, Error::InvalidConfig(_)));
+        assert!(matches!(err, Error::RingBufferFull));
     }
 }

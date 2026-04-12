@@ -12,7 +12,7 @@ mod profile;
 mod streaming;
 
 pub use adaptive::{
-    AdaptiveTonemapper, FitConfig, FitMode, FitStats, LuminanceCurve, PerChannelLut, TonemapMode,
+    AdaptiveTonemapper, FitConfig, FitStats, LuminanceCurve, PerChannelLut, TonemapMode,
 };
-pub use profile::ProfileToneCurve;
+pub use profile::{ProfileLuminance, ProfilePerChannel, ProfileToneCurve};
 pub use streaming::{LocalParams, StreamingTonemapConfig, StreamingTonemapper};
