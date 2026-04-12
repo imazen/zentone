@@ -142,7 +142,12 @@ mod tests {
                 chunk[2] = out[2];
             }
 
-            assert_eq!(via_row, via_manual, "curve {curve:?} diverged RGB");
+            for (i, (a, b)) in via_row.iter().zip(via_manual.iter()).enumerate() {
+                assert!(
+                    (a - b).abs() < 1e-6,
+                    "curve {curve:?} diverged RGB at [{i}]: row={a}, manual={b}"
+                );
+            }
         }
     }
 
@@ -163,7 +168,12 @@ mod tests {
                 // alpha untouched
             }
 
-            assert_eq!(via_row, via_manual, "curve {curve:?} diverged RGBA");
+            for (i, (a, b)) in via_row.iter().zip(via_manual.iter()).enumerate() {
+                assert!(
+                    (a - b).abs() < 1e-6,
+                    "curve {curve:?} diverged RGBA at [{i}]: row={a}, manual={b}"
+                );
+            }
             // Sanity: alpha values are the originals
             for (i, pixel) in via_row.chunks_exact(4).enumerate() {
                 let expected_alpha = 0.25 + (i as f32 / 17.0) * 0.5;
@@ -187,7 +197,14 @@ mod tests {
             let mut via_into = alloc::vec![0.0_f32; src.len()];
             curve.map_into(&src, &mut via_into, 3);
 
-            assert_eq!(via_copy, via_into, "curve {curve:?} map_into != map_row");
+            // map_into uses default trait impl (per-pixel); map_row may use SIMD.
+            // FMA can cause 1-ULP differences. Tolerate.
+            for (i, (a, b)) in via_copy.iter().zip(via_into.iter()).enumerate() {
+                assert!(
+                    (a - b).abs() < 1e-5,
+                    "curve {curve:?} map_into != map_row at [{i}]: {a} vs {b}"
+                );
+            }
         }
     }
 

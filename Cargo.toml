@@ -24,7 +24,7 @@ unexpected_cfgs = { level = "allow" }
 
 [features]
 default = ["std"]
-std = ["linear-srgb/std"]
+std = ["linear-srgb/std", "archmage/std", "magetypes/std"]
 # Experimental APIs: AdaptiveTonemapper, StreamingTonemapper, ProfileToneCurve.
 # Light test coverage; API and output may change without semver bumps until stabilized.
 experimental = []
@@ -32,6 +32,8 @@ experimental = []
 [dependencies]
 linear-srgb = { version = "0.6.8", default-features = false, features = ["transfer"] }
 libm = { version = "0.2", default-features = false }
+archmage = { version = "0.9.18", default-features = false, features = ["macros"] }
+magetypes = { version = "0.9.18", default-features = false }
 
 [dev-dependencies]
 gainforge = "0.4.1"

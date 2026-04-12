@@ -410,6 +410,37 @@ impl ToneMap for ToneMapCurve {
             ],
         }
     }
+
+    fn map_row(&self, row: &mut [f32], channels: u8) {
+        assert!(
+            channels == 3 || channels == 4,
+            "channels must be 3 or 4, got {channels}"
+        );
+        let ch = channels as usize;
+        match self {
+            // SIMD-accelerated per-channel curves
+            ToneMapCurve::Reinhard => {
+                crate::simd::reinhard_simple_row(row, ch);
+                return;
+            }
+            ToneMapCurve::Narkowicz => {
+                crate::simd::narkowicz_row(row, ch);
+                return;
+            }
+            ToneMapCurve::HableFilmic => {
+                crate::simd::hable_row(row, ch);
+                return;
+            }
+            // All other variants use the default trait impl (per-pixel map_rgb)
+            _ => {}
+        }
+        // Fallback to default trait implementation
+        match channels {
+            3 => crate::tone_map::map_row_cn::<3, Self>(self, row),
+            4 => crate::tone_map::map_row_cn::<4, Self>(self, row),
+            _ => panic!("channels must be 3 or 4, got {channels}"),
+        }
+    }
 }
 
 #[cfg(test)]

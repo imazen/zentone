@@ -57,6 +57,7 @@ pub mod hlg;
 mod math;
 pub mod pipeline;
 pub mod sdr_hdr;
+mod simd;
 mod tone_map;
 
 #[cfg(feature = "experimental")]
