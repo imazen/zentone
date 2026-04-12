@@ -156,34 +156,49 @@ fn aces_ap1_matches_reference() {
 /// but applies `AGX_OUTSET_INV.inverse()`. Both should produce the same
 /// outset numerically — we verify against zentone's hardcoded outset
 /// constants.
+/// The correct AgX contrast polynomial (degree 7), verified by expanding
+/// gainforge's `mlaf(acc, a, b) = acc + a*b` convention.
+///
+/// result = w0 + w1*x² + w2*x⁴ + w3*x⁶
+///   where w_i = intercept_i + slope_i * x
+///
+/// Expanded: 0.002857 − 0.1718x + 4.361x² − 28.72x³
+///           + 92.06x⁴ − 126.7x⁵ + 78.01x⁶ − 17.86x⁷
 fn agx_contrast_reference(x: f32) -> f32 {
     let x2 = x * x;
     let x4 = x2 * x2;
     let x6 = x4 * x2;
-    let w0 = 0.002857 * x - 0.1718;
-    let w1 = 4.361 * x - 28.72;
-    let w2 = 92.06 * x - 126.7;
-    let w3 = 78.01 * x - 17.86;
-    let z0 = w0 * x2 + w1;
-    let z1 = x4 * w2 * x6 + w3;
-    z1 + z0
+    let w0 = 0.002857 - 0.1718 * x;
+    let w1 = 4.361 - 28.72 * x;
+    let w2 = 92.06 - 126.7 * x;
+    let w3 = 78.01 - 17.86 * x;
+    w0 + w1 * x2 + w2 * x4 + w3 * x6
 }
 
 #[test]
-fn agx_contrast_polynomial_matches() {
-    // The contrast polynomial is the same in gainforge and zentone.
-    // Verify at a few points.
-    for &x in &[0.0_f32, 0.25, 0.5, 0.75, 1.0] {
-        let zt = {
-            // Drive zentone's agx through a known input and extract
-            // the contrast from the output. We can't call the internal
-            // agx_contrast directly, but we CAN verify the full agx
-            // pipeline produces identical output to a hand-rolled version.
-            // Skip this sub-test; the full pipeline test below is more useful.
-            agx_contrast_reference(x)
-        };
-        // Just smoke-test the reference itself is finite and monotonic-ish.
-        assert!(zt.is_finite(), "agx contrast at {x} is not finite");
+fn agx_contrast_polynomial_endpoints() {
+    // At x=0: ≈0.003 (near-black). At x=1: ≈0.982 (near-white).
+    let at_zero = agx_contrast_reference(0.0);
+    assert!(
+        (at_zero - 0.002857).abs() < 1e-5,
+        "contrast(0) should be ~0.003, got {at_zero}"
+    );
+    let at_one = agx_contrast_reference(1.0);
+    assert!(
+        (at_one - 0.982).abs() < 0.01,
+        "contrast(1) should be ~0.982, got {at_one}"
+    );
+    // Broadly monotonic over [0.05, 1.0] (the polynomial has a tiny dip
+    // near x=0 that's negligible in the near-black region).
+    let mut last = agx_contrast_reference(0.05);
+    for i in 6..=100 {
+        let x = i as f32 / 100.0;
+        let y = agx_contrast_reference(x);
+        assert!(
+            y >= last - 1e-4,
+            "contrast not monotonic at x={x}: {y} < {last}"
+        );
+        last = y;
     }
 }
 

@@ -179,16 +179,23 @@ pub fn agx_tonemap(rgb: [f32; 3], look: AgxLook) -> [f32; 3] {
 
 #[inline]
 fn agx_contrast(x: f32) -> f32 {
+    // Degree-7 polynomial fitted to the Blender AgX sigmoid.
+    // Coefficients from the Blender source, verified against gainforge.
+    // Each w_i is a linear function of x; the polynomial is:
+    //   result = w0 + w1*x² + w2*x⁴ + w3*x⁶
+    // which expands to:
+    //   0.002857 − 0.1718x + 4.361x² − 28.72x³
+    //   + 92.06x⁴ − 126.7x⁵ + 78.01x⁶ − 17.86x⁷
+    //
+    // At x=0: ≈0.003 (near-black). At x=1: ≈0.982 (near-white).
     let x2 = x * x;
     let x4 = x2 * x2;
     let x6 = x4 * x2;
-    let w0 = 0.002857 * x - 0.1718;
-    let w1 = 4.361 * x - 28.72;
-    let w2 = 92.06 * x - 126.7;
-    let w3 = 78.01 * x - 17.86;
-    let z0 = w0 * x2 + w1;
-    let z1 = x4 * w2 * x6 + w3;
-    z1 + z0
+    let w0 = 0.002857 - 0.1718 * x;
+    let w1 = 4.361 - 28.72 * x;
+    let w2 = 92.06 - 126.7 * x;
+    let w3 = 78.01 - 17.86 * x;
+    w0 + w1 * x2 + w2 * x4 + w3 * x6
 }
 
 fn agx_apply_look(rgb: [f32; 3], look: AgxLook) -> [f32; 3] {
