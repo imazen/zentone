@@ -16,21 +16,6 @@
 // Gamut mapping configuration types
 // ============================================================================
 
-/// How out-of-gamut colors are handled after gamut matrix conversion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[non_exhaustive]
-pub enum GamutClip {
-    /// Hard per-channel clamp to `[0, 1]`. Fast but shifts hue when
-    /// channels clip at different rates.
-    Clamp,
-    /// Hue-preserving soft clip: sorts channels by magnitude, clamps the
-    /// max to 1.0, interpolates the mid channel to keep the ratio
-    /// `(mid - min) / (max - min)` constant. Negatives are clamped to 0.
-    /// Equivalent to gainforge/moxcms `filmlike_clip`.
-    #[default]
-    SoftClip,
-}
-
 /// Which color space the tone curve is applied in.
 ///
 /// This is the single biggest lever for output quality. Per-channel RGB
@@ -164,52 +149,6 @@ pub fn tonemap_luma_preserving_row(
     debug_assert!(channels == 3 || channels == 4);
     for chunk in row.chunks_exact_mut(channels) {
         let out = tonemap_luma_preserving([chunk[0], chunk[1], chunk[2]], luma_coeffs, tm);
-        chunk[0] = out[0];
-        chunk[1] = out[1];
-        chunk[2] = out[2];
-    }
-}
-
-// ============================================================================
-// Gamut clipping
-// ============================================================================
-
-/// Apply the configured gamut clipping method to a single pixel.
-#[inline]
-pub fn clip_pixel(rgb: [f32; 3], method: GamutClip) -> [f32; 3] {
-    match method {
-        GamutClip::Clamp => [
-            rgb[0].clamp(0.0, 1.0),
-            rgb[1].clamp(0.0, 1.0),
-            rgb[2].clamp(0.0, 1.0),
-        ],
-        GamutClip::SoftClip => {
-            if is_out_of_gamut(rgb) {
-                soft_clip(rgb)
-            } else {
-                rgb
-            }
-        }
-    }
-}
-
-/// Apply a gamut matrix + clip to a single pixel.
-#[inline]
-pub fn convert_and_clip(m: &[[f32; 3]; 3], rgb: [f32; 3], method: GamutClip) -> [f32; 3] {
-    clip_pixel(apply_matrix(m, rgb), method)
-}
-
-/// Apply a gamut matrix + clip to a row of interleaved pixels.
-pub fn convert_and_clip_row(
-    m: &[[f32; 3]; 3],
-    row: &mut [f32],
-    channels: usize,
-    method: GamutClip,
-) {
-    debug_assert!(channels == 3 || channels == 4);
-    for chunk in row.chunks_exact_mut(channels) {
-        let rgb = apply_matrix(m, [chunk[0], chunk[1], chunk[2]]);
-        let out = clip_pixel(rgb, method);
         chunk[0] = out[0];
         chunk[1] = out[1];
         chunk[2] = out[2];

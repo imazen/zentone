@@ -5,42 +5,41 @@
 //!
 //! # Configuration
 //!
-//! [`PipelineConfig`] controls two independent axes:
-//! - **Tone mapping space** ([`ToneMapSpace`](crate::gamut::ToneMapSpace)):
-//!   RGB (per-channel) vs luma-preserving (better color, fewer out-of-gamut).
-//! - **Gamut clip method** ([`GamutClip`](crate::gamut::GamutClip)):
-//!   hard clamp vs hue-preserving soft clip.
+//! [`PipelineConfig`] controls the tone mapping application space via
+//! [`ToneMapSpace`](crate::gamut::ToneMapSpace): RGB (per-channel) vs
+//! luma-preserving (better color, fewer out-of-gamut). Out-of-gamut colors
+//! after the BT.2020→BT.709 matrix are always handled with hue-preserving
+//! [`soft_clip`](crate::gamut::soft_clip).
 //!
-//! The simple functions ([`tonemap_pq_to_linear_srgb`], etc.) use the
-//! defaults: RGB per-channel + SoftClip. For control, use
-//! [`tonemap_pq_to_linear_srgb_config`].
+//! The simple functions ([`tonemap_pq_to_linear_srgb`], etc.) use defaults
+//! (RGB per-channel). For control, use [`tonemap_pq_to_linear_srgb_config`].
 
 use crate::ToneMap;
 use crate::gamut::{
-    BT2020_TO_BT709, GamutClip, ToneMapSpace, apply_matrix, clip_pixel, tonemap_luma_preserving,
+    BT2020_TO_BT709, ToneMapSpace, apply_matrix, is_out_of_gamut, soft_clip,
+    tonemap_luma_preserving,
 };
 
 /// Pipeline configuration for HDR→SDR conversion.
 ///
-/// Controls two orthogonal axes:
-/// - **`tone_map_space`**: RGB per-channel (fast, desaturates) vs
-///   luma-preserving (better color, fewer out-of-gamut).
-/// - **`gamut_clip`**: hard clamp (fast, shifts hue) vs soft clip
-///   (preserves hue).
+/// Controls which color space the tone curve is applied in.
+/// Out-of-gamut colors after gamut matrix conversion are always
+/// handled with hue-preserving [`soft_clip`](crate::gamut::soft_clip).
+///
+/// For principled perceptual gamut compression (rather than post-matrix
+/// clipping), use ACES 2.0 ([issue #14](https://github.com/imazen/zentone/issues/14))
+/// which compresses in Hellwig 2022 JMh space.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct PipelineConfig {
     /// Color space for tone curve application.
     pub tone_map_space: ToneMapSpace,
-    /// How out-of-gamut colors are handled after gamut conversion.
-    pub gamut_clip: GamutClip,
 }
 
 impl Default for PipelineConfig {
     fn default() -> Self {
         Self {
             tone_map_space: ToneMapSpace::Rgb,
-            gamut_clip: GamutClip::SoftClip,
         }
     }
 }
@@ -84,7 +83,14 @@ pub fn tonemap_pq_to_linear_srgb_config(
         ];
 
         let tonemapped = apply_tonemap(linear_2020, tm, cfg.tone_map_space);
-        let bt709 = clip_pixel(apply_matrix(&BT2020_TO_BT709, tonemapped), cfg.gamut_clip);
+        let bt709 = {
+            let rgb = apply_matrix(&BT2020_TO_BT709, tonemapped);
+            if is_out_of_gamut(rgb) {
+                soft_clip(rgb)
+            } else {
+                rgb
+            }
+        };
 
         dst[0] = bt709[0];
         dst[1] = bt709[1];
@@ -121,7 +127,14 @@ pub fn tonemap_pq_to_srgb8_config(
         ];
 
         let tonemapped = apply_tonemap(linear_2020, tm, cfg.tone_map_space);
-        let bt709 = clip_pixel(apply_matrix(&BT2020_TO_BT709, tonemapped), cfg.gamut_clip);
+        let bt709 = {
+            let rgb = apply_matrix(&BT2020_TO_BT709, tonemapped);
+            if is_out_of_gamut(rgb) {
+                soft_clip(rgb)
+            } else {
+                rgb
+            }
+        };
 
         dst[0] = linear_to_srgb_u8(bt709[0]);
         dst[1] = linear_to_srgb_u8(bt709[1]);
@@ -173,7 +186,14 @@ pub fn tonemap_hlg_to_linear_srgb_config(
 
         let display = crate::hlg::hlg_ootf(scene, gamma);
         let tonemapped = apply_tonemap(display, tm, cfg.tone_map_space);
-        let bt709 = clip_pixel(apply_matrix(&BT2020_TO_BT709, tonemapped), cfg.gamut_clip);
+        let bt709 = {
+            let rgb = apply_matrix(&BT2020_TO_BT709, tonemapped);
+            if is_out_of_gamut(rgb) {
+                soft_clip(rgb)
+            } else {
+                rgb
+            }
+        };
 
         dst[0] = bt709[0];
         dst[1] = bt709[1];
@@ -246,7 +266,6 @@ mod tests {
             tone_map_space: ToneMapSpace::LumaPreserving {
                 luma: crate::LUMA_BT709,
             },
-            gamut_clip: GamutClip::SoftClip,
         };
         // Bright saturated PQ red
         let pq = [0.7_f32, 0.3, 0.2];
@@ -268,28 +287,22 @@ mod tests {
     #[test]
     fn luma_preserving_less_oog_than_rgb() {
         let tm = crate::ToneMapCurve::Reinhard;
-        // Saturated BT.2020 green at moderate HDR
         let pq_green = [0.2_f32, 0.7, 0.1];
 
-        // RGB mode
         let cfg_rgb = PipelineConfig {
             tone_map_space: ToneMapSpace::Rgb,
-            gamut_clip: GamutClip::Clamp, // hard clamp to see raw values
         };
         let mut out_rgb = [0.0_f32; 3];
         tonemap_pq_to_linear_srgb_config(&pq_green, &mut out_rgb, &tm, 3, &cfg_rgb);
 
-        // Luma-preserving mode
         let cfg_luma = PipelineConfig {
             tone_map_space: ToneMapSpace::LumaPreserving {
                 luma: crate::LUMA_BT709,
             },
-            gamut_clip: GamutClip::Clamp,
         };
         let mut out_luma = [0.0_f32; 3];
         tonemap_pq_to_linear_srgb_config(&pq_green, &mut out_luma, &tm, 3, &cfg_luma);
 
-        // Both should be valid
         for &v in out_rgb.iter().chain(out_luma.iter()) {
             assert!(v.is_finite());
         }
@@ -317,20 +330,16 @@ mod tests {
     }
 
     #[test]
-    fn hard_clamp_config_works() {
+    fn soft_clip_pipeline_output_in_range() {
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
         let cfg = PipelineConfig {
             tone_map_space: ToneMapSpace::Rgb,
-            gamut_clip: GamutClip::Clamp,
         };
         let pq = [0.6_f32, 0.6, 0.6];
         let mut out = [0.0_f32; 3];
         tonemap_pq_to_linear_srgb_config(&pq, &mut out, &tm, 3, &cfg);
         for (i, &v) in out.iter().enumerate() {
-            assert!(
-                v >= 0.0 && v <= 1.0,
-                "hard clamp: ch {i} = {v} out of [0,1]"
-            );
+            assert!(v >= 0.0 && v <= 1.0, "soft clip: ch {i} = {v} out of [0,1]");
         }
     }
 }

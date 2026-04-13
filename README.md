@@ -144,7 +144,7 @@ Property tests in `exhaustive_properties.rs` verify monotonicity, finite output,
 zentone operates on linear-light f32 pixel data. It does not handle:
 
 - **Gamma decode/encode.** Use [`linear-srgb`](https://lib.rs/crates/linear-srgb) for sRGB, or `zentone::pipeline` for one-call PQ/HLG→sRGB conversion.
-- **Perceptual gamut mapping.** The `gamut` module provides a hue-preserving `soft_clip` (used by the pipeline), which preserves channel ratios when compressing out-of-gamut highlights. This covers the common BT.2020→BT.709 case well. It does not do perceptual chroma reduction in a uniform color space (Jzazbz, Oklab) — for that, use a CMS.
+- **Perceptual gamut mapping.** The pipeline uses hue-preserving `soft_clip` after the BT.2020→BT.709 matrix, which preserves channel ratios for out-of-gamut highlights. This is interim — perceptual gamut compression in Hellwig 2022 JMh (ACES 2.0) is planned ([#14](https://github.com/imazen/zentone/issues/14)).
 - **Gain map application.** Gain map math (ISO 21496-1 / Ultra HDR) lives in [`ultrahdr-core`](https://lib.rs/crates/ultrahdr-core), not here.
 - **Pixel format conversion.** zentone expects `&mut [f32]`; for u8/u16/planar buffers, convert first via `zenpixels-convert` or your own pipeline.
 - **NEON/WASM SIMD.** Current SIMD kernels target x86-64 AVX2+FMA only. NEON and WASM128 dispatch exists but falls through to scalar. Real NEON/WASM kernels are planned.
