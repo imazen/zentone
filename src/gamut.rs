@@ -12,6 +12,54 @@
 //! Derived from the CIE 1931 xy chromaticities of each primaries set
 //! through the standard D65 white point.
 
+// ============================================================================
+// Gamut mapping configuration types
+// ============================================================================
+
+/// How out-of-gamut colors are handled after gamut matrix conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum GamutClip {
+    /// Hard per-channel clamp to `[0, 1]`. Fast but shifts hue when
+    /// channels clip at different rates.
+    Clamp,
+    /// Hue-preserving soft clip: sorts channels by magnitude, clamps the
+    /// max to 1.0, interpolates the mid channel to keep the ratio
+    /// `(mid - min) / (max - min)` constant. Negatives are clamped to 0.
+    /// Equivalent to gainforge/moxcms `filmlike_clip`.
+    #[default]
+    SoftClip,
+}
+
+/// Which color space the tone curve is applied in.
+///
+/// This is the single biggest lever for output quality. Per-channel RGB
+/// tone mapping desaturates aggressively and produces more out-of-gamut
+/// colors. Luma-preserving mode applies the curve to luminance only and
+/// scales all channels by the same ratio, preserving chromaticity.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[non_exhaustive]
+pub enum ToneMapSpace {
+    /// Apply the tone curve independently to each RGB channel.
+    /// Fast but reduces saturation, especially on bright saturated colors.
+    /// Produces more out-of-gamut values after gamut conversion.
+    #[default]
+    Rgb,
+    /// Apply the tone curve to BT.709 luminance, then scale all channels
+    /// by `tonemap(luma) / luma`. Preserves chromaticity; requires gamut
+    /// clip only for the widest-gamut colors.
+    LumaPreserving {
+        /// Luminance coefficients. Use [`LUMA_BT709`](crate::LUMA_BT709) for
+        /// BT.709/sRGB content, [`LUMA_BT2020`](crate::LUMA_BT2020) for
+        /// BT.2020.
+        luma: [f32; 3],
+    },
+}
+
+// ============================================================================
+// Gamut conversion matrices
+// ============================================================================
+
 /// Convert linear BT.2020 RGB to linear BT.709 RGB.
 ///
 /// Clipping may be needed after conversion — BT.2020 gamut is wider
@@ -78,6 +126,99 @@ pub fn apply_matrix_row(m: &[[f32; 3]; 3], row: &mut [f32], channels: usize) {
         chunk[2] = out[2];
     }
 }
+
+// ============================================================================
+// Luma-preserving tone map wrapper
+// ============================================================================
+
+/// Apply a tone curve in luma-preserving mode: compute luminance, tone-map
+/// the luminance value, scale all channels by the same ratio.
+///
+/// This preserves chromaticity (hue + saturation direction) and produces
+/// far fewer out-of-gamut values than per-channel RGB tone mapping.
+#[inline]
+pub fn tonemap_luma_preserving(
+    rgb: [f32; 3],
+    luma_coeffs: [f32; 3],
+    tm: &dyn crate::ToneMap,
+) -> [f32; 3] {
+    let l = rgb[0] * luma_coeffs[0] + rgb[1] * luma_coeffs[1] + rgb[2] * luma_coeffs[2];
+    if l <= 0.0 {
+        return [0.0, 0.0, 0.0];
+    }
+    // Apply the tone curve to a neutral triple, extract the mapped luminance.
+    let mapped = tm.map_rgb([l, l, l]);
+    let l_mapped =
+        mapped[0] * luma_coeffs[0] + mapped[1] * luma_coeffs[1] + mapped[2] * luma_coeffs[2];
+    let scale = if l_mapped > 0.0 { l_mapped / l } else { 0.0 };
+    [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale]
+}
+
+/// Apply a tone curve to a row in luma-preserving mode.
+pub fn tonemap_luma_preserving_row(
+    row: &mut [f32],
+    channels: usize,
+    luma_coeffs: [f32; 3],
+    tm: &dyn crate::ToneMap,
+) {
+    debug_assert!(channels == 3 || channels == 4);
+    for chunk in row.chunks_exact_mut(channels) {
+        let out = tonemap_luma_preserving([chunk[0], chunk[1], chunk[2]], luma_coeffs, tm);
+        chunk[0] = out[0];
+        chunk[1] = out[1];
+        chunk[2] = out[2];
+    }
+}
+
+// ============================================================================
+// Gamut clipping
+// ============================================================================
+
+/// Apply the configured gamut clipping method to a single pixel.
+#[inline]
+pub fn clip_pixel(rgb: [f32; 3], method: GamutClip) -> [f32; 3] {
+    match method {
+        GamutClip::Clamp => [
+            rgb[0].clamp(0.0, 1.0),
+            rgb[1].clamp(0.0, 1.0),
+            rgb[2].clamp(0.0, 1.0),
+        ],
+        GamutClip::SoftClip => {
+            if is_out_of_gamut(rgb) {
+                soft_clip(rgb)
+            } else {
+                rgb
+            }
+        }
+    }
+}
+
+/// Apply a gamut matrix + clip to a single pixel.
+#[inline]
+pub fn convert_and_clip(m: &[[f32; 3]; 3], rgb: [f32; 3], method: GamutClip) -> [f32; 3] {
+    clip_pixel(apply_matrix(m, rgb), method)
+}
+
+/// Apply a gamut matrix + clip to a row of interleaved pixels.
+pub fn convert_and_clip_row(
+    m: &[[f32; 3]; 3],
+    row: &mut [f32],
+    channels: usize,
+    method: GamutClip,
+) {
+    debug_assert!(channels == 3 || channels == 4);
+    for chunk in row.chunks_exact_mut(channels) {
+        let rgb = apply_matrix(m, [chunk[0], chunk[1], chunk[2]]);
+        let out = clip_pixel(rgb, method);
+        chunk[0] = out[0];
+        chunk[1] = out[1];
+        chunk[2] = out[2];
+    }
+}
+
+// ============================================================================
+// Out-of-gamut detection + soft clip
+// ============================================================================
 
 /// Returns `true` if any channel is outside `[0, 1]`.
 #[inline]
