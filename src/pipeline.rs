@@ -5,7 +5,7 @@
 //! These are the "I have PQ/HLG content, give me sRGB output" functions.
 
 use crate::ToneMap;
-use crate::gamut::{BT2020_TO_BT709, apply_matrix};
+use crate::gamut::{BT2020_TO_BT709, apply_matrix_clip};
 
 /// Tonemap a PQ-encoded BT.2020 RGB row to linear sRGB.
 ///
@@ -31,12 +31,12 @@ pub fn tonemap_pq_to_linear_srgb(pq_row: &[f32], out: &mut [f32], tm: &dyn ToneM
         // Step 2: Tonemap
         let tonemapped = tm.map_rgb(linear_2020);
 
-        // Step 3: BT.2020 → BT.709
-        let bt709 = apply_matrix(&BT2020_TO_BT709, tonemapped);
+        // Step 3: BT.2020 → BT.709 with hue-preserving soft clip
+        let bt709 = apply_matrix_clip(&BT2020_TO_BT709, tonemapped);
 
-        dst[0] = bt709[0].clamp(0.0, 1.0);
-        dst[1] = bt709[1].clamp(0.0, 1.0);
-        dst[2] = bt709[2].clamp(0.0, 1.0);
+        dst[0] = bt709[0];
+        dst[1] = bt709[1];
+        dst[2] = bt709[2];
         if ch == 4 {
             dst[3] = src[3];
         }
@@ -46,7 +46,7 @@ pub fn tonemap_pq_to_linear_srgb(pq_row: &[f32], out: &mut [f32], tm: &dyn ToneM
 /// Tonemap a PQ-encoded BT.2020 RGB row to sRGB-encoded u8.
 ///
 /// Full pipeline: PQ EOTF → linear BT.2020 → tonemap → BT.2020→BT.709
-/// → sRGB OETF → quantize to u8.
+/// (hue-preserving soft clip) → sRGB OETF → quantize to u8.
 pub fn tonemap_pq_to_srgb8(pq_row: &[f32], out: &mut [u8], tm: &dyn ToneMap, channels: u8) {
     debug_assert_eq!(pq_row.len(), out.len());
     let ch = channels as usize;
@@ -59,7 +59,7 @@ pub fn tonemap_pq_to_srgb8(pq_row: &[f32], out: &mut [u8], tm: &dyn ToneMap, cha
         ];
 
         let tonemapped = tm.map_rgb(linear_2020);
-        let bt709 = apply_matrix(&BT2020_TO_BT709, tonemapped);
+        let bt709 = apply_matrix_clip(&BT2020_TO_BT709, tonemapped);
 
         dst[0] = linear_to_srgb_u8(bt709[0]);
         dst[1] = linear_to_srgb_u8(bt709[1]);
@@ -98,12 +98,12 @@ pub fn tonemap_hlg_to_linear_srgb(
         // Tonemap
         let tonemapped = tm.map_rgb(display);
 
-        // BT.2020 → BT.709
-        let bt709 = apply_matrix(&BT2020_TO_BT709, tonemapped);
+        // BT.2020 → BT.709 with hue-preserving soft clip
+        let bt709 = apply_matrix_clip(&BT2020_TO_BT709, tonemapped);
 
-        dst[0] = bt709[0].clamp(0.0, 1.0);
-        dst[1] = bt709[1].clamp(0.0, 1.0);
-        dst[2] = bt709[2].clamp(0.0, 1.0);
+        dst[0] = bt709[0];
+        dst[1] = bt709[1];
+        dst[2] = bt709[2];
         if ch == 4 {
             dst[3] = src[3];
         }

@@ -84,7 +84,7 @@ Lightly tested; API may change without semver bumps until stabilized.
 
 | Module | Contents |
 |--------|----------|
-| `gamut` | 6 gamut conversion matrices (BT.709, BT.2020, Display P3) with `apply_matrix` / `apply_matrix_row` |
+| `gamut` | 6 gamut conversion matrices (BT.709, BT.2020, Display P3), hue-preserving `soft_clip`, `apply_matrix_clip` |
 | `hlg` | HLG system gamma, OOTF, inverse OOTF, `hlg_to_display` (raw HLG OETF/EOTF in `linear-srgb`) |
 | `sdr_hdr` | Reference-white scaling (100↔203 nits), OOTF gamma adjustment |
 | `pipeline` | One-call PQ→linear-sRGB and HLG→linear-sRGB with pluggable `&dyn ToneMap` |
@@ -144,7 +144,7 @@ Property tests in `exhaustive_properties.rs` verify monotonicity, finite output,
 zentone operates on linear-light f32 pixel data. It does not handle:
 
 - **Gamma decode/encode.** Use [`linear-srgb`](https://lib.rs/crates/linear-srgb) for sRGB, or `zentone::pipeline` for one-call PQ/HLG→sRGB conversion.
-- **Gamut mapping.** The `gamut` module provides conversion matrices but no perceptual gamut clipping. Use a CMS for out-of-gamut handling.
+- **Perceptual gamut mapping.** The `gamut` module provides a hue-preserving `soft_clip` (used by the pipeline), which preserves channel ratios when compressing out-of-gamut highlights. This covers the common BT.2020→BT.709 case well. It does not do perceptual chroma reduction in a uniform color space (Jzazbz, Oklab) — for that, use a CMS.
 - **Gain map application.** Gain map math (ISO 21496-1 / Ultra HDR) lives in [`ultrahdr-core`](https://lib.rs/crates/ultrahdr-core), not here.
 - **Pixel format conversion.** zentone expects `&mut [f32]`; for u8/u16/planar buffers, convert first via `zenpixels-convert` or your own pipeline.
 - **NEON/WASM SIMD.** Current SIMD kernels target x86-64 AVX2+FMA only. NEON and WASM128 dispatch exists but falls through to scalar. Real NEON/WASM kernels are planned.
