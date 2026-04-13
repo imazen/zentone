@@ -143,11 +143,12 @@ impl Bt2446C {
 
 impl ToneMap for Bt2446C {
     fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
-        // Convert to percentage of HDR peak (0-100)
+        // Convert to percentage of HDR peak (0-100). Clamp to avoid
+        // overflow in the log branch at extreme input values.
         let rgb_pct = [
-            rgb[0].max(0.0) * 100.0,
-            rgb[1].max(0.0) * 100.0,
-            rgb[2].max(0.0) * 100.0,
+            rgb[0].clamp(0.0, 100.0) * 100.0,
+            rgb[1].clamp(0.0, 100.0) * 100.0,
+            rgb[2].clamp(0.0, 100.0) * 100.0,
         ];
 
         // Crosstalk (pre-desaturation)

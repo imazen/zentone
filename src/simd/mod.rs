@@ -459,6 +459,9 @@ fn agx_4_wasm128(
 
 #[cfg(target_arch = "x86_64")]
 fn reinhard_scalar(x: f32) -> f32 {
+    if x <= 0.0 {
+        return 0.0;
+    }
     (x / (1.0 + x)).min(1.0)
 }
 
@@ -466,9 +469,10 @@ fn reinhard_scalar(x: f32) -> f32 {
 #[archmage::arcane]
 fn reinhard_3_v3(t: archmage::X64V3Token, row: &mut [f32]) {
     let ones = f32x8::splat(t, 1.0);
+    let zero = f32x8::splat(t, 0.0);
     let (chunks, tail) = f32x8::partition_slice_mut(t, row);
     for chunk in chunks.iter_mut() {
-        let v = f32x8::load(t, chunk);
+        let v = f32x8::load(t, chunk).max(zero);
         (v / (ones + v)).min(ones).store(chunk);
     }
     for v in tail.iter_mut() {
@@ -480,11 +484,12 @@ fn reinhard_3_v3(t: archmage::X64V3Token, row: &mut [f32]) {
 #[archmage::arcane]
 fn reinhard_4_v3(t: archmage::X64V3Token, row: &mut [f32]) {
     let ones = f32x8::splat(t, 1.0);
+    let zero = f32x8::splat(t, 0.0);
     let (chunks, tail) = f32x8::partition_slice_mut(t, row);
     for chunk in chunks.iter_mut() {
         let a0 = chunk[3];
         let a1 = chunk[7];
-        let v = f32x8::load(t, chunk);
+        let v = f32x8::load(t, chunk).max(zero);
         (v / (ones + v)).min(ones).store(chunk);
         chunk[3] = a0;
         chunk[7] = a1;
@@ -706,12 +711,11 @@ fn ext_reinhard_3_v3(t: archmage::X64V3Token, row: &mut [f32], l_max: f32, luma:
         let mut ga = [0.0_f32; 8];
         let mut ba = [0.0_f32; 8];
         gather_rgb3(chunk, &mut ra, &mut ga, &mut ba);
-        let r = f32x8::load(t, &ra);
-        let g = f32x8::load(t, &ga);
-        let b = f32x8::load(t, &ba);
+        let r = f32x8::load(t, &ra).max(zero);
+        let g = f32x8::load(t, &ga).max(zero);
+        let b = f32x8::load(t, &ba).max(zero);
         let l = r * lr + g * lg + b * lb;
         // scale = reinhard_extended(l) / l = (1 + l/l_max²) / (1 + l)
-        // When l <= 0, output is 0 (mask with zero).
         let scale = ((one + l / lmax_sq) / (one + l)).max(zero);
         scatter_rgb3(
             chunk,
@@ -745,9 +749,9 @@ fn ext_reinhard_4_v3(t: archmage::X64V3Token, row: &mut [f32], l_max: f32, luma:
         let mut ga = [0.0_f32; 8];
         let mut ba = [0.0_f32; 8];
         gather_rgb4(chunk, &mut ra, &mut ga, &mut ba);
-        let r = f32x8::load(t, &ra);
-        let g = f32x8::load(t, &ga);
-        let b = f32x8::load(t, &ba);
+        let r = f32x8::load(t, &ra).max(zero);
+        let g = f32x8::load(t, &ga).max(zero);
+        let b = f32x8::load(t, &ba).max(zero);
         let l = r * lr + g * lg + b * lb;
         let scale = ((one + l / lmax_sq) / (one + l)).max(zero);
         scatter_rgb4(

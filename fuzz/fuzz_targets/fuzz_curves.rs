@@ -14,15 +14,12 @@ fuzz_target!(|data: &[u8]| {
     }
 
     // Use first byte to select curve variant, rest as pixel data
-    let variant = data[0] % 12;
+    let variant = data[0] % 14;
     let pixel_bytes = &data[1..];
 
-    // Interpret remaining bytes as f32 triples. Clamp to a realistic
-    // HDR pixel range — no real linear-light pixel exceeds ~1000 (50× PQ
-    // headroom) or goes below -10 (mild out-of-gamut). Beyond that, f32
-    // intermediate overflow (inf/inf = NaN) is expected arithmetic, not a
-    // bug. We test for panics and OOB, not for IEEE edge cases on values
-    // 10^35 beyond any real pixel.
+    // Interpret remaining bytes as raw f32 values. Replace non-finite
+    // values with 0 so we can test the full finite range including
+    // negatives, subnormals, and large values.
     if pixel_bytes.len() < 12 {
         return;
     }
@@ -30,7 +27,7 @@ fuzz_target!(|data: &[u8]| {
         .chunks_exact(4)
         .map(|c| {
             let v = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
-            if !v.is_finite() { 0.0 } else { v.clamp(-10.0, 1000.0) }
+            if !v.is_finite() { 0.0 } else { v }
         })
         .collect();
     if floats.len() < 3 {
@@ -48,7 +45,7 @@ fuzz_target!(|data: &[u8]| {
             luma,
         }),
         4 => Box::new(ToneMapCurve::Narkowicz),
-        5 => Box::new(ToneMapCurve::Uncharted2),
+        5 => Box::new(ToneMapCurve::HableFilmic),
         6 => Box::new(ToneMapCurve::AcesAp1),
         7 => Box::new(ToneMapCurve::Bt2390 {
             source_peak: 4.0,
@@ -56,15 +53,18 @@ fuzz_target!(|data: &[u8]| {
         }),
         8 => Box::new(ToneMapCurve::Agx(AgxLook::Default)),
         9 => Box::new(ToneMapCurve::Agx(AgxLook::Punchy)),
-        10 => Box::new(Bt2408Tonemapper::new(4000.0, 1000.0)),
+        10 => Box::new(ToneMapCurve::Agx(AgxLook::Golden)),
+        11 => Box::new(Bt2408Tonemapper::new(4000.0, 1000.0)),
+        12 => Box::new(Bt2446A::new(4000.0, 100.0)),
         _ => Box::new(CompiledFilmicSpline::new(&FilmicSplineConfig::default())),
     };
 
-    // Exercise map_rgb. We don't assert output finiteness — the goal is
-    // to detect panics, OOB, and stack overflows, not IEEE arithmetic on
-    // adversarial pixel values. NaN/Inf on extreme input is expected.
+    // Exercise map_rgb — assert output is finite for finite input.
     let rgb = [floats[0], floats[1], floats[2]];
-    let _out = curve.map_rgb(rgb);
+    let out = curve.map_rgb(rgb);
+    for &v in &out {
+        assert!(v.is_finite(), "map_rgb produced non-finite output");
+    }
 
     // Exercise map_row on the whole buffer (trim to multiple of 3)
     let trim = floats.len() - floats.len() % 3;

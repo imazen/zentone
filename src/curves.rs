@@ -33,6 +33,9 @@ pub(crate) fn clamp_tonemap(x: f32) -> f32 {
 /// `L_out = L_in * (1 + L_in / L_max²) / (1 + L_in)`.
 #[inline]
 pub fn reinhard_extended(l_in: f32, l_max: f32) -> f32 {
+    if l_in <= 0.0 {
+        return 0.0;
+    }
     let l_max_sq = l_max * l_max;
     l_in * (1.0 + l_in / l_max_sq) / (1.0 + l_in)
 }
@@ -73,6 +76,15 @@ pub(crate) fn tuned_reinhard(luma: f32, content_max: f32, display_max: f32) -> f
 /// Cheap scene-linear approximation of ACES RRT+ODT.
 #[inline]
 pub fn filmic_narkowicz(x: f32) -> f32 {
+    // Asymptote: a/c = 2.51/2.43 ≈ 1.033 → clamped to 1.0.
+    // At extreme values (>1e18), x² overflows f32 → Inf/Inf = NaN.
+    // Early return for x > 65536 (well past the 1.0 clamp threshold).
+    if x > 65536.0 {
+        return 1.0;
+    }
+    if x <= 0.0 {
+        return 0.0;
+    }
     let a = 2.51_f32;
     let b = 0.03_f32;
     let c = 2.43_f32;
