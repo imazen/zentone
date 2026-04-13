@@ -12,8 +12,13 @@ use crate::math::{log2f, powf};
 // ============================================================================
 
 /// Simple per-channel Reinhard: `x / (1 + x)`.
+///
+/// Negative input is clamped to 0 (linear light is non-negative).
 #[inline]
 pub fn reinhard_simple(x: f32) -> f32 {
+    if x <= 0.0 {
+        return 0.0;
+    }
     x / (1.0 + x)
 }
 
@@ -248,6 +253,12 @@ pub fn bt2390_tonemap(scene_linear: f32, source_peak: f32, target_peak: f32) -> 
 ///
 /// The `min_lum` term adds `e3 = min_lum * (1 - e2)^4 + e2`, lifting near-black
 /// values to preserve shadow detail.
+///
+/// **Input domain:** `scene_linear` is in `[0, 1]`, already normalized so
+/// that 1.0 = source peak. The `source_peak` and `target_peak` parameters
+/// configure the knee and output scaling but do NOT rescale the input.
+/// For scene-linear nits, normalize before calling:
+/// `bt2390_tonemap(nits / source_nits, source_nits, target_nits)`.
 #[inline]
 pub fn bt2390_tonemap_ext(
     scene_linear: f32,
@@ -400,11 +411,16 @@ impl ToneMap for ToneMapCurve {
             ToneMapCurve::Bt2390 {
                 source_peak,
                 target_peak,
-            } => [
-                bt2390_tonemap(rgb[0], source_peak, target_peak),
-                bt2390_tonemap(rgb[1], source_peak, target_peak),
-                bt2390_tonemap(rgb[2], source_peak, target_peak),
-            ],
+            } => {
+                // bt2390_tonemap expects input normalized to [0,1] where
+                // 1.0 = source_peak. Normalize scene-linear input here.
+                let inv = 1.0 / source_peak;
+                [
+                    bt2390_tonemap((rgb[0] * inv).min(1.0), source_peak, target_peak),
+                    bt2390_tonemap((rgb[1] * inv).min(1.0), source_peak, target_peak),
+                    bt2390_tonemap((rgb[2] * inv).min(1.0), source_peak, target_peak),
+                ]
+            }
             ToneMapCurve::Agx(look) => agx_tonemap(rgb, look),
             ToneMapCurve::Clamp => [
                 clamp_tonemap(rgb[0]),
@@ -532,18 +548,19 @@ mod tests {
 
     #[test]
     fn bt2390_reduces_peak() {
+        // Input 1.0 (= source peak in normalized domain) → should map
+        // to target_peak / source_peak = 0.1.
         let y = bt2390_tonemap(1.0, 1000.0, 100.0);
         assert!(
-            y <= 0.11,
-            "BT.2390 should map 1.0 to roughly target/source: {y}"
+            y > 0.09 && y <= 0.11,
+            "BT.2390 should map 1.0 to ~target/source: {y}"
         );
     }
 
     #[test]
     fn bt2390_min_lum_lifts_shadows() {
-        // min_lum adds a soft shadow lift: very dark input that would
-        // tonemap to near-zero should be nudged upward by the min_lum
-        // factor.
+        // min_lum adds a soft shadow lift: very dark normalized input
+        // should be nudged upward by the min_lum factor.
         let dark_input = 0.001_f32;
         let plain = bt2390_tonemap(dark_input, 1000.0, 100.0);
         let lifted = bt2390_tonemap_ext(dark_input, 1000.0, 100.0, Some(0.05));
@@ -556,8 +573,8 @@ mod tests {
 
     #[test]
     fn bt2390_min_lum_does_not_affect_highlights() {
-        // At the top end, (1 - e2)^4 ≈ 0, so the min_lum correction
-        // should barely move the output.
+        // At the top end (normalized ~1.0), (1 - e2)^4 ≈ 0, so the
+        // min_lum correction should barely move the output.
         let plain = bt2390_tonemap(0.99, 1000.0, 100.0);
         let lifted = bt2390_tonemap_ext(0.99, 1000.0, 100.0, Some(0.05));
         assert!(
