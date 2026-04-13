@@ -59,8 +59,8 @@ pub(crate) fn agx_row(row: &mut [f32], ch: usize, look: crate::AgxLook) {
     // Default returns early (no look applied), Punchy/Golden have params.
     let params: Option<([f32; 3], [f32; 3], [f32; 3])> = match look {
         crate::AgxLook::Default => None,
-        crate::AgxLook::Punchy => Some(([1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.4, 1.4, 1.4])),
-        crate::AgxLook::Golden => Some(([1.0, 0.9, 0.5], [0.8, 0.8, 0.8], [1.2, 1.2, 1.2])),
+        crate::AgxLook::Punchy => Some(([1.0, 1.0, 1.0], [1.35, 1.35, 1.35], [1.4, 1.4, 1.4])),
+        crate::AgxLook::Golden => Some(([1.0, 0.9, 0.5], [0.8, 0.8, 0.8], [1.3, 1.3, 1.3])),
     };
     match ch {
         3 => archmage::incant!(agx_3(row, params)),
@@ -251,7 +251,7 @@ fn agx_4_scalar(
 fn params_to_look(params: Option<([f32; 3], [f32; 3], [f32; 3])>) -> crate::AgxLook {
     match params {
         None => crate::AgxLook::Default,
-        Some((_, [1.0, 1.0, 1.0], [1.4, 1.4, 1.4])) => crate::AgxLook::Punchy,
+        Some(([1.0, 1.0, 1.0], [1.35, 1.35, 1.35], [1.4, 1.4, 1.4])) => crate::AgxLook::Punchy,
         Some(_) => crate::AgxLook::Golden,
     }
 }

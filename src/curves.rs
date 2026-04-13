@@ -228,8 +228,8 @@ fn agx_contrast(x: f32) -> f32 {
 fn agx_apply_look(rgb: [f32; 3], look: AgxLook) -> [f32; 3] {
     let (slope, power, saturation) = match look {
         AgxLook::Default => return rgb,
-        AgxLook::Punchy => ([1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.4, 1.4, 1.4]),
-        AgxLook::Golden => ([1.0, 0.9, 0.5], [0.8, 0.8, 0.8], [1.2, 1.2, 1.2]),
+        AgxLook::Punchy => ([1.0, 1.0, 1.0], [1.35, 1.35, 1.35], [1.4, 1.4, 1.4]),
+        AgxLook::Golden => ([1.0, 0.9, 0.5], [0.8, 0.8, 0.8], [1.3, 1.3, 1.3]),
     };
     let dot = [
         (slope[0] * rgb[0]).max(0.0),
