@@ -53,21 +53,17 @@ pub(crate) fn aces_ap1_row(row: &mut [f32], ch: usize) {
 
 #[inline]
 pub(crate) fn agx_row(row: &mut [f32], ch: usize, look: crate::AgxLook) {
-    match look {
-        crate::AgxLook::Default => match ch {
-            3 => archmage::incant!(agx_default_3(row)),
-            4 => archmage::incant!(agx_default_4(row)),
-            _ => {}
-        },
-        // Non-default looks need pow — fall back to per-pixel scalar.
-        _ => {
-            for c in row.chunks_exact_mut(ch) {
-                let out = crate::curves::agx_tonemap([c[0], c[1], c[2]], look);
-                c[0] = out[0];
-                c[1] = out[1];
-                c[2] = out[2];
-            }
-        }
+    // Encode look as (slope, power, saturation) arrays for SIMD dispatch.
+    // Default returns early (no look applied), Punchy/Golden have params.
+    let params: Option<([f32; 3], [f32; 3], [f32; 3])> = match look {
+        crate::AgxLook::Default => None,
+        crate::AgxLook::Punchy => Some(([1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.4, 1.4, 1.4])),
+        crate::AgxLook::Golden => Some(([1.0, 0.9, 0.5], [0.8, 0.8, 0.8], [1.2, 1.2, 1.2])),
+    };
+    match ch {
+        3 => archmage::incant!(agx_3(row, params)),
+        4 => archmage::incant!(agx_4(row, params)),
+        _ => {}
     }
 }
 
@@ -117,20 +113,39 @@ fn hable_4_scalar(_t: archmage::ScalarToken, r: &mut [f32]) {
         c[2] = crate::curves::hable_filmic(c[2]);
     }
 }
-fn agx_default_3_scalar(_t: archmage::ScalarToken, r: &mut [f32]) {
+fn agx_3_scalar(
+    _t: archmage::ScalarToken,
+    r: &mut [f32],
+    params: Option<([f32; 3], [f32; 3], [f32; 3])>,
+) {
+    let look = params_to_look(params);
     for c in r.chunks_exact_mut(3) {
-        let out = crate::curves::agx_tonemap([c[0], c[1], c[2]], crate::AgxLook::Default);
+        let out = crate::curves::agx_tonemap([c[0], c[1], c[2]], look);
         c[0] = out[0];
         c[1] = out[1];
         c[2] = out[2];
     }
 }
-fn agx_default_4_scalar(_t: archmage::ScalarToken, r: &mut [f32]) {
+fn agx_4_scalar(
+    _t: archmage::ScalarToken,
+    r: &mut [f32],
+    params: Option<([f32; 3], [f32; 3], [f32; 3])>,
+) {
+    let look = params_to_look(params);
     for c in r.chunks_exact_mut(4) {
-        let out = crate::curves::agx_tonemap([c[0], c[1], c[2]], crate::AgxLook::Default);
+        let out = crate::curves::agx_tonemap([c[0], c[1], c[2]], look);
         c[0] = out[0];
         c[1] = out[1];
         c[2] = out[2];
+    }
+}
+
+/// Recover the AgxLook from optional params (for scalar fallback only).
+fn params_to_look(params: Option<([f32; 3], [f32; 3], [f32; 3])>) -> crate::AgxLook {
+    match params {
+        None => crate::AgxLook::Default,
+        Some((_, [1.0, 1.0, 1.0], [1.4, 1.4, 1.4])) => crate::AgxLook::Punchy,
+        Some(_) => crate::AgxLook::Golden,
     }
 }
 fn aces_3_scalar(_t: archmage::ScalarToken, r: &mut [f32]) {
@@ -332,18 +347,21 @@ fn aces_4_v3(_t: archmage::X64V3Token, r: &mut [f32]) {
 }
 
 // ============================================================================
-// AgX Default — 8-pixel SOA kernel with vectorized log2 + polynomial
+// AgX — 8-pixel SOA kernel with vectorized log2 + polynomial + optional look
 // ============================================================================
 
-/// Process 8 RGB pixels in SOA layout through the AgX Default pipeline.
-/// Gather interleaved RGB → 3 × f32x8, compute, scatter back.
+/// Process 8 RGB pixels in SOA layout through the full AgX pipeline.
+/// Gather interleaved RGB → 3 × f32x8, compute core + look, scatter back.
 #[cfg(target_arch = "x86_64")]
 #[archmage::arcane]
-fn agx_default_3_v3(t: archmage::X64V3Token, row: &mut [f32]) {
-    // Process 8 pixels (24 floats) at a time
+fn agx_3_v3(
+    t: archmage::X64V3Token,
+    row: &mut [f32],
+    params: Option<([f32; 3], [f32; 3], [f32; 3])>,
+) {
+    let look = params_to_look(params);
     let mut iter = row.chunks_exact_mut(24);
     for chunk in &mut iter {
-        // Gather: deinterleave RGB → R[0..7], G[0..7], B[0..7]
         let mut ra = [0.0_f32; 8];
         let mut ga = [0.0_f32; 8];
         let mut ba = [0.0_f32; 8];
@@ -352,8 +370,10 @@ fn agx_default_3_v3(t: archmage::X64V3Token, row: &mut [f32]) {
             ga[i] = chunk[i * 3 + 1].abs();
             ba[i] = chunk[i * 3 + 2].abs();
         }
-        let (r, g, b) = agx_default_8px(t, &ra, &ga, &ba);
-        // Scatter: interleave back
+        // Order: inset → log2 → contrast → look → outset → clamp
+        let (r, g, b) = agx_pre_outset_8px(t, &ra, &ga, &ba);
+        let (r, g, b) = agx_look_8px(t, r, g, b, params);
+        let (r, g, b) = agx_outset_8px(t, r, g, b);
         let ro = r.to_array();
         let go = g.to_array();
         let bo = b.to_array();
@@ -363,9 +383,8 @@ fn agx_default_3_v3(t: archmage::X64V3Token, row: &mut [f32]) {
             chunk[i * 3 + 2] = bo[i];
         }
     }
-    // Tail: scalar fallback
     for c in iter.into_remainder().chunks_exact_mut(3) {
-        let out = crate::curves::agx_tonemap([c[0], c[1], c[2]], crate::AgxLook::Default);
+        let out = crate::curves::agx_tonemap([c[0], c[1], c[2]], look);
         c[0] = out[0];
         c[1] = out[1];
         c[2] = out[2];
@@ -374,8 +393,12 @@ fn agx_default_3_v3(t: archmage::X64V3Token, row: &mut [f32]) {
 
 #[cfg(target_arch = "x86_64")]
 #[archmage::arcane]
-fn agx_default_4_v3(t: archmage::X64V3Token, row: &mut [f32]) {
-    // Process 8 RGBA pixels (32 floats) at a time
+fn agx_4_v3(
+    t: archmage::X64V3Token,
+    row: &mut [f32],
+    params: Option<([f32; 3], [f32; 3], [f32; 3])>,
+) {
+    let look = params_to_look(params);
     let mut iter = row.chunks_exact_mut(32);
     for chunk in &mut iter {
         let mut ra = [0.0_f32; 8];
@@ -386,7 +409,9 @@ fn agx_default_4_v3(t: archmage::X64V3Token, row: &mut [f32]) {
             ga[i] = chunk[i * 4 + 1].abs();
             ba[i] = chunk[i * 4 + 2].abs();
         }
-        let (r, g, b) = agx_default_8px(t, &ra, &ga, &ba);
+        let (r, g, b) = agx_pre_outset_8px(t, &ra, &ga, &ba);
+        let (r, g, b) = agx_look_8px(t, r, g, b, params);
+        let (r, g, b) = agx_outset_8px(t, r, g, b);
         let ro = r.to_array();
         let go = g.to_array();
         let bo = b.to_array();
@@ -394,22 +419,21 @@ fn agx_default_4_v3(t: archmage::X64V3Token, row: &mut [f32]) {
             chunk[i * 4] = ro[i];
             chunk[i * 4 + 1] = go[i];
             chunk[i * 4 + 2] = bo[i];
-            // Alpha at chunk[i*4+3] is preserved (untouched).
         }
     }
     for c in iter.into_remainder().chunks_exact_mut(4) {
-        let out = crate::curves::agx_tonemap([c[0], c[1], c[2]], crate::AgxLook::Default);
+        let out = crate::curves::agx_tonemap([c[0], c[1], c[2]], look);
         c[0] = out[0];
         c[1] = out[1];
         c[2] = out[2];
     }
 }
 
-/// Core AgX Default pipeline on 8 pixels (SOA: R, G, B as f32x8).
-/// Returns (R_out, G_out, B_out) clamped to [0, 1].
+/// AgX pipeline up to (but not including) outset matrix:
+/// inset matrix → log2 → contrast. Returns contrast-mapped R, G, B.
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
-fn agx_default_8px(
+fn agx_pre_outset_8px(
     t: archmage::X64V3Token,
     ra: &[f32; 8],
     ga: &[f32; 8],
@@ -423,22 +447,18 @@ fn agx_default_8px(
     let g = f32x8::load(t, ga);
     let b = f32x8::load(t, ba);
 
-    // Inset matrix (3x3 multiply, each output channel is a dot product)
-    let m00 = f32x8::splat(t, 0.856627153315983);
-    let m01 = f32x8::splat(t, 0.137318972929847);
-    let m02 = f32x8::splat(t, 0.11189821299995);
-    let m10 = f32x8::splat(t, 0.0951212405381588);
-    let m11 = f32x8::splat(t, 0.761241990602591);
-    let m12 = f32x8::splat(t, 0.0767994186031903);
-    let m20 = f32x8::splat(t, 0.0482516061458583);
-    let m21 = f32x8::splat(t, 0.101439036467562);
-    let m22 = f32x8::splat(t, 0.811302368396859);
+    // Inset matrix
+    let z0r = f32x8::splat(t, 0.856627153315983) * r
+        + f32x8::splat(t, 0.137318972929847) * g
+        + f32x8::splat(t, 0.11189821299995) * b;
+    let z0g = f32x8::splat(t, 0.0951212405381588) * r
+        + f32x8::splat(t, 0.761241990602591) * g
+        + f32x8::splat(t, 0.0767994186031903) * b;
+    let z0b = f32x8::splat(t, 0.0482516061458583) * r
+        + f32x8::splat(t, 0.101439036467562) * g
+        + f32x8::splat(t, 0.811302368396859) * b;
 
-    let z0r = m00 * r + m01 * g + m02 * b;
-    let z0g = m10 * r + m11 * g + m12 * b;
-    let z0b = m20 * r + m21 * g + m22 * b;
-
-    // log2(max(x, 1e-10)), clamped to [AGX_MIN_EV, AGX_MAX_EV]
+    // log2(max(x, 1e-10)), clamped to EV range
     let floor = f32x8::splat(t, 1e-10);
     let min_ev = f32x8::splat(t, AGX_MIN_EV);
     let max_ev = f32x8::splat(t, AGX_MAX_EV);
@@ -453,28 +473,87 @@ fn agx_default_8px(
     let z2g = (z1g - min_ev) * recip;
     let z2b = (z1b - min_ev) * recip;
 
-    // Polynomial contrast (degree 7, Horner-style with even powers)
-    let z3r = agx_contrast_v8(t, z2r);
-    let z3g = agx_contrast_v8(t, z2g);
-    let z3b = agx_contrast_v8(t, z2b);
+    // Polynomial contrast
+    (
+        agx_contrast_v8(t, z2r),
+        agx_contrast_v8(t, z2g),
+        agx_contrast_v8(t, z2b),
+    )
+}
 
-    // Outset matrix (3x3 multiply)
-    let o00 = f32x8::splat(t, 1.19687900512017);
-    let o01 = f32x8::splat(t, -0.0528968517574562);
-    let o02 = f32x8::splat(t, -0.0529716355144438);
-    let o10 = f32x8::splat(t, -0.0980208811401368);
-    let o11 = f32x8::splat(t, 1.15190312990417);
-    let o12 = f32x8::splat(t, -0.0505349770312032);
-    let o20 = f32x8::splat(t, -0.0990297440797205);
-    let o21 = f32x8::splat(t, -0.0989611768448433);
-    let o22 = f32x8::splat(t, 1.15107367264116);
-
+/// AgX outset matrix + clamp to [0, 1]. Applied AFTER the look transform.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn agx_outset_8px(
+    t: archmage::X64V3Token,
+    r: f32x8,
+    g: f32x8,
+    b: f32x8,
+) -> (f32x8, f32x8, f32x8) {
     let zero = f32x8::splat(t, 0.0);
     let one = f32x8::splat(t, 1.0);
 
-    let or = (o00 * z3r + o01 * z3g + o02 * z3b).max(zero).min(one);
-    let og = (o10 * z3r + o11 * z3g + o12 * z3b).max(zero).min(one);
-    let ob = (o20 * z3r + o21 * z3g + o22 * z3b).max(zero).min(one);
+    let or = (f32x8::splat(t, 1.19687900512017) * r
+        + f32x8::splat(t, -0.0528968517574562) * g
+        + f32x8::splat(t, -0.0529716355144438) * b)
+        .max(zero)
+        .min(one);
+    let og = (f32x8::splat(t, -0.0980208811401368) * r
+        + f32x8::splat(t, 1.15190312990417) * g
+        + f32x8::splat(t, -0.0505349770312032) * b)
+        .max(zero)
+        .min(one);
+    let ob = (f32x8::splat(t, -0.0990297440797205) * r
+        + f32x8::splat(t, -0.0989611768448433) * g
+        + f32x8::splat(t, 1.15107367264116) * b)
+        .max(zero)
+        .min(one);
+
+    (or, og, ob)
+}
+
+/// Apply AgX look transform in SIMD. For Default (None), returns input unchanged.
+/// For Punchy/Golden, applies slope → pow → saturation blend.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn agx_look_8px(
+    t: archmage::X64V3Token,
+    r: f32x8,
+    g: f32x8,
+    b: f32x8,
+    params: Option<([f32; 3], [f32; 3], [f32; 3])>,
+) -> (f32x8, f32x8, f32x8) {
+    let (slope, power, saturation) = match params {
+        None => return (r, g, b),
+        Some(p) => p,
+    };
+
+    let zero = f32x8::splat(t, 0.0);
+
+    // slope * x, clamp to 0
+    let dr = (f32x8::splat(t, slope[0]) * r).max(zero);
+    let dg = (f32x8::splat(t, slope[1]) * g).max(zero);
+    let db = (f32x8::splat(t, slope[2]) * b).max(zero);
+
+    // pow(x, power) — skip if power == 1.0 for all channels
+    let (zr, zg, zb) = if power == [1.0, 1.0, 1.0] {
+        (dr, dg, db)
+    } else {
+        (
+            dr.pow_midp(power[0]),
+            dg.pow_midp(power[1]),
+            db.pow_midp(power[2]),
+        )
+    };
+
+    // Saturation blend: luma + sat * (channel - luma)
+    let luma = f32x8::splat(t, 0.2126) * zr
+        + f32x8::splat(t, 0.7152) * zg
+        + f32x8::splat(t, 0.0722) * zb;
+
+    let or = f32x8::splat(t, saturation[0]) * (zr - luma) + luma;
+    let og = f32x8::splat(t, saturation[1]) * (zg - luma) + luma;
+    let ob = f32x8::splat(t, saturation[2]) * (zb - luma) + luma;
 
     (or, og, ob)
 }
@@ -487,24 +566,10 @@ fn agx_contrast_v8(t: archmage::X64V3Token, x: f32x8) -> f32x8 {
     let x4 = x2 * x2;
     let x6 = x4 * x2;
 
-    let c0 = f32x8::splat(t, 0.002857);
-    let c1 = f32x8::splat(t, -0.1718);
-    let c2 = f32x8::splat(t, 4.361);
-    let c3 = f32x8::splat(t, -28.72);
-    let c4 = f32x8::splat(t, 92.06);
-    let c5 = f32x8::splat(t, -126.7);
-    let c6 = f32x8::splat(t, 78.01);
-    let c7 = f32x8::splat(t, -17.86);
-
-    // w0 = 0.002857 - 0.1718*x
-    // w1 = 4.361 - 28.72*x
-    // w2 = 92.06 - 126.7*x
-    // w3 = 78.01 - 17.86*x
-    // result = w0 + w1*x² + w2*x⁴ + w3*x⁶
-    let w0 = c0 + c1 * x;
-    let w1 = c2 + c3 * x;
-    let w2 = c4 + c5 * x;
-    let w3 = c6 + c7 * x;
+    let w0 = f32x8::splat(t, 0.002857) + f32x8::splat(t, -0.1718) * x;
+    let w1 = f32x8::splat(t, 4.361) + f32x8::splat(t, -28.72) * x;
+    let w2 = f32x8::splat(t, 92.06) + f32x8::splat(t, -126.7) * x;
+    let w3 = f32x8::splat(t, 78.01) + f32x8::splat(t, -17.86) * x;
 
     w0 + w1 * x2 + w2 * x4 + w3 * x6
 }
