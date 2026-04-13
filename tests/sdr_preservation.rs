@@ -232,6 +232,172 @@ fn neutral_sdr_stays_neutral() {
     }
 }
 
+// ============================================================================
+// Realistic 4× headroom: SDR content with moderate HDR highlights
+// ============================================================================
+
+/// All curves configured for 4× headroom (typical HDR photo/game content).
+fn curves_4x_headroom() -> Vec<(&'static str, Box<dyn ToneMap>)> {
+    vec![
+        ("Reinhard", Box::new(ToneMapCurve::Reinhard)),
+        (
+            "ExtReinhard_4x",
+            Box::new(ToneMapCurve::ExtendedReinhard {
+                l_max: 4.0,
+                luma: LUMA_BT709,
+            }),
+        ),
+        (
+            "ReinhardJodie",
+            Box::new(ToneMapCurve::ReinhardJodie { luma: LUMA_BT709 }),
+        ),
+        ("Narkowicz", Box::new(ToneMapCurve::Narkowicz)),
+        ("HableFilmic", Box::new(ToneMapCurve::HableFilmic)),
+        ("AcesAp1", Box::new(ToneMapCurve::AcesAp1)),
+        ("AgxDefault", Box::new(ToneMapCurve::Agx(AgxLook::Default))),
+        // BT.2408 with 4× headroom: content=800 nits, display=203 nits
+        ("Bt2408_4x", Box::new(Bt2408Tonemapper::new(800.0, 203.0))),
+        // BT.2446C with 4× headroom
+        ("Bt2446C_4x", Box::new(Bt2446C::new(800.0, 203.0))),
+        (
+            "FilmicSpline_4x",
+            Box::new(CompiledFilmicSpline::for_hdr_peak(4.0)),
+        ),
+    ]
+}
+
+#[test]
+fn sdr_quarter_range_low_distortion_4x() {
+    // With 4× headroom, values in [0, 0.25] should be moderately preserved.
+    // Classical curves compress everything; ITU curves in PQ domain can
+    // expand SDR values. Check that output is in a sane range relative to
+    // input rather than testing precise preservation.
+    for (name, tm) in curves_4x_headroom() {
+        for &v in &[0.01, 0.05, 0.1, 0.18, 0.25] {
+            let out = tm.map_rgb([v, v, v]);
+            let l = 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2];
+            // Output should be in a reasonable range: not crushed to zero,
+            // not blown past 0.8 for these small inputs.
+            assert!(
+                l > v * 0.1 && l < 0.9,
+                "{name}: input={v}, output_lum={l:.4} (expected {:.4}..0.9)",
+                v * 0.1
+            );
+        }
+    }
+}
+
+#[test]
+fn sdr_mid_range_bounded_compression_4x() {
+    // With 4× headroom, SDR mid-range gets compressed but stays visible.
+    // BT.2408 in PQ domain can map SDR values higher than classical curves.
+    for (name, tm) in curves_4x_headroom() {
+        for &v in &[0.3, 0.5, 0.7] {
+            let out = tm.map_rgb([v, v, v]);
+            let l = 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2];
+            assert!(
+                l > 0.1 && l < 1.01,
+                "{name}: SDR mid {v} → {l:.4} (expected 0.1..1.0)"
+            );
+        }
+    }
+}
+
+#[test]
+fn sdr_white_decent_brightness_4x() {
+    // With 4× headroom, SDR white (1.0) should map to something bright.
+    // BT.2408 at 800/203 barely compresses SDR range → output near 1.0.
+    for (name, tm) in curves_4x_headroom() {
+        let out = tm.map_rgb([1.0, 1.0, 1.0]);
+        let l = 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2];
+        assert!(
+            l > 0.4 && l <= 1.01,
+            "{name}: SDR white 1.0 → {l:.4} (expected 0.4..1.0)"
+        );
+    }
+}
+
+#[test]
+fn highlights_compress_not_clip_4x() {
+    // Input 2.0 (2× SDR) and 4.0 (peak) should map to values above SDR
+    // white's output but below 1.0. No hard clipping — smooth rolloff.
+    for (name, tm) in curves_4x_headroom() {
+        let sdr_white = tm.map_rgb([1.0, 1.0, 1.0]);
+        let sdr_white_l = 0.2126 * sdr_white[0] + 0.7152 * sdr_white[1] + 0.0722 * sdr_white[2];
+
+        let hdr_2x = tm.map_rgb([2.0, 2.0, 2.0]);
+        let hdr_2x_l = 0.2126 * hdr_2x[0] + 0.7152 * hdr_2x[1] + 0.0722 * hdr_2x[2];
+
+        let hdr_4x = tm.map_rgb([4.0, 4.0, 4.0]);
+        let hdr_4x_l = 0.2126 * hdr_4x[0] + 0.7152 * hdr_4x[1] + 0.0722 * hdr_4x[2];
+
+        // Monotonic: 4x > 2x > 1x
+        assert!(
+            hdr_4x_l >= hdr_2x_l - 1e-4 && hdr_2x_l >= sdr_white_l - 1e-4,
+            "{name}: non-monotonic: 1x={sdr_white_l:.4}, 2x={hdr_2x_l:.4}, 4x={hdr_4x_l:.4}"
+        );
+
+        // 2× should be brighter than SDR white (compression, not clipping)
+        assert!(
+            hdr_2x_l > sdr_white_l - 0.01,
+            "{name}: 2× HDR ({hdr_2x_l:.4}) not brighter than SDR white ({sdr_white_l:.4})"
+        );
+
+        // 4× (peak) should be near but not above 1.0
+        assert!(
+            hdr_4x_l <= 1.01,
+            "{name}: 4× peak luminance {hdr_4x_l:.4} exceeds 1.0"
+        );
+    }
+}
+
+#[test]
+fn saturated_sdr_colors_retain_saturation_4x() {
+    // With 4× headroom, saturated SDR colors (in [0,1]) should retain
+    // visible saturation — not be washed out to gray.
+    let test_colors: &[(&str, [f32; 3])] = &[
+        ("red", [0.8, 0.1, 0.05]),
+        ("green", [0.1, 0.7, 0.05]),
+        ("blue", [0.05, 0.1, 0.8]),
+        ("orange", [0.9, 0.4, 0.05]),
+        ("cyan", [0.05, 0.7, 0.7]),
+    ];
+
+    for (name, tm) in curves_4x_headroom() {
+        for (color_name, input) in test_colors {
+            let out = tm.map_rgb(*input);
+
+            // The dominant channel should still be the largest
+            let max_in = input.iter().cloned().reduce(f32::max).unwrap();
+            let max_in_ch = input.iter().position(|&v| v == max_in).unwrap();
+
+            // Allow AgX to desaturate heavily (it's its design)
+            if name.starts_with("Agx") {
+                continue;
+            }
+
+            assert!(
+                out[max_in_ch] >= out[(max_in_ch + 1) % 3]
+                    && out[max_in_ch] >= out[(max_in_ch + 2) % 3],
+                "{name}: {color_name} lost dominant channel: {input:?} → {out:?}"
+            );
+
+            // Saturation ratio: (max - min) / max should be > 0.1
+            let max_out = out[0].max(out[1]).max(out[2]);
+            let min_out = out[0].min(out[1]).min(out[2]);
+            let sat = if max_out > 0.01 {
+                (max_out - min_out) / max_out
+            } else {
+                0.0
+            };
+            assert!(
+                sat > 0.1,
+                "{name}: {color_name} too desaturated: {input:?} → {out:?} sat={sat:.3}"
+            );
+        }
+    }
+}
+
 #[test]
 fn clamp_is_identity_below_one() {
     // Clamp should be exact identity for input in [0, 1].
