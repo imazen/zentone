@@ -117,6 +117,20 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Test (default features)
+        run: cargo test
+
+      - name: Test (all features)
+        run: cargo test --all-features
+
   build-no-std:
     runs-on: ubuntu-latest
     steps:
