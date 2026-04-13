@@ -431,6 +431,14 @@ impl ToneMap for ToneMapCurve {
                 crate::simd::hable_row(row, ch);
                 return;
             }
+            ToneMapCurve::AcesAp1 => {
+                crate::simd::aces_ap1_row(row, ch);
+                return;
+            }
+            ToneMapCurve::Agx(look) => {
+                crate::simd::agx_row(row, ch, *look);
+                return;
+            }
             // All other variants use the default trait impl (per-pixel map_rgb)
             _ => {}
         }
