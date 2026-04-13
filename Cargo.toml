@@ -37,6 +37,7 @@ magetypes = { version = "0.9.18", default-features = false }
 
 [dev-dependencies]
 gainforge = "0.4.1"
+moxcms = "0.8.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 zensim = "0.2.6"
 

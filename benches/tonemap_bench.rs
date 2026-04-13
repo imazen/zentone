@@ -149,5 +149,119 @@ fn map_into_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, curves_benchmark, map_into_benchmark);
+// ---------------------------------------------------------------------------
+// Gainforge comparison: full pipeline (sRGB u8 → tonemap → sRGB u8)
+// ---------------------------------------------------------------------------
+
+fn gainforge_comparison(c: &mut Criterion) {
+    use ::moxcms::ColorProfile;
+    use gainforge::*;
+
+    // Synthetic sRGB u8 row — bright HDR-ish values encoded as sRGB
+    let mut src_u8 = vec![0u8; WIDTH * 3];
+    for i in 0..WIDTH {
+        let t = i as f32 / WIDTH as f32;
+        src_u8[i * 3] = (t * 255.0) as u8;
+        src_u8[i * 3 + 1] = ((1.0 - t) * 220.0) as u8;
+        src_u8[i * 3 + 2] = (t * t * 180.0) as u8;
+    }
+    let mut dst_u8 = vec![0u8; src_u8.len()];
+
+    let bt2020_pq = ColorProfile::new_bt2020_pq();
+    let srgb = ColorProfile::new_srgb();
+
+    let methods: &[(&str, ToneMappingMethod)] = &[
+        ("reinhard", ToneMappingMethod::Reinhard),
+        ("hable", ToneMappingMethod::Filmic),
+        ("aces", ToneMappingMethod::Aces),
+        (
+            "agx_default",
+            ToneMappingMethod::Agx(gainforge::AgxLook::Agx),
+        ),
+    ];
+
+    let mut group = c.benchmark_group("gainforge");
+    group.throughput(Throughput::Elements(WIDTH as u64));
+
+    for (name, method) in methods {
+        let mapper = create_tone_mapper_rgb(
+            &bt2020_pq,
+            &srgb,
+            method.clone(),
+            MappingColorSpace::Rgb(RgbToneMapperParameters {
+                exposure: 1.0,
+                gamut_clipping: GamutClipping::NoClip,
+            }),
+        )
+        .unwrap();
+
+        group.bench_function(*name, |b| {
+            b.iter(|| {
+                mapper
+                    .tonemap_lane(black_box(&src_u8), black_box(&mut dst_u8))
+                    .unwrap();
+                black_box(&dst_u8);
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// zentone full pipeline: sRGB decode → tonemap → sRGB encode (u8 → u8)
+// ---------------------------------------------------------------------------
+
+fn zentone_full_pipeline(c: &mut Criterion) {
+    use linear_srgb::default::{linear_to_srgb_slice, srgb_to_linear_slice};
+
+    // Same u8 source as gainforge bench, pre-converted to f32 [0,1]
+    let src_f32: Vec<f32> = (0..WIDTH)
+        .flat_map(|i| {
+            let t = i as f32 / WIDTH as f32;
+            [t, 1.0 - t * 0.86, t * t * 0.71]
+        })
+        .collect();
+    let mut linear = vec![0.0_f32; src_f32.len()];
+    let mut dst_u8 = vec![0u8; src_f32.len()];
+
+    let curves: &[(&str, ToneMapCurve)] = &[
+        ("reinhard", ToneMapCurve::Reinhard),
+        ("hable", ToneMapCurve::HableFilmic),
+        ("aces", ToneMapCurve::AcesAp1),
+        ("agx_default", ToneMapCurve::Agx(AgxLook::Default)),
+    ];
+
+    let mut group = c.benchmark_group("zentone_full");
+    group.throughput(Throughput::Elements(WIDTH as u64));
+
+    for (name, curve) in curves {
+        group.bench_function(*name, |b| {
+            b.iter(|| {
+                // sRGB f32 → linear f32 (SIMD batch)
+                linear.copy_from_slice(&src_f32);
+                srgb_to_linear_slice(black_box(&mut linear));
+                // Tonemap in linear space (SIMD)
+                curve.map_row(black_box(&mut linear), 3);
+                // Linear f32 → sRGB f32 (SIMD batch)
+                linear_to_srgb_slice(black_box(&mut linear));
+                // Quantize to u8
+                for (dst, &src) in dst_u8.iter_mut().zip(linear.iter()) {
+                    *dst = (src * 255.0 + 0.5).min(255.0) as u8;
+                }
+                black_box(&dst_u8);
+            });
+        });
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    curves_benchmark,
+    gainforge_comparison,
+    zentone_full_pipeline,
+    map_into_benchmark
+);
 criterion_main!(benches);
