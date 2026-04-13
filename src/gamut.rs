@@ -6,7 +6,7 @@
 //! When converting from a wider gamut to a narrower one (e.g., BT.2020 →
 //! BT.709), some colors land outside `[0, 1]`. A hard per-channel clamp
 //! shifts hue; [`soft_clip`] preserves the channel ratio so hue stays
-//! constant. Use [`apply_matrix_clip`] for the combined operation.
+//! constant. Compose [`apply_matrix`] with [`soft_clip`] for gamut conversion.
 //!
 //! All matrices are row-major: `out[i] = sum(M[i][j] * in[j])`.
 //! Derived from the CIE 1931 xy chromaticities of each primaries set
@@ -24,7 +24,8 @@
 /// scales all channels by the same ratio, preserving chromaticity.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[non_exhaustive]
-pub enum ToneMapSpace {
+#[allow(dead_code)] // LumaPreserving used in pipeline tests
+pub(crate) enum ToneMapSpace {
     /// Apply the tone curve independently to each RGB channel.
     /// Fast but reduces saturation, especially on bright saturated colors.
     /// Produces more out-of-gamut values after gamut conversion.
@@ -122,7 +123,7 @@ pub fn apply_matrix_row(m: &[[f32; 3]; 3], row: &mut [f32], channels: usize) {
 /// This preserves chromaticity (hue + saturation direction) and produces
 /// far fewer out-of-gamut values than per-channel RGB tone mapping.
 #[inline]
-pub fn tonemap_luma_preserving(
+pub(crate) fn tonemap_luma_preserving(
     rgb: [f32; 3],
     luma_coeffs: [f32; 3],
     tm: &dyn crate::ToneMap,
@@ -137,22 +138,6 @@ pub fn tonemap_luma_preserving(
         mapped[0] * luma_coeffs[0] + mapped[1] * luma_coeffs[1] + mapped[2] * luma_coeffs[2];
     let scale = if l_mapped > 0.0 { l_mapped / l } else { 0.0 };
     [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale]
-}
-
-/// Apply a tone curve to a row in luma-preserving mode.
-pub fn tonemap_luma_preserving_row(
-    row: &mut [f32],
-    channels: usize,
-    luma_coeffs: [f32; 3],
-    tm: &dyn crate::ToneMap,
-) {
-    debug_assert!(channels == 3 || channels == 4);
-    for chunk in row.chunks_exact_mut(channels) {
-        let out = tonemap_luma_preserving([chunk[0], chunk[1], chunk[2]], luma_coeffs, tm);
-        chunk[0] = out[0];
-        chunk[1] = out[1];
-        chunk[2] = out[2];
-    }
 }
 
 // ============================================================================
@@ -233,36 +218,6 @@ fn clip_sorted(hi: &mut f32, mid: &mut f32, lo: &mut f32) {
     }
     *hi = new_hi;
     *lo = new_lo;
-}
-
-/// Apply a 3×3 gamut matrix and soft-clip out-of-gamut results.
-///
-/// Combines [`apply_matrix`] with [`soft_clip`] in one call. Use this
-/// when converting from a wider to a narrower gamut (e.g., BT.2020 → BT.709).
-#[inline]
-pub fn apply_matrix_clip(m: &[[f32; 3]; 3], rgb: [f32; 3]) -> [f32; 3] {
-    let out = apply_matrix(m, rgb);
-    if is_out_of_gamut(out) {
-        soft_clip(out)
-    } else {
-        out
-    }
-}
-
-/// Apply a 3×3 gamut matrix with soft-clip to a row of interleaved pixels.
-pub fn apply_matrix_clip_row(m: &[[f32; 3]; 3], row: &mut [f32], channels: usize) {
-    debug_assert!(channels == 3 || channels == 4);
-    for chunk in row.chunks_exact_mut(channels) {
-        let rgb = apply_matrix(m, [chunk[0], chunk[1], chunk[2]]);
-        let out = if is_out_of_gamut(rgb) {
-            soft_clip(rgb)
-        } else {
-            rgb
-        };
-        chunk[0] = out[0];
-        chunk[1] = out[1];
-        chunk[2] = out[2];
-    }
 }
 
 #[cfg(test)]
@@ -408,8 +363,8 @@ mod tests {
     }
 
     #[test]
-    fn apply_matrix_clip_bt2020_saturated() {
-        // Saturated BT.2020 colors should come out in [0,1] after clip.
+    fn soft_clip_bt2020_saturated() {
+        // Saturated BT.2020 colors should come out in [0,1] after matrix + soft_clip.
         let colors = [
             [1.0_f32, 0.0, 0.0], // BT.2020 red
             [0.0, 1.0, 0.0],     // BT.2020 green
@@ -418,7 +373,7 @@ mod tests {
             [0.0, 1.0, 1.0],     // BT.2020 cyan
         ];
         for color in &colors {
-            let out = apply_matrix_clip(&BT2020_TO_BT709, *color);
+            let out = soft_clip(apply_matrix(&BT2020_TO_BT709, *color));
             for (i, &c) in out.iter().enumerate() {
                 assert!(
                     (0.0..=1.0).contains(&c),

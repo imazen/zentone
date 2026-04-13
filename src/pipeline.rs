@@ -31,7 +31,7 @@ use crate::gamut::{
 /// which compresses in Hellwig 2022 JMh space.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
-pub struct PipelineConfig {
+pub(crate) struct PipelineConfig {
     /// Color space for tone curve application.
     pub tone_map_space: ToneMapSpace,
 }
@@ -65,7 +65,7 @@ pub fn tonemap_pq_to_linear_srgb(pq_row: &[f32], out: &mut [f32], tm: &dyn ToneM
 ///
 /// Pipeline: PQ EOTF → linear BT.2020 → tonemap (in configured space) →
 /// BT.2020→BT.709 → gamut clip.
-pub fn tonemap_pq_to_linear_srgb_config(
+pub(crate) fn tonemap_pq_to_linear_srgb_config(
     pq_row: &[f32],
     out: &mut [f32],
     tm: &dyn ToneMap,
@@ -109,7 +109,7 @@ pub fn tonemap_pq_to_srgb8(pq_row: &[f32], out: &mut [u8], tm: &dyn ToneMap, cha
 }
 
 /// Tonemap a PQ-encoded BT.2020 RGB row to sRGB u8 with explicit config.
-pub fn tonemap_pq_to_srgb8_config(
+pub(crate) fn tonemap_pq_to_srgb8_config(
     pq_row: &[f32],
     out: &mut [u8],
     tm: &dyn ToneMap,
@@ -166,7 +166,7 @@ pub fn tonemap_hlg_to_linear_srgb(
 }
 
 /// Tonemap an HLG-encoded BT.2020 RGB row to linear sRGB with explicit config.
-pub fn tonemap_hlg_to_linear_srgb_config(
+pub(crate) fn tonemap_hlg_to_linear_srgb_config(
     hlg_row: &[f32],
     out: &mut [f32],
     tm: &dyn ToneMap,
