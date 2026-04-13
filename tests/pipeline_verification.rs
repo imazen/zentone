@@ -123,11 +123,9 @@ fn pq_to_srgb8_all_bytes_valid() {
         let mut out = vec![0u8; ramp.len()];
         tonemap_pq_to_srgb8(&ramp, &mut out, tm.as_ref(), 3);
 
-        // Black should map near 0. AgX lifts black to ~sRGB 9-11 due to
-        // its non-zero polynomial constant term — this is by design.
-        let black_threshold: u8 = if name.contains("Agx") { 15 } else { 5 };
+        // Black should map near 0.
         assert!(
-            out[0] <= black_threshold && out[1] <= black_threshold && out[2] <= black_threshold,
+            out[0] <= 5 && out[1] <= 5 && out[2] <= 5,
             "{name}: black not near zero: {:?}",
             &out[0..3]
         );
@@ -204,13 +202,9 @@ fn hlg_to_linear_srgb_all_outputs_in_gamut() {
 #[test]
 fn pq_neutral_gray_stays_neutral() {
     for (name, tm) in pipeline_tonemappers() {
-        // AgX's inset/outset matrices intentionally create per-channel
-        // divergence — neutral gray in does NOT produce neutral gray out,
-        // especially at low luminance. This is by design (cross-channel
-        // contrast), not a pipeline bug. Skip it here.
-        if name.contains("Agx") {
-            continue;
-        }
+        // AgX's inset/outset matrices create some per-channel divergence
+        // at low luminance. Allow a wider threshold for AgX.
+        let is_agx = name.contains("Agx");
 
         let ramp = pq_neutral_ramp(16, 2000.0);
         let mut out = vec![0.0_f32; ramp.len()];
@@ -223,8 +217,13 @@ fn pq_neutral_gray_stays_neutral() {
             }
             let min_ch = chunk[0].min(chunk[1]).min(chunk[2]);
             let spread = (max_ch - min_ch) / max_ch;
+            // AgX's inset matrix has unequal row sums (1.105, 0.933, 0.960)
+            // so neutral input becomes chromatic in the log domain. The
+            // nonlinear sigmoid means the outset can't perfectly undo this.
+            // At low luminance the spread reaches ~35%.
+            let limit = if is_agx { 0.40 } else { 0.02 };
             assert!(
-                spread < 0.02,
+                spread < limit,
                 "{name}: neutral gray pixel {i} has hue shift: RGB=[{:.4}, {:.4}, {:.4}], spread={spread:.4}",
                 chunk[0],
                 chunk[1],

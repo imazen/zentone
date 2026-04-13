@@ -1162,7 +1162,9 @@ fn agx_look_8px(
     (or, og, ob)
 }
 
-/// Vectorized AgX contrast polynomial: degree 7, even-power decomposition.
+/// Vectorized AgX contrast polynomial with endpoint normalization.
+/// Raw polynomial has poly(0)=0.002857, poly(1)=0.982059; we normalize
+/// so 0→0, 1→1 to match Blender's actual sigmoid LUT.
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn agx_contrast_v8(t: archmage::X64V3Token, x: f32x8) -> f32x8 {
@@ -1175,5 +1177,8 @@ fn agx_contrast_v8(t: archmage::X64V3Token, x: f32x8) -> f32x8 {
     let w2 = f32x8::splat(t, 92.06) + f32x8::splat(t, -126.7) * x;
     let w3 = f32x8::splat(t, 78.01) + f32x8::splat(t, -17.86) * x;
 
-    w0 + w1 * x2 + w2 * x4 + w3 * x6
+    let raw = w0 + w1 * x2 + w2 * x4 + w3 * x6;
+    let p0 = f32x8::splat(t, 0.002857);
+    let scale = f32x8::splat(t, 1.0 / (0.982059 - 0.002857));
+    (raw - p0) * scale
 }

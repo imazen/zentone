@@ -187,13 +187,12 @@ pub fn agx_tonemap(rgb: [f32; 3], look: AgxLook) -> [f32; 3] {
 fn agx_contrast(x: f32) -> f32 {
     // Degree-7 polynomial fitted to the Blender AgX sigmoid.
     // Coefficients from the Blender source, verified against gainforge.
-    // Each w_i is a linear function of x; the polynomial is:
-    //   result = w0 + w1*x² + w2*x⁴ + w3*x⁶
-    // which expands to:
-    //   0.002857 − 0.1718x + 4.361x² − 28.72x³
-    //   + 92.06x⁴ − 126.7x⁵ + 78.01x⁶ − 17.86x⁷
+    // Raw polynomial: 0.002857 − 0.1718x + 4.361x² − 28.72x³
+    //                 + 92.06x⁴ − 126.7x⁵ + 78.01x⁶ − 17.86x⁷
     //
-    // At x=0: ≈0.003 (near-black). At x=1: ≈0.982 (near-white).
+    // The raw polynomial has endpoint residuals: poly(0) = 0.002857,
+    // poly(1) = 0.982059. Blender's actual sigmoid maps 0→0, 1→1
+    // (it's a LUT). Normalize to fix the endpoints.
     let x2 = x * x;
     let x4 = x2 * x2;
     let x6 = x4 * x2;
@@ -201,7 +200,11 @@ fn agx_contrast(x: f32) -> f32 {
     let w1 = 4.361 - 28.72 * x;
     let w2 = 92.06 - 126.7 * x;
     let w3 = 78.01 - 17.86 * x;
-    w0 + w1 * x2 + w2 * x4 + w3 * x6
+    let raw = w0 + w1 * x2 + w2 * x4 + w3 * x6;
+    // Normalize: (raw - poly(0)) / (poly(1) - poly(0))
+    const P0: f32 = 0.002857;
+    const SCALE: f32 = 1.0 / (0.982059 - 0.002857); // 1 / 0.979202
+    (raw - P0) * SCALE
 }
 
 fn agx_apply_look(rgb: [f32; 3], look: AgxLook) -> [f32; 3] {
