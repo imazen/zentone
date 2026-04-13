@@ -1,4 +1,4 @@
-# zentone ![CI](https://img.shields.io/github/actions/workflow/status/imazen/zentone/ci.yml?style=flat-square&label=CI) ![crates.io](https://img.shields.io/crates/v/zentone?style=flat-square) ![lib.rs](https://img.shields.io/crates/v/zentone?style=flat-square&label=lib.rs&color=blue) ![docs.rs](https://img.shields.io/docsrs/zentone?style=flat-square) ![license](https://img.shields.io/crates/l/zentone?style=flat-square)
+# zentone ![CI](https://img.shields.io/github/actions/workflow/status/imazen/zentone/ci.yml?style=flat-square&label=CI) ![crates.io](https://img.shields.io/crates/v/zentone?style=flat-square) ![lib.rs](https://img.shields.io/crates/v/zentone?style=flat-square&label=lib.rs&color=blue) ![docs.rs](https://img.shields.io/docsrs/zentone?style=flat-square) ![MSRV](https://img.shields.io/crates/msrv/zentone?style=flat-square) ![license](https://img.shields.io/crates/l/zentone?style=flat-square)
 
 HDR to SDR tone mapping in safe Rust. Classical curves, ITU-R BT.2408/BT.2446 standards, darktable filmic spline, and experimental adaptive/streaming tonemappers.
 
