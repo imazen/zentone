@@ -67,14 +67,10 @@ impl Bt2446C {
         k4: f32,
         alpha: f32,
     ) -> Self {
-        // y_ip from continuity: k1 * y_ip = k2 * ln(y_ip/y_ip) + k4
-        // → k1 * y_ip = k4 → y_ip = k4 / k1 ... no, that's wrong.
-        // The inflection point is where the two pieces meet:
-        // k1 * Y_ip = k2 * ln(Y_ip / (k3 * 1000)) + k4 ... hmm
-        // Actually from the spec: Y_ip is derived from the constraint
-        // that the two pieces are continuous and have continuous derivative.
-        // k3 is the inflection point as a fraction of 100%: Y_ip = k3 * 100
-        let y_ip = k3 * 100.0;
+        // C0 continuity: k1 * y_ip = k2 * ln(y_ip/y_ip) + k4 = k4
+        // Therefore: y_ip = k4 / k1
+        // (k3 is the HDR reference white fraction, NOT the inflection point)
+        let y_ip = k4 / k1;
         let _ = (hdr_peak_nits, sdr_peak_nits); // reserved for future ITMO
         Self {
             k1,
@@ -120,34 +116,14 @@ impl Bt2446C {
 
     /// The piecewise tone curve (operates on percentage luminance 0-100).
     ///
-    /// The two pieces (linear and log) are C0-continuous but NOT C1 with
-    /// the default BT.2408 k-parameters. A smoothstep blend over a narrow
-    /// transition zone eliminates the visible kink.
+    /// C0-continuous at `y_ip = k4 / k1`. The inflection is near HDR peak
+    /// (94.3% with default params) so the C1 discontinuity is rarely visible.
     #[inline]
     fn tone_curve(&self, y_hdr_pct: f32) -> f32 {
-        let ip = self.y_ip;
-        let linear_val = self.k1 * y_hdr_pct;
-        if y_hdr_pct <= 0.0 {
-            return 0.0;
-        }
-        let log_val = self.k2 * libm::logf(y_hdr_pct / ip) + self.k4;
-
-        // Transition zone: blend over ±10% of the inflection point.
-        // This smooths the derivative discontinuity that the spec's
-        // default k-parameters produce.
-        let half_zone = ip * 0.1;
-        let lo = ip - half_zone;
-        let hi = ip + half_zone;
-
-        if y_hdr_pct <= lo {
-            linear_val
-        } else if y_hdr_pct >= hi {
-            log_val
+        if y_hdr_pct < self.y_ip {
+            self.k1 * y_hdr_pct
         } else {
-            // Smoothstep blend
-            let t = (y_hdr_pct - lo) / (hi - lo);
-            let s = t * t * (3.0 - 2.0 * t);
-            linear_val * (1.0 - s) + log_val * s
+            self.k2 * libm::logf(y_hdr_pct / self.y_ip) + self.k4
         }
     }
 
