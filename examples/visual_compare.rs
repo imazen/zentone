@@ -60,13 +60,15 @@ fn scene_ramp() -> Vec<f32> {
     img
 }
 
-/// Scene 2: hue wheel at multiple luminance levels.
-/// Tests: hue preservation, cross-channel behavior.
+/// Scene 2: hue wheel with continuous luminance gradient.
+/// Horizontal: hue rotation (0 to 2π). Vertical: luminance (0.1 to 10.0).
+/// Tests: hue preservation across the full luminance range.
 fn scene_hue_wheel() -> Vec<f32> {
     let mut img = vec![0.0f32; (WIDTH * HEIGHT * 3) as usize];
     for y in 0..HEIGHT {
-        let lum_band = (y as f32 / HEIGHT as f32 * 4.0) as u32;
-        let lum = [0.5_f32, 2.0, 5.0, 10.0][lum_band.min(3) as usize];
+        // Continuous log-spaced luminance from 0.1 to 10.0
+        let t_y = y as f32 / (HEIGHT - 1) as f32;
+        let lum = 0.1 * (100.0_f32).powf(t_y); // 0.1 → 10.0
         for x in 0..WIDTH {
             let hue = x as f32 / WIDTH as f32 * core::f32::consts::TAU;
             let r = lum * (0.5 + 0.5 * hue.cos()).max(0.0);
