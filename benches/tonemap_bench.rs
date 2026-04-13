@@ -187,7 +187,7 @@ fn gainforge_comparison(c: &mut Criterion) {
         let mapper = create_tone_mapper_rgb(
             &bt2020_pq,
             &srgb,
-            method.clone(),
+            *method,
             MappingColorSpace::Rgb(RgbToneMapperParameters {
                 exposure: 1.0,
                 gamut_clipping: GamutClipping::NoClip,
