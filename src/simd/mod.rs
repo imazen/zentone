@@ -103,7 +103,7 @@ pub(crate) fn tuned_reinhard_row(
 }
 
 // ============================================================================
-// Scalar fallbacks
+// Scalar fallbacks + NEON stubs (delegate to scalar on aarch64)
 // ============================================================================
 
 fn reinhard_3_scalar(_t: archmage::ScalarToken, r: &mut [f32]) {
@@ -270,6 +270,187 @@ fn aces_4_scalar(_t: archmage::ScalarToken, r: &mut [f32]) {
         c[1] = o[1];
         c[2] = o[2];
     }
+}
+
+// ============================================================================
+// NEON stubs — delegate to scalar on aarch64.
+// `incant!` requires `_neon` variants on aarch64; these ensure compilation
+// while we only have x86_64 SIMD kernels. They'll be replaced with real
+// NEON implementations when magetypes aarch64 support is ready.
+// ============================================================================
+
+#[cfg(target_arch = "aarch64")]
+fn reinhard_3_neon(_t: archmage::NeonToken, r: &mut [f32]) {
+    reinhard_3_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "aarch64")]
+fn reinhard_4_neon(_t: archmage::NeonToken, r: &mut [f32]) {
+    reinhard_4_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "aarch64")]
+fn ext_reinhard_3_neon(_t: archmage::NeonToken, r: &mut [f32], l_max: f32, luma: [f32; 3]) {
+    ext_reinhard_3_scalar(archmage::ScalarToken, r, l_max, luma);
+}
+#[cfg(target_arch = "aarch64")]
+fn ext_reinhard_4_neon(_t: archmage::NeonToken, r: &mut [f32], l_max: f32, luma: [f32; 3]) {
+    ext_reinhard_4_scalar(archmage::ScalarToken, r, l_max, luma);
+}
+#[cfg(target_arch = "aarch64")]
+fn reinhard_jodie_3_neon(_t: archmage::NeonToken, r: &mut [f32], luma: [f32; 3]) {
+    reinhard_jodie_3_scalar(archmage::ScalarToken, r, luma);
+}
+#[cfg(target_arch = "aarch64")]
+fn reinhard_jodie_4_neon(_t: archmage::NeonToken, r: &mut [f32], luma: [f32; 3]) {
+    reinhard_jodie_4_scalar(archmage::ScalarToken, r, luma);
+}
+#[cfg(target_arch = "aarch64")]
+fn tuned_reinhard_3_neon(
+    _t: archmage::NeonToken,
+    r: &mut [f32],
+    content_max: f32,
+    display_max: f32,
+    luma: [f32; 3],
+) {
+    tuned_reinhard_3_scalar(archmage::ScalarToken, r, content_max, display_max, luma);
+}
+#[cfg(target_arch = "aarch64")]
+fn tuned_reinhard_4_neon(
+    _t: archmage::NeonToken,
+    r: &mut [f32],
+    content_max: f32,
+    display_max: f32,
+    luma: [f32; 3],
+) {
+    tuned_reinhard_4_scalar(archmage::ScalarToken, r, content_max, display_max, luma);
+}
+#[cfg(target_arch = "aarch64")]
+fn narkowicz_3_neon(_t: archmage::NeonToken, r: &mut [f32]) {
+    narkowicz_3_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "aarch64")]
+fn narkowicz_4_neon(_t: archmage::NeonToken, r: &mut [f32]) {
+    narkowicz_4_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "aarch64")]
+fn hable_3_neon(_t: archmage::NeonToken, r: &mut [f32]) {
+    hable_3_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "aarch64")]
+fn hable_4_neon(_t: archmage::NeonToken, r: &mut [f32]) {
+    hable_4_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "aarch64")]
+fn aces_3_neon(_t: archmage::NeonToken, r: &mut [f32]) {
+    aces_3_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "aarch64")]
+fn aces_4_neon(_t: archmage::NeonToken, r: &mut [f32]) {
+    aces_4_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "aarch64")]
+fn agx_3_neon(
+    _t: archmage::NeonToken,
+    r: &mut [f32],
+    params: Option<([f32; 3], [f32; 3], [f32; 3])>,
+) {
+    agx_3_scalar(archmage::ScalarToken, r, params);
+}
+#[cfg(target_arch = "aarch64")]
+fn agx_4_neon(
+    _t: archmage::NeonToken,
+    r: &mut [f32],
+    params: Option<([f32; 3], [f32; 3], [f32; 3])>,
+) {
+    agx_4_scalar(archmage::ScalarToken, r, params);
+}
+
+// ============================================================================
+// WASM128 stubs — delegate to scalar on wasm32.
+// ============================================================================
+
+#[cfg(target_arch = "wasm32")]
+fn reinhard_3_wasm128(_t: archmage::Wasm128Token, r: &mut [f32]) {
+    reinhard_3_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "wasm32")]
+fn reinhard_4_wasm128(_t: archmage::Wasm128Token, r: &mut [f32]) {
+    reinhard_4_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "wasm32")]
+fn ext_reinhard_3_wasm128(_t: archmage::Wasm128Token, r: &mut [f32], l_max: f32, luma: [f32; 3]) {
+    ext_reinhard_3_scalar(archmage::ScalarToken, r, l_max, luma);
+}
+#[cfg(target_arch = "wasm32")]
+fn ext_reinhard_4_wasm128(_t: archmage::Wasm128Token, r: &mut [f32], l_max: f32, luma: [f32; 3]) {
+    ext_reinhard_4_scalar(archmage::ScalarToken, r, l_max, luma);
+}
+#[cfg(target_arch = "wasm32")]
+fn reinhard_jodie_3_wasm128(_t: archmage::Wasm128Token, r: &mut [f32], luma: [f32; 3]) {
+    reinhard_jodie_3_scalar(archmage::ScalarToken, r, luma);
+}
+#[cfg(target_arch = "wasm32")]
+fn reinhard_jodie_4_wasm128(_t: archmage::Wasm128Token, r: &mut [f32], luma: [f32; 3]) {
+    reinhard_jodie_4_scalar(archmage::ScalarToken, r, luma);
+}
+#[cfg(target_arch = "wasm32")]
+fn tuned_reinhard_3_wasm128(
+    _t: archmage::Wasm128Token,
+    r: &mut [f32],
+    content_max: f32,
+    display_max: f32,
+    luma: [f32; 3],
+) {
+    tuned_reinhard_3_scalar(archmage::ScalarToken, r, content_max, display_max, luma);
+}
+#[cfg(target_arch = "wasm32")]
+fn tuned_reinhard_4_wasm128(
+    _t: archmage::Wasm128Token,
+    r: &mut [f32],
+    content_max: f32,
+    display_max: f32,
+    luma: [f32; 3],
+) {
+    tuned_reinhard_4_scalar(archmage::ScalarToken, r, content_max, display_max, luma);
+}
+#[cfg(target_arch = "wasm32")]
+fn narkowicz_3_wasm128(_t: archmage::Wasm128Token, r: &mut [f32]) {
+    narkowicz_3_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "wasm32")]
+fn narkowicz_4_wasm128(_t: archmage::Wasm128Token, r: &mut [f32]) {
+    narkowicz_4_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "wasm32")]
+fn hable_3_wasm128(_t: archmage::Wasm128Token, r: &mut [f32]) {
+    hable_3_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "wasm32")]
+fn hable_4_wasm128(_t: archmage::Wasm128Token, r: &mut [f32]) {
+    hable_4_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "wasm32")]
+fn aces_3_wasm128(_t: archmage::Wasm128Token, r: &mut [f32]) {
+    aces_3_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "wasm32")]
+fn aces_4_wasm128(_t: archmage::Wasm128Token, r: &mut [f32]) {
+    aces_4_scalar(archmage::ScalarToken, r);
+}
+#[cfg(target_arch = "wasm32")]
+fn agx_3_wasm128(
+    _t: archmage::Wasm128Token,
+    r: &mut [f32],
+    params: Option<([f32; 3], [f32; 3], [f32; 3])>,
+) {
+    agx_3_scalar(archmage::ScalarToken, r, params);
+}
+#[cfg(target_arch = "wasm32")]
+fn agx_4_wasm128(
+    _t: archmage::Wasm128Token,
+    r: &mut [f32],
+    params: Option<([f32; 3], [f32; 3], [f32; 3])>,
+) {
+    agx_4_scalar(archmage::ScalarToken, r, params);
 }
 
 // ============================================================================
