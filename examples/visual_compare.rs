@@ -110,6 +110,50 @@ fn scene_natural() -> Vec<f32> {
     img
 }
 
+/// Scene 4: mostly SDR room with bright window highlights (4× peak).
+/// Tests: SDR preservation, localized highlight compression.
+/// ~80% of pixels are in [0, 0.8], highlights reach 4.0.
+fn scene_room_window() -> Vec<f32> {
+    let mut img = vec![0.0f32; (WIDTH * HEIGHT * 3) as usize];
+    for y in 0..HEIGHT {
+        let v = y as f32 / HEIGHT as f32;
+        for x in 0..WIDTH {
+            let t = x as f32 / WIDTH as f32;
+            let idx = ((y * WIDTH + x) * 3) as usize;
+
+            // Window region: upper-right quadrant with HDR highlights
+            let in_window = t > 0.55 && t < 0.95 && v < 0.45;
+            // Gradient within window: bright center fading to frame
+            let wx = ((t - 0.75) / 0.2).abs();
+            let wy = ((v - 0.2) / 0.25).abs();
+            let w_dist = (wx * wx + wy * wy).min(1.0);
+
+            if in_window {
+                // HDR sky through window: blue-white, up to 4×
+                let intensity = 1.0 + 3.0 * (1.0 - w_dist);
+                img[idx] = intensity * 0.85;
+                img[idx + 1] = intensity * 0.9;
+                img[idx + 2] = intensity;
+            } else {
+                // Room interior: warm SDR lighting, 0.05–0.6
+                let base = 0.05 + 0.4 * (1.0 - v) * (0.3 + 0.7 * t);
+                // Warm tint (incandescent light)
+                img[idx] = base * 1.1;
+                img[idx + 1] = base * 0.9;
+                img[idx + 2] = base * 0.7;
+                // Floor reflection near window
+                if v > 0.5 && t > 0.5 {
+                    let refl = 0.2 * (1.0 - (v - 0.5) * 2.0).max(0.0) * (t - 0.5) * 2.0;
+                    img[idx] += refl * 0.8;
+                    img[idx + 1] += refl * 0.85;
+                    img[idx + 2] += refl * 0.9;
+                }
+            }
+        }
+    }
+    img
+}
+
 // ============================================================================
 // All tonemappers
 // ============================================================================
@@ -215,6 +259,7 @@ fn main() {
         ("ramp", scene_ramp()),
         ("hue_wheel", scene_hue_wheel()),
         ("natural", scene_natural()),
+        ("room_window", scene_room_window()),
     ];
 
     let zs = Zensim::new(ZensimProfile::latest());
