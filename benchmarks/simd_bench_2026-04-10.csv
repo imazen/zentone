@@ -1,17 +1,17 @@
 # zentone SIMD benchmark — 2026-04-10
-# git: 2a3716d (after AgX all-look SIMD)
+# git: dfcba85 (after Reinhard variant SIMD + NEON/WASM stubs)
 # command: cargo bench (default target, no -C target-cpu=native)
 # workload: 3840 pixels (4K row width), synthetic HDR ramp 0..4
 # hardware: AMD Ryzen 9 7950X, 128 GB RAM
 curve,channels,mean_us,notes
 reinhard,rgb,0.811,SIMD f32x8
 reinhard,rgba,1.233,SIMD f32x8 + alpha save/restore
-ext_reinhard,rgb,13.7,scalar (luma computation)
-ext_reinhard,rgba,14.4,scalar
-reinhard_jodie,rgb,13.9,scalar (luma computation)
-reinhard_jodie,rgba,14.9,scalar
-tuned_reinhard,rgb,15.0,scalar (luma computation)
-tuned_reinhard,rgba,14.7,scalar
+ext_reinhard,rgb,3.0,SIMD SOA 8px: luma dot + reinhard_extended (was 13.7µs)
+ext_reinhard,rgba,3.4,SIMD SOA 8px (was 14.4µs)
+reinhard_jodie,rgb,3.2,SIMD SOA 8px: luma + per-channel blend (was 13.9µs)
+reinhard_jodie,rgba,3.9,SIMD SOA 8px (was 14.9µs)
+tuned_reinhard,rgb,2.6,SIMD SOA 8px: display-aware rational (was 15.0µs)
+tuned_reinhard,rgba,3.2,SIMD SOA 8px (was 14.7µs)
 narkowicz,rgb,1.1,SIMD f32x8 rational polynomial
 narkowicz,rgba,1.6,SIMD f32x8 + alpha save/restore
 hable_filmic,rgb,1.3,SIMD f32x8 rational polynomial
