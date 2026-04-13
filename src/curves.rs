@@ -423,6 +423,28 @@ impl ToneMap for ToneMapCurve {
                 crate::simd::reinhard_simple_row(row, ch);
                 return;
             }
+            ToneMapCurve::ExtendedReinhard { l_max, luma } => {
+                crate::simd::ext_reinhard_row(row, ch, *l_max, *luma);
+                return;
+            }
+            ToneMapCurve::ReinhardJodie { luma } => {
+                crate::simd::reinhard_jodie_row(row, ch, *luma);
+                return;
+            }
+            ToneMapCurve::TunedReinhard {
+                content_max_nits,
+                display_max_nits,
+                luma,
+            } => {
+                crate::simd::tuned_reinhard_row(
+                    row,
+                    ch,
+                    *content_max_nits,
+                    *display_max_nits,
+                    *luma,
+                );
+                return;
+            }
             ToneMapCurve::Narkowicz => {
                 crate::simd::narkowicz_row(row, ch);
                 return;

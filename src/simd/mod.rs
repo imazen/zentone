@@ -4,6 +4,8 @@
 //! fallback for all other architectures. `archmage::incant!` handles
 //! safe runtime dispatch. Respects `#![forbid(unsafe_code)]`.
 
+use crate::ToneMap;
+
 // Use generic f32x8 (not polyfill) for transcendental support (log2_lowp, etc.)
 #[cfg(target_arch = "x86_64")]
 use magetypes::simd::f32x8;
@@ -67,6 +69,39 @@ pub(crate) fn agx_row(row: &mut [f32], ch: usize, look: crate::AgxLook) {
     }
 }
 
+#[inline]
+pub(crate) fn ext_reinhard_row(row: &mut [f32], ch: usize, l_max: f32, luma: [f32; 3]) {
+    match ch {
+        3 => archmage::incant!(ext_reinhard_3(row, l_max, luma)),
+        4 => archmage::incant!(ext_reinhard_4(row, l_max, luma)),
+        _ => {}
+    }
+}
+
+#[inline]
+pub(crate) fn reinhard_jodie_row(row: &mut [f32], ch: usize, luma: [f32; 3]) {
+    match ch {
+        3 => archmage::incant!(reinhard_jodie_3(row, luma)),
+        4 => archmage::incant!(reinhard_jodie_4(row, luma)),
+        _ => {}
+    }
+}
+
+#[inline]
+pub(crate) fn tuned_reinhard_row(
+    row: &mut [f32],
+    ch: usize,
+    content_max: f32,
+    display_max: f32,
+    luma: [f32; 3],
+) {
+    match ch {
+        3 => archmage::incant!(tuned_reinhard_3(row, content_max, display_max, luma)),
+        4 => archmage::incant!(tuned_reinhard_4(row, content_max, display_max, luma)),
+        _ => {}
+    }
+}
+
 // ============================================================================
 // Scalar fallbacks
 // ============================================================================
@@ -83,6 +118,78 @@ fn reinhard_4_scalar(_t: archmage::ScalarToken, r: &mut [f32]) {
         c[0] = (c[0] / (1.0 + c[0])).min(1.0);
         c[1] = (c[1] / (1.0 + c[1])).min(1.0);
         c[2] = (c[2] / (1.0 + c[2])).min(1.0);
+    }
+}
+fn ext_reinhard_3_scalar(_t: archmage::ScalarToken, r: &mut [f32], l_max: f32, luma: [f32; 3]) {
+    for c in r.chunks_exact_mut(3) {
+        let o = crate::curves::ToneMapCurve::ExtendedReinhard { l_max, luma }
+            .map_rgb([c[0], c[1], c[2]]);
+        c[0] = o[0];
+        c[1] = o[1];
+        c[2] = o[2];
+    }
+}
+fn ext_reinhard_4_scalar(_t: archmage::ScalarToken, r: &mut [f32], l_max: f32, luma: [f32; 3]) {
+    for c in r.chunks_exact_mut(4) {
+        let o = crate::curves::ToneMapCurve::ExtendedReinhard { l_max, luma }
+            .map_rgb([c[0], c[1], c[2]]);
+        c[0] = o[0];
+        c[1] = o[1];
+        c[2] = o[2];
+    }
+}
+fn reinhard_jodie_3_scalar(_t: archmage::ScalarToken, r: &mut [f32], luma: [f32; 3]) {
+    for c in r.chunks_exact_mut(3) {
+        let o = crate::curves::reinhard_jodie([c[0], c[1], c[2]], luma);
+        c[0] = o[0];
+        c[1] = o[1];
+        c[2] = o[2];
+    }
+}
+fn reinhard_jodie_4_scalar(_t: archmage::ScalarToken, r: &mut [f32], luma: [f32; 3]) {
+    for c in r.chunks_exact_mut(4) {
+        let o = crate::curves::reinhard_jodie([c[0], c[1], c[2]], luma);
+        c[0] = o[0];
+        c[1] = o[1];
+        c[2] = o[2];
+    }
+}
+fn tuned_reinhard_3_scalar(
+    _t: archmage::ScalarToken,
+    r: &mut [f32],
+    content_max: f32,
+    display_max: f32,
+    luma: [f32; 3],
+) {
+    let curve = crate::curves::ToneMapCurve::TunedReinhard {
+        content_max_nits: content_max,
+        display_max_nits: display_max,
+        luma,
+    };
+    for c in r.chunks_exact_mut(3) {
+        let o = curve.map_rgb([c[0], c[1], c[2]]);
+        c[0] = o[0];
+        c[1] = o[1];
+        c[2] = o[2];
+    }
+}
+fn tuned_reinhard_4_scalar(
+    _t: archmage::ScalarToken,
+    r: &mut [f32],
+    content_max: f32,
+    display_max: f32,
+    luma: [f32; 3],
+) {
+    let curve = crate::curves::ToneMapCurve::TunedReinhard {
+        content_max_nits: content_max,
+        display_max_nits: display_max,
+        luma,
+    };
+    for c in r.chunks_exact_mut(4) {
+        let o = curve.map_rgb([c[0], c[1], c[2]]);
+        c[0] = o[0];
+        c[1] = o[1];
+        c[2] = o[2];
     }
 }
 fn narkowicz_3_scalar(_t: archmage::ScalarToken, r: &mut [f32]) {
@@ -340,6 +447,328 @@ fn aces_3_v3(_t: archmage::X64V3Token, r: &mut [f32]) {
 fn aces_4_v3(_t: archmage::X64V3Token, r: &mut [f32]) {
     for c in r.chunks_exact_mut(4) {
         let o = crate::curves::aces_ap1([c[0], c[1], c[2]]);
+        c[0] = o[0];
+        c[1] = o[1];
+        c[2] = o[2];
+    }
+}
+
+// ============================================================================
+// Luma-based Reinhard variants — 8-pixel SOA kernels
+// ============================================================================
+
+/// Helper: gather 8 RGB pixels from stride-3 interleaved data into SOA.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn gather_rgb3(chunk: &[f32], ra: &mut [f32; 8], ga: &mut [f32; 8], ba: &mut [f32; 8]) {
+    for i in 0..8 {
+        ra[i] = chunk[i * 3];
+        ga[i] = chunk[i * 3 + 1];
+        ba[i] = chunk[i * 3 + 2];
+    }
+}
+
+/// Helper: gather 8 RGBA pixels from stride-4 interleaved data into SOA.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn gather_rgb4(chunk: &[f32], ra: &mut [f32; 8], ga: &mut [f32; 8], ba: &mut [f32; 8]) {
+    for i in 0..8 {
+        ra[i] = chunk[i * 4];
+        ga[i] = chunk[i * 4 + 1];
+        ba[i] = chunk[i * 4 + 2];
+    }
+}
+
+/// Helper: scatter 3 f32x8 back into stride-3 interleaved data.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn scatter_rgb3(chunk: &mut [f32], r: f32x8, g: f32x8, b: f32x8) {
+    let ro = r.to_array();
+    let go = g.to_array();
+    let bo = b.to_array();
+    for i in 0..8 {
+        chunk[i * 3] = ro[i];
+        chunk[i * 3 + 1] = go[i];
+        chunk[i * 3 + 2] = bo[i];
+    }
+}
+
+/// Helper: scatter 3 f32x8 back into stride-4 interleaved data (alpha untouched).
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn scatter_rgb4(chunk: &mut [f32], r: f32x8, g: f32x8, b: f32x8) {
+    let ro = r.to_array();
+    let go = g.to_array();
+    let bo = b.to_array();
+    for i in 0..8 {
+        chunk[i * 4] = ro[i];
+        chunk[i * 4 + 1] = go[i];
+        chunk[i * 4 + 2] = bo[i];
+    }
+}
+
+/// Extended Reinhard: luma-preserving with white point.
+/// scale = l * (1 + l/l_max²) / (1 + l) / l = (1 + l/l_max²) / (1 + l)
+#[cfg(target_arch = "x86_64")]
+#[archmage::arcane]
+fn ext_reinhard_3_v3(t: archmage::X64V3Token, row: &mut [f32], l_max: f32, luma: [f32; 3]) {
+    let lr = f32x8::splat(t, luma[0]);
+    let lg = f32x8::splat(t, luma[1]);
+    let lb = f32x8::splat(t, luma[2]);
+    let lmax_sq = f32x8::splat(t, l_max * l_max);
+    let one = f32x8::splat(t, 1.0);
+    let zero = f32x8::splat(t, 0.0);
+
+    let mut iter = row.chunks_exact_mut(24);
+    for chunk in &mut iter {
+        let mut ra = [0.0_f32; 8];
+        let mut ga = [0.0_f32; 8];
+        let mut ba = [0.0_f32; 8];
+        gather_rgb3(chunk, &mut ra, &mut ga, &mut ba);
+        let r = f32x8::load(t, &ra);
+        let g = f32x8::load(t, &ga);
+        let b = f32x8::load(t, &ba);
+        let l = r * lr + g * lg + b * lb;
+        // scale = reinhard_extended(l) / l = (1 + l/l_max²) / (1 + l)
+        // When l <= 0, output is 0 (mask with zero).
+        let scale = ((one + l / lmax_sq) / (one + l)).max(zero);
+        scatter_rgb3(
+            chunk,
+            (r * scale).min(one),
+            (g * scale).min(one),
+            (b * scale).min(one),
+        );
+    }
+    for c in iter.into_remainder().chunks_exact_mut(3) {
+        let o = crate::curves::ToneMapCurve::ExtendedReinhard { l_max, luma }
+            .map_rgb([c[0], c[1], c[2]]);
+        c[0] = o[0];
+        c[1] = o[1];
+        c[2] = o[2];
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[archmage::arcane]
+fn ext_reinhard_4_v3(t: archmage::X64V3Token, row: &mut [f32], l_max: f32, luma: [f32; 3]) {
+    let lr = f32x8::splat(t, luma[0]);
+    let lg = f32x8::splat(t, luma[1]);
+    let lb = f32x8::splat(t, luma[2]);
+    let lmax_sq = f32x8::splat(t, l_max * l_max);
+    let one = f32x8::splat(t, 1.0);
+    let zero = f32x8::splat(t, 0.0);
+
+    let mut iter = row.chunks_exact_mut(32);
+    for chunk in &mut iter {
+        let mut ra = [0.0_f32; 8];
+        let mut ga = [0.0_f32; 8];
+        let mut ba = [0.0_f32; 8];
+        gather_rgb4(chunk, &mut ra, &mut ga, &mut ba);
+        let r = f32x8::load(t, &ra);
+        let g = f32x8::load(t, &ga);
+        let b = f32x8::load(t, &ba);
+        let l = r * lr + g * lg + b * lb;
+        let scale = ((one + l / lmax_sq) / (one + l)).max(zero);
+        scatter_rgb4(
+            chunk,
+            (r * scale).min(one),
+            (g * scale).min(one),
+            (b * scale).min(one),
+        );
+    }
+    for c in iter.into_remainder().chunks_exact_mut(4) {
+        let o = crate::curves::ToneMapCurve::ExtendedReinhard { l_max, luma }
+            .map_rgb([c[0], c[1], c[2]]);
+        c[0] = o[0];
+        c[1] = o[1];
+        c[2] = o[2];
+    }
+}
+
+/// Reinhard Jodie: per-channel Reinhard blended with luma-based Reinhard.
+/// out[i] = (1-tv) * (rgb[i] * luma_scale) + tv * tv, tv = rgb[i]/(1+rgb[i])
+#[cfg(target_arch = "x86_64")]
+#[archmage::arcane]
+fn reinhard_jodie_3_v3(t: archmage::X64V3Token, row: &mut [f32], luma: [f32; 3]) {
+    let lr = f32x8::splat(t, luma[0]);
+    let lg = f32x8::splat(t, luma[1]);
+    let lb = f32x8::splat(t, luma[2]);
+    let one = f32x8::splat(t, 1.0);
+    let zero = f32x8::splat(t, 0.0);
+
+    let mut iter = row.chunks_exact_mut(24);
+    for chunk in &mut iter {
+        let mut ra = [0.0_f32; 8];
+        let mut ga = [0.0_f32; 8];
+        let mut ba = [0.0_f32; 8];
+        gather_rgb3(chunk, &mut ra, &mut ga, &mut ba);
+        let r = f32x8::load(t, &ra);
+        let g = f32x8::load(t, &ga);
+        let b = f32x8::load(t, &ba);
+        let l = r * lr + g * lg + b * lb;
+        let luma_scale = one / (one + l);
+        // Per-channel: tv = x/(1+x), out = (1-tv)*(x*luma_scale) + tv*tv
+        let tvr = r / (one + r);
+        let tvg = g / (one + g);
+        let tvb = b / (one + b);
+        let or = ((one - tvr) * (r * luma_scale) + tvr * tvr)
+            .min(one)
+            .max(zero);
+        let og = ((one - tvg) * (g * luma_scale) + tvg * tvg)
+            .min(one)
+            .max(zero);
+        let ob = ((one - tvb) * (b * luma_scale) + tvb * tvb)
+            .min(one)
+            .max(zero);
+        scatter_rgb3(chunk, or, og, ob);
+    }
+    for c in iter.into_remainder().chunks_exact_mut(3) {
+        let o = crate::curves::reinhard_jodie([c[0], c[1], c[2]], luma);
+        c[0] = o[0];
+        c[1] = o[1];
+        c[2] = o[2];
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[archmage::arcane]
+fn reinhard_jodie_4_v3(t: archmage::X64V3Token, row: &mut [f32], luma: [f32; 3]) {
+    let lr = f32x8::splat(t, luma[0]);
+    let lg = f32x8::splat(t, luma[1]);
+    let lb = f32x8::splat(t, luma[2]);
+    let one = f32x8::splat(t, 1.0);
+    let zero = f32x8::splat(t, 0.0);
+
+    let mut iter = row.chunks_exact_mut(32);
+    for chunk in &mut iter {
+        let mut ra = [0.0_f32; 8];
+        let mut ga = [0.0_f32; 8];
+        let mut ba = [0.0_f32; 8];
+        gather_rgb4(chunk, &mut ra, &mut ga, &mut ba);
+        let r = f32x8::load(t, &ra);
+        let g = f32x8::load(t, &ga);
+        let b = f32x8::load(t, &ba);
+        let l = r * lr + g * lg + b * lb;
+        let luma_scale = one / (one + l);
+        let tvr = r / (one + r);
+        let tvg = g / (one + g);
+        let tvb = b / (one + b);
+        let or = ((one - tvr) * (r * luma_scale) + tvr * tvr)
+            .min(one)
+            .max(zero);
+        let og = ((one - tvg) * (g * luma_scale) + tvg * tvg)
+            .min(one)
+            .max(zero);
+        let ob = ((one - tvb) * (b * luma_scale) + tvb * tvb)
+            .min(one)
+            .max(zero);
+        scatter_rgb4(chunk, or, og, ob);
+    }
+    for c in iter.into_remainder().chunks_exact_mut(4) {
+        let o = crate::curves::reinhard_jodie([c[0], c[1], c[2]], luma);
+        c[0] = o[0];
+        c[1] = o[1];
+        c[2] = o[2];
+    }
+}
+
+/// Tuned Reinhard: display-aware with content/display peak.
+/// scale = (1 + w_a * l) / (1 + w_b * l), applied to luma then RGB scaled.
+#[cfg(target_arch = "x86_64")]
+#[archmage::arcane]
+fn tuned_reinhard_3_v3(
+    t: archmage::X64V3Token,
+    row: &mut [f32],
+    content_max: f32,
+    display_max: f32,
+    luma: [f32; 3],
+) {
+    let white_point = 203.0_f32;
+    let ld = content_max / white_point;
+    let lr = f32x8::splat(t, luma[0]);
+    let lg = f32x8::splat(t, luma[1]);
+    let lb = f32x8::splat(t, luma[2]);
+    let w_a = f32x8::splat(t, (display_max / white_point) / (ld * ld));
+    let w_b = f32x8::splat(t, 1.0 / (display_max / white_point));
+    let one = f32x8::splat(t, 1.0);
+    let zero = f32x8::splat(t, 0.0);
+
+    let mut iter = row.chunks_exact_mut(24);
+    for chunk in &mut iter {
+        let mut ra = [0.0_f32; 8];
+        let mut ga = [0.0_f32; 8];
+        let mut ba = [0.0_f32; 8];
+        gather_rgb3(chunk, &mut ra, &mut ga, &mut ba);
+        let r = f32x8::load(t, &ra);
+        let g = f32x8::load(t, &ga);
+        let b = f32x8::load(t, &ba);
+        let l = r * lr + g * lg + b * lb;
+        // scale = tuned_reinhard(l) = (1 + w_a*l) / (1 + w_b*l)
+        let scale = ((one + w_a * l) / (one + w_b * l)).max(zero);
+        scatter_rgb3(
+            chunk,
+            (r * scale).min(one),
+            (g * scale).min(one),
+            (b * scale).min(one),
+        );
+    }
+    for c in iter.into_remainder().chunks_exact_mut(3) {
+        let curve = crate::curves::ToneMapCurve::TunedReinhard {
+            content_max_nits: content_max,
+            display_max_nits: display_max,
+            luma,
+        };
+        let o = curve.map_rgb([c[0], c[1], c[2]]);
+        c[0] = o[0];
+        c[1] = o[1];
+        c[2] = o[2];
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[archmage::arcane]
+fn tuned_reinhard_4_v3(
+    t: archmage::X64V3Token,
+    row: &mut [f32],
+    content_max: f32,
+    display_max: f32,
+    luma: [f32; 3],
+) {
+    let white_point = 203.0_f32;
+    let ld = content_max / white_point;
+    let lr = f32x8::splat(t, luma[0]);
+    let lg = f32x8::splat(t, luma[1]);
+    let lb = f32x8::splat(t, luma[2]);
+    let w_a = f32x8::splat(t, (display_max / white_point) / (ld * ld));
+    let w_b = f32x8::splat(t, 1.0 / (display_max / white_point));
+    let one = f32x8::splat(t, 1.0);
+    let zero = f32x8::splat(t, 0.0);
+
+    let mut iter = row.chunks_exact_mut(32);
+    for chunk in &mut iter {
+        let mut ra = [0.0_f32; 8];
+        let mut ga = [0.0_f32; 8];
+        let mut ba = [0.0_f32; 8];
+        gather_rgb4(chunk, &mut ra, &mut ga, &mut ba);
+        let r = f32x8::load(t, &ra);
+        let g = f32x8::load(t, &ga);
+        let b = f32x8::load(t, &ba);
+        let l = r * lr + g * lg + b * lb;
+        let scale = ((one + w_a * l) / (one + w_b * l)).max(zero);
+        scatter_rgb4(
+            chunk,
+            (r * scale).min(one),
+            (g * scale).min(one),
+            (b * scale).min(one),
+        );
+    }
+    for c in iter.into_remainder().chunks_exact_mut(4) {
+        let curve = crate::curves::ToneMapCurve::TunedReinhard {
+            content_max_nits: content_max,
+            display_max_nits: display_max,
+            luma,
+        };
+        let o = curve.map_rgb([c[0], c[1], c[2]]);
         c[0] = o[0];
         c[1] = o[1];
         c[2] = o[2];
