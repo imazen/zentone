@@ -484,12 +484,7 @@ fn agx_pre_outset_8px(
 /// AgX outset matrix + clamp to [0, 1]. Applied AFTER the look transform.
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
-fn agx_outset_8px(
-    t: archmage::X64V3Token,
-    r: f32x8,
-    g: f32x8,
-    b: f32x8,
-) -> (f32x8, f32x8, f32x8) {
+fn agx_outset_8px(t: archmage::X64V3Token, r: f32x8, g: f32x8, b: f32x8) -> (f32x8, f32x8, f32x8) {
     let zero = f32x8::splat(t, 0.0);
     let one = f32x8::splat(t, 1.0);
 
@@ -547,9 +542,8 @@ fn agx_look_8px(
     };
 
     // Saturation blend: luma + sat * (channel - luma)
-    let luma = f32x8::splat(t, 0.2126) * zr
-        + f32x8::splat(t, 0.7152) * zg
-        + f32x8::splat(t, 0.0722) * zb;
+    let luma =
+        f32x8::splat(t, 0.2126) * zr + f32x8::splat(t, 0.7152) * zg + f32x8::splat(t, 0.0722) * zb;
 
     let or = f32x8::splat(t, saturation[0]) * (zr - luma) + luma;
     let og = f32x8::splat(t, saturation[1]) * (zg - luma) + luma;
