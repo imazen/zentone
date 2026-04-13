@@ -119,13 +119,35 @@ impl Bt2446C {
     }
 
     /// The piecewise tone curve (operates on percentage luminance 0-100).
+    ///
+    /// The two pieces (linear and log) are C0-continuous but NOT C1 with
+    /// the default BT.2408 k-parameters. A smoothstep blend over a narrow
+    /// transition zone eliminates the visible kink.
     #[inline]
     fn tone_curve(&self, y_hdr_pct: f32) -> f32 {
-        let ip_pct = self.y_ip; // inflection point in percentage
-        if y_hdr_pct < ip_pct {
-            self.k1 * y_hdr_pct
+        let ip = self.y_ip;
+        let linear_val = self.k1 * y_hdr_pct;
+        if y_hdr_pct <= 0.0 {
+            return 0.0;
+        }
+        let log_val = self.k2 * libm::logf(y_hdr_pct / ip) + self.k4;
+
+        // Transition zone: blend over ±10% of the inflection point.
+        // This smooths the derivative discontinuity that the spec's
+        // default k-parameters produce.
+        let half_zone = ip * 0.1;
+        let lo = ip - half_zone;
+        let hi = ip + half_zone;
+
+        if y_hdr_pct <= lo {
+            linear_val
+        } else if y_hdr_pct >= hi {
+            log_val
         } else {
-            self.k2 * libm::logf(y_hdr_pct / ip_pct) + self.k4
+            // Smoothstep blend
+            let t = (y_hdr_pct - lo) / (hi - lo);
+            let s = t * t * (3.0 - 2.0 * t);
+            linear_val * (1.0 - s) + log_val * s
         }
     }
 

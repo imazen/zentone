@@ -144,7 +144,7 @@ fn all_tonemappers() -> Vec<(&'static str, Box<dyn ToneMap>)> {
         ("Bt2446C", Box::new(Bt2446C::new(8000.0, 100.0))),
         (
             "FilmicSpline",
-            Box::new(CompiledFilmicSpline::new(&FilmicSplineConfig::default())),
+            Box::new(CompiledFilmicSpline::for_hdr_peak(10.0)),
         ),
     ]
 }

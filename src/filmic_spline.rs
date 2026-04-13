@@ -89,6 +89,23 @@ impl CompiledFilmicSpline {
         Self::with_luma(p, LUMA_BT709)
     }
 
+    /// Build a spline configured for a given HDR peak luminance.
+    ///
+    /// Automatically sets `white_point_source` from the peak-to-middle-gray
+    /// ratio so the spline covers the full dynamic range without crushing
+    /// highlights. Other parameters use the zentone defaults.
+    ///
+    /// `peak_linear`: the maximum scene-linear value (e.g., 10.0 for 10×
+    /// SDR white, or `peak_nits / 203.0` for nit-based workflows).
+    pub fn for_hdr_peak(peak_linear: f32) -> Self {
+        let middle_gray = 0.18;
+        let ev = log2f((peak_linear / middle_gray).max(1.0));
+        Self::new(&FilmicSplineConfig {
+            white_point_source: ev.max(1.0),
+            ..FilmicSplineConfig::default()
+        })
+    }
+
     /// Build a compiled spline with explicit luminance weights.
     pub fn with_luma(p: &FilmicSplineConfig, luma: [f32; 3]) -> Self {
         let hardness = p.output_power;
