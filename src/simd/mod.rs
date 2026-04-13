@@ -1061,15 +1061,15 @@ fn agx_pre_outset_8px(
     let g = f32x8::load(t, ga);
     let b = f32x8::load(t, ba);
 
-    // Inset matrix
+    // Inset matrix (Blender AgX, OCIO row-major — rows sum to 1.0)
     let z0r = f32x8::splat(t, 0.856627153315983) * r
-        + f32x8::splat(t, 0.137318972929847) * g
-        + f32x8::splat(t, 0.11189821299995) * b;
-    let z0g = f32x8::splat(t, 0.0951212405381588) * r
+        + f32x8::splat(t, 0.0951212405381588) * g
+        + f32x8::splat(t, 0.0482516061458583) * b;
+    let z0g = f32x8::splat(t, 0.137318972929847) * r
         + f32x8::splat(t, 0.761241990602591) * g
-        + f32x8::splat(t, 0.0767994186031903) * b;
-    let z0b = f32x8::splat(t, 0.0482516061458583) * r
-        + f32x8::splat(t, 0.101439036467562) * g
+        + f32x8::splat(t, 0.101439036467562) * b;
+    let z0b = f32x8::splat(t, 0.11189821299995) * r
+        + f32x8::splat(t, 0.0767994186031903) * g
         + f32x8::splat(t, 0.811302368396859) * b;
 
     // log2(max(x, 1e-10)), clamped to EV range
@@ -1102,19 +1102,19 @@ fn agx_outset_8px(t: archmage::X64V3Token, r: f32x8, g: f32x8, b: f32x8) -> (f32
     let zero = f32x8::splat(t, 0.0);
     let one = f32x8::splat(t, 1.0);
 
-    let or = (f32x8::splat(t, 1.19687900512017) * r
-        + f32x8::splat(t, -0.0528968517574562) * g
-        + f32x8::splat(t, -0.0529716355144438) * b)
+    let or = (f32x8::splat(t, 1.19744107688770) * r
+        + f32x8::splat(t, -0.144261512698001) * g
+        + f32x8::splat(t, -0.0531795641897042) * b)
         .max(zero)
         .min(one);
-    let og = (f32x8::splat(t, -0.0980208811401368) * r
-        + f32x8::splat(t, 1.15190312990417) * g
-        + f32x8::splat(t, -0.0505349770312032) * b)
+    let og = (f32x8::splat(t, -0.196474626321346) * r
+        + f32x8::splat(t, 1.35409513146973) * g
+        + f32x8::splat(t, -0.157620505148385) * b)
         .max(zero)
         .min(one);
-    let ob = (f32x8::splat(t, -0.0990297440797205) * r
-        + f32x8::splat(t, -0.0989611768448433) * g
-        + f32x8::splat(t, 1.15107367264116) * b)
+    let ob = (f32x8::splat(t, -0.146557417106601) * r
+        + f32x8::splat(t, -0.108284058788469) * g
+        + f32x8::splat(t, 1.25484147589507) * b)
         .max(zero)
         .min(one);
 
