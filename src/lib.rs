@@ -94,3 +94,10 @@ pub const LUMA_BT709: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
 /// BT.2020 luminance coefficients `[0.2627, 0.6780, 0.0593]`.
 pub const LUMA_BT2020: [f32; 3] = [0.2627, 0.6780, 0.0593];
+
+/// Display-P3 / DCI-P3 luminance coefficients `[0.2289746, 0.6917385, 0.0792869]`.
+///
+/// Use when input primaries are P3 (e.g. an Apple Ultra HDR base image
+/// where the SDR rendition is tagged Display-P3). Matches the weights
+/// exposed in `ultrahdr-core` (`color/gamut.rs`).
+pub const LUMA_P3: [f32; 3] = [0.2289746, 0.6917385, 0.0792869];
