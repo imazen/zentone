@@ -7,10 +7,10 @@ layering, what's done, what remains, and what ultrahdr-core should delegate.
 
 | Layer | Crate | Owns | Does NOT own |
 |---|---|---|---|
-| **Wire format** | zencodec | `GainMapParams` (ISO 21496-1 fields), u8 quantization/dequantization, XMP/binary serialization | Tone curves, pixel math, transfer functions |
+| **Wire format** | zencodec | `GainMapParams` (ISO 21496-1 fields), XMP/binary serialization | Tone curves, pixel math, transfer functions, u8 quantization |
 | **Pixel math** | zentone | `LumaGainMapSplitter`, tone curves, `LumaToneMap` trait, PQ/HLG linearization helpers, pre-desaturation, gamut matrices | Wire-format quantization, container framing, downsampling/upsampling |
 | **Resampling** | zenresize | Gain map downsampling (encode) and upsampling (decode) with proper filter kernels | Gain math, wire format |
-| **Codec integration** | ultrahdr-core | `RawImage` pixel-format linearization, JPEG/MPF/XMP container, streaming ring-buffer encoder/decoder, `display_boost` weight | Generic tone curves, ISO 21496-1 field semantics |
+| **Codec integration** | ultrahdr-core | `RawImage` pixel-format linearization, JPEG/MPF/XMP container, streaming ring-buffer encoder/decoder, `display_boost` weight, u8 gain quantization (`GainMapLut`, `compute_and_encode_gain`) | Generic tone curves, ISO 21496-1 field semantics |
 
 ## What zentone provides today
 
@@ -54,7 +54,7 @@ Reinhard, ReinhardJodie, Narkowicz, HableFilmic, AcesAp1, Agx(*), Clamp, Bt2408:
 **Wire-format alignment:**
 - Field names match `zencodec::GainMapParams`: `base_offset`, `alternate_offset`
 - Decode formula: `HDR_i = (SDR_i + base_offset) · 2^g − alternate_offset`
-- Splitter emits raw f32 log2 gain; u8 quantization is zencodec's job
+- Splitter emits raw f32 log2 gain; u8 quantization is ultrahdr-core's job
 - `SplitConfig` + `SplitStats` → `GainMapParams` is a 10-line downstream mapping
 
 **Constants:**
@@ -66,35 +66,13 @@ chromatic clipping, RGBA passthrough, extreme highlight clamping, PQ round-trip,
 HLG round-trip, PQ/HLG helper symmetry, pre-desaturation clip reduction,
 pre-desaturation grayscale exactness.
 
-## What zencodec should add
+## What zencodec provides (and its scope boundary)
 
-### u8 gain quantization (`pack_gain` / `GainMapLut`)
+zencodec is metadata-types-only. It owns `GainMapParams`, `GainMapChannel`,
+`Fraction`/`UFraction`, and the ISO 21496-1 binary + XMP serialization. It does
+NOT take on computational code (quantization, LUTs, pixel math).
 
-Move the math from ultrahdr-core into zencodec, parameterized by `GainMapParams`.
-
-**Encode** (currently `compute_and_encode_gain` in `ultrahdr-core/gainmap/compute.rs:195`):
-```
-normalized = (log2_gain - channel.min) / (channel.max - channel.min)
-gamma_corrected = normalized ^ channel.gamma
-byte = round(gamma_corrected * 255)
-```
-
-Zentone emits raw f32 log2 gain. Zencodec packs it:
-```rust
-/// Quantize a raw log2 gain to a u8 wire byte.
-pub fn pack_gain_u8(log2_gain: f32, channel: &GainMapChannel) -> u8;
-
-/// Dequantize a u8 wire byte to a linear gain multiplier (2^g).
-/// This is what GainMapLut precomputes for all 256 values.
-pub fn unpack_gain_linear(byte: u8, channel: &GainMapChannel, weight: f32) -> f32;
-```
-
-**Decode** (currently `GainMapLut` in `ultrahdr-core/gainmap/apply.rs:16-84`):
-256-entry per-channel LUT. Precompute once per image from `GainMapParams` + `weight`.
-Move to zencodec as-is — the LUT build is pure `GainMapParams` math, no pixel-format
-or container knowledge needed.
-
-### `build_gainmap_params` helper
+### `build_gainmap_params` helper (optional, small)
 
 ```rust
 pub fn build_gainmap_params(
@@ -109,7 +87,16 @@ pub fn build_gainmap_params(
 ```
 
 Convenience for zentone callers who have `SplitConfig` + `SplitStats` and want
-to produce metadata without constructing `GainMapParams` field by field.
+to produce metadata without constructing `GainMapParams` field by field. This is
+pure struct construction — no math — so it fits zencodec's scope.
+
+### u8 gain quantization stays in ultrahdr-core
+
+`compute_and_encode_gain` (encode) and `GainMapLut` (decode LUT) are codec
+integration code — they bridge zentone's f32 log2 gains with the 8-bit JPEG
+gain map image. They're parameterized by `GainMapParams` but depend on
+ultrahdr-core's `GainMapConfig` (min/max boost, gamma) and `display_boost`
+weight calculation. They stay where they are.
 
 ## What ultrahdr-core should delegate
 
@@ -126,18 +113,18 @@ RawImage → [linearize per PixelFormat]
          → zentone::pq_to_normalized_linear_row (or hlg_, or already linear)
          → zentone::LumaGainMapSplitter::split_row → (SDR f32, gain f32)
          → zenresize::downsample(gain, scale_factor)     ← gain map shrink
-         → zencodec::pack_gain_u8(gain, channel)          ← u8 quantize
+         → ultrahdr_core::compute_and_encode_gain()       ← u8 quantize (stays here)
          → GainMap { data: Vec<u8>, width, height, channels: 1 }
 ```
 
 **ultrahdr-core keeps:**
 - `RawImage` pixel-format dispatch (`get_linear_rgb` for Rgba8/Rgba32F/etc.)
 - `GainMapConfig` (scale_factor, min/max boost, gamma — user-facing knobs)
-- `compute_gainmap()` as the orchestrator — calls into zentone + zenresize + zencodec
+- `compute_gainmap()` as the orchestrator — calls into zentone + zenresize
+- `compute_and_encode_gain()` — u8 quantization from f32 log2 gain
 - `StreamEncoder` ring-buffer machinery — feeds rows to the splitter
 
 **ultrahdr-core deletes:**
-- `compute_and_encode_gain()` (~20 LOC) → zencodec
 - `compute_luminance_gainmap()` inner loop (~50 LOC) → zentone split_row
 - `compute_multichannel_gainmap()` inner loop (~50 LOC) → stays or becomes zentone multi-channel later
 - `rgb_to_luminance()` for gain computation → zentone does this internally via `SplitConfig::luma_weights`
@@ -152,24 +139,24 @@ GainMap u8 → GainMapLut::new() → sample_gainmap_row_lut() → apply_gain_row
 
 **After delegation:**
 ```
-GainMap u8 → zencodec::GainMapLut::lookup() → f32 gain per pixel
-           → zenresize::upsample(gain, scale_factor)      ← gain map expand
-           → zentone::LumaGainMapSplitter::apply_row       ← (SDR + gain → HDR)
-           → [encode to output PixelFormat]                 ← RawImage
+GainMap u8 → ultrahdr_core::GainMapLut::lookup()          ← u8 → f32 gain (stays here)
+           → zenresize::upsample(gain, scale_factor)       ← gain map expand
+           → zentone::LumaGainMapSplitter::apply_row        ← (SDR + gain → HDR)
+           → [encode to output PixelFormat]                  ← RawImage
 ```
 
 **ultrahdr-core keeps:**
 - `apply_gainmap()` as the orchestrator
+- `GainMapLut` — u8 → f32 decode LUT (stays here, not zencodec)
 - `HdrOutputFormat` enum + output pixel-format encoding
 - `read_sdr_row_linear()` — linearization from u8/u16/f32 pixel formats
 - `StreamDecoder` / `RowDecoder` ring-buffer machinery
 - `calculate_weight()` — display_boost → weight mapping
-- `apply_simd.rs` gains application SIMD (until zentone has its own SIMD apply)
+- `apply_simd.rs` SIMD gain row kernel
 
 **ultrahdr-core deletes (eventually):**
-- `GainMapLut` → re-export from zencodec
-- `apply_gain()` scalar helper → zentone `apply_row` with zencodec-dequantized gain
-- `sample_gainmap_row_lut()` gain map sampling → zenresize upsample + zencodec LUT
+- `apply_gain_row_presampled` scalar loop → zentone `apply_row` (once zentone has SIMD)
+- `sample_gainmap_row_lut()` bilinear sampling → zenresize upsample
 
 ### Estimated impact
 
@@ -189,7 +176,7 @@ multi-channel gain map path.
 
 These stay out of zentone:
 
-- **u8 quantization** → zencodec (parameterized by `GainMapParams`)
+- **u8 quantization** → ultrahdr-core (codec integration, parameterized by `GainMapParams` + `GainMapConfig`)
 - **Gain map downsampling/upsampling** → zenresize (proper filter kernels)
 - **Metadata POD** → zencodec's `GainMapParams` is the single source of truth
 - **Container framing** (JPEG, MPF, XMP) → ultrahdr-core
@@ -209,7 +196,7 @@ These stay out of zentone:
 
 ## Recommended next steps
 
-1. **zencodec**: Add `pack_gain_u8` + `GainMapLut` (move from ultrahdr-core). Small, self-contained.
-2. **ultrahdr-core**: Wire `compute_luminance_gainmap` to zentone's splitter + zencodec's packer. Keep orchestration, delete inner-loop math.
-3. **ultrahdr-core**: Wire `apply_gainmap` decode path to zencodec's LUT + zentone's `apply_row`. Keep pixel-format adapters.
+1. **ultrahdr-core**: Wire `compute_luminance_gainmap` to zentone's splitter. Keep orchestration + `compute_and_encode_gain` for u8 packing. Delete inner-loop gain math.
+2. **ultrahdr-core**: Wire `apply_gainmap` decode path to zentone's `apply_row`. Keep `GainMapLut` + pixel-format adapters.
+3. **zencodec** (optional): Add `build_gainmap_params` convenience helper for zentone callers.
 4. **zentone**: SIMD kernels for split/apply once the delegation is working.
