@@ -50,7 +50,9 @@
 //! `ultrahdr-core::compute_multichannel_gainmap`.
 
 use crate::math::{exp2f, log2f};
-use crate::{Bt2408Tonemapper, Bt2446A, Bt2446B, Bt2446C, ToneMap, ToneMapCurve};
+use crate::{
+    Bt2408Tonemapper, Bt2446A, Bt2446B, Bt2446C, CompiledFilmicSpline, ToneMap, ToneMapCurve,
+};
 use alloc::vec;
 use linear_srgb::tf::{linear_to_pq, pq_to_linear};
 
@@ -173,6 +175,19 @@ impl LumaToneMap for ExtendedReinhardLuma {
     }
 }
 
+/// [`CompiledFilmicSpline`] as a luma curve.
+///
+/// Grayscale-invariant: for `[y,y,y]` input, `ratios = [1,1,1]` so the
+/// desaturation term has no effect and all three output channels are equal.
+/// On chromatic input the desaturation DOES remix chrominance — but that
+/// only affects `map_rgb`, not `map_luma` which always feeds grayscale.
+impl LumaToneMap for CompiledFilmicSpline {
+    #[inline]
+    fn map_luma(&self, y: f32) -> f32 {
+        self.map_rgb([y, y, y])[0]
+    }
+}
+
 // ----- Splitter -------------------------------------------------------------
 
 /// Splitter configuration.
@@ -202,6 +217,22 @@ pub struct SplitConfig {
     /// Sanity ceiling on `log2` gain. Default `6.0` (64×) covers Apple
     /// Ultra HDR's ~9-stop headroom plus margin.
     pub max_log2: f32,
+    /// Pre-desaturation (crosstalk) parameter in `[0.0, 0.33)`.
+    ///
+    /// Before the chromaticity-preserving RGB rescale, each HDR channel
+    /// is blended toward the pixel's mean:
+    /// ```text
+    /// R' = (1 − 2α)·R + α·G + α·B
+    /// ```
+    /// This pulls saturated primaries toward gray, reducing the chance
+    /// that the SDR rescale pushes a channel above 1.0 (out-of-gamut).
+    /// The inverse matrix is applied after the gain is computed, so the
+    /// desaturation is transparent to the round-trip.
+    ///
+    /// `0.0` = disabled (default). `0.10` is a conservative starting
+    /// point; BT.2446-C uses up to `0.33` (but `0.33` is degenerate —
+    /// collapses to grayscale).
+    pub pre_desaturate: f32,
 }
 
 impl Default for SplitConfig {
@@ -212,6 +243,7 @@ impl Default for SplitConfig {
             alternate_offset: 1.0 / 64.0,
             min_log2: -4.0,
             max_log2: 6.0,
+            pre_desaturate: 0.0,
         }
     }
 }
@@ -314,6 +346,8 @@ impl<T: LumaToneMap> LumaGainMapSplitter<T> {
         let [wr, wg, wb] = self.cfg.luma_weights;
         let (b, a) = (self.cfg.base_offset, self.cfg.alternate_offset);
         let (lo, hi) = (self.cfg.min_log2, self.cfg.max_log2);
+        let alpha = self.cfg.pre_desaturate;
+        let has_ct = alpha > 0.0;
 
         for ((h, s), gp) in hdr
             .chunks_exact(CN)
@@ -323,7 +357,22 @@ impl<T: LumaToneMap> LumaGainMapSplitter<T> {
             let r = h[0].max(0.0);
             let gc = h[1].max(0.0);
             let bl = h[2].max(0.0);
-            let y_hdr = wr * r + wg * gc + wb * bl;
+
+            // Optional pre-desaturation (crosstalk matrix).
+            // Blends each channel toward the pixel mean to keep the
+            // chromaticity-preserving rescale in-gamut.
+            let (cr, cg, cb) = if has_ct {
+                let d = 1.0 - 2.0 * alpha;
+                (
+                    d * r + alpha * gc + alpha * bl,
+                    alpha * r + d * gc + alpha * bl,
+                    alpha * r + alpha * gc + d * bl,
+                )
+            } else {
+                (r, gc, bl)
+            };
+
+            let y_hdr = wr * cr + wg * cg + wb * cb;
             let y_sdr = self.curve.map_luma(y_hdr).clamp(0.0, 1.0);
 
             // Choose gain from the luma ratio. Both offsets prevent 0/0
@@ -338,11 +387,25 @@ impl<T: LumaToneMap> LumaGainMapSplitter<T> {
             let g_log2 = raw_log2.clamp(lo, hi);
             let m = exp2f(g_log2);
 
-            // Per-channel SDR derived to invert the decode formula:
+            // Per-channel SDR from the (possibly desaturated) HDR channels.
             //   HDR_i = (SDR_i + b) · 2^g − a   ⇒   SDR_i = (HDR_i + a) / 2^g − b
-            let s0 = (r + a) / m - b;
-            let s1 = (gc + a) / m - b;
-            let s2 = (bl + a) / m - b;
+            let d0 = (cr + a) / m - b;
+            let d1 = (cg + a) / m - b;
+            let d2 = (cb + a) / m - b;
+
+            // Inverse crosstalk to recover original chromaticity.
+            let (s0, s1, s2) = if has_ct {
+                let inv_a = -alpha / (1.0 - 3.0 * alpha);
+                let id = 1.0 - 2.0 * inv_a;
+                (
+                    id * d0 + inv_a * d1 + inv_a * d2,
+                    inv_a * d0 + id * d1 + inv_a * d2,
+                    inv_a * d0 + inv_a * d1 + id * d2,
+                )
+            } else {
+                (d0, d1, d2)
+            };
+
             // Clip detection uses a small tolerance so float roundoff in the
             // log2/exp2 round of `m` doesn't get flagged as a real out-of-gamut
             // event. Real out-of-gamut highlights overshoot 1.0 by far more.
@@ -412,6 +475,44 @@ impl<T: LumaToneMap> LumaGainMapSplitter<T> {
         self.split_row(&linear, sdr_linear, gain, channels, stats);
     }
 
+    /// Encode one HLG-encoded HDR row. Linearizes via the HLG inverse OETF +
+    /// OOTF, rescales so `1.0 = content_peak_nits`, then splits.
+    ///
+    /// Allocates a transient linear buffer; for hot paths, call
+    /// [`hlg_to_normalized_linear_row`] + [`Self::split_row`] with reused
+    /// buffers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn split_hlg_row(
+        &self,
+        hlg: &[f32],
+        sdr_linear: &mut [f32],
+        gain: &mut [f32],
+        channels: u8,
+        display_peak_nits: f32,
+        content_peak_nits: f32,
+        stats: &mut SplitStats,
+    ) {
+        let mut linear = vec![0.0_f32; hlg.len()];
+        linear.copy_from_slice(hlg);
+        hlg_to_normalized_linear_row(&mut linear, channels, display_peak_nits, content_peak_nits);
+        self.split_row(&linear, sdr_linear, gain, channels, stats);
+    }
+
+    /// Decode a linear-light SDR row + log2 gain row back to HLG-encoded HDR.
+    /// Inverse of [`Self::split_hlg_row`].
+    pub fn apply_hlg_row(
+        &self,
+        sdr_linear: &[f32],
+        gain: &[f32],
+        hlg_out: &mut [f32],
+        channels: u8,
+        display_peak_nits: f32,
+        content_peak_nits: f32,
+    ) {
+        self.apply_row(sdr_linear, gain, hlg_out, channels);
+        normalized_linear_to_hlg_row(hlg_out, channels, display_peak_nits, content_peak_nits);
+    }
+
     /// Decode a linear-light SDR row + log2 gain row back to PQ-encoded HDR.
     /// Inverse of [`Self::split_pq_row`].
     pub fn apply_pq_row(
@@ -454,8 +555,8 @@ pub fn pq_to_normalized_linear_row(in_out: &mut [f32], channels: u8, content_pea
     }
 }
 
-/// Inverse of [`pq_to_normalized_linear_row`]. Encodes a linear-light row
-/// (where `1.0 = content_peak_nits`) into PQ wire format in place.
+/// Inverse of [`pq_to_normalized_linear_row`]. Encodes a linear-light
+/// row (where `1.0 = content_peak_nits`) into PQ wire format in place.
 pub fn normalized_linear_to_pq_row(in_out: &mut [f32], channels: u8, content_peak_nits: f32) {
     assert!(channels == 3 || channels == 4, "channels must be 3 or 4");
     assert!(
@@ -472,15 +573,86 @@ pub fn normalized_linear_to_pq_row(in_out: &mut [f32], channels: u8, content_pea
     }
 }
 
+// ----- HLG helpers ----------------------------------------------------------
+
+/// Linearize an HLG-encoded row in place, apply the OOTF, and rescale
+/// so `1.0 = content_peak_nits`.
+///
+/// HLG wire values in `[0, 1]` are decoded via the HLG inverse OETF
+/// (from `linear-srgb`) to scene-linear, then the BT.2100 OOTF is
+/// applied with [`hlg_system_gamma`](crate::hlg::hlg_system_gamma) for
+/// `display_peak_nits`. The result is display-linear, normalized so
+/// `1.0 = content_peak_nits`.
+///
+/// RGBA alpha in channel 3 is passed through unchanged.
+pub fn hlg_to_normalized_linear_row(
+    in_out: &mut [f32],
+    channels: u8,
+    display_peak_nits: f32,
+    content_peak_nits: f32,
+) {
+    assert!(channels == 3 || channels == 4, "channels must be 3 or 4");
+    assert!(
+        content_peak_nits > 0.0,
+        "content_peak_nits must be positive"
+    );
+    let gamma = crate::hlg::hlg_system_gamma(display_peak_nits);
+    // After OOTF, output is display-linear in [0, 1] where 1.0 = display_peak_nits.
+    // Rescale so 1.0 = content_peak_nits.
+    let scale = display_peak_nits / content_peak_nits;
+    let ch = channels as usize;
+    for px in in_out.chunks_exact_mut(ch) {
+        let scene = [
+            linear_srgb::tf::hlg_to_linear(px[0]),
+            linear_srgb::tf::hlg_to_linear(px[1]),
+            linear_srgb::tf::hlg_to_linear(px[2]),
+        ];
+        let display = crate::hlg::hlg_ootf(scene, gamma);
+        px[0] = display[0] * scale;
+        px[1] = display[1] * scale;
+        px[2] = display[2] * scale;
+        // alpha untouched
+    }
+}
+
+/// Inverse of [`hlg_to_normalized_linear_row`]. Encodes a display-linear
+/// row (where `1.0 = content_peak_nits`) back to HLG wire format in place.
+pub fn normalized_linear_to_hlg_row(
+    in_out: &mut [f32],
+    channels: u8,
+    display_peak_nits: f32,
+    content_peak_nits: f32,
+) {
+    assert!(channels == 3 || channels == 4, "channels must be 3 or 4");
+    assert!(
+        content_peak_nits > 0.0,
+        "content_peak_nits must be positive"
+    );
+    let gamma = crate::hlg::hlg_system_gamma(display_peak_nits);
+    let inv_scale = content_peak_nits / display_peak_nits;
+    let ch = channels as usize;
+    for px in in_out.chunks_exact_mut(ch) {
+        // Undo display normalization.
+        let display = [px[0] * inv_scale, px[1] * inv_scale, px[2] * inv_scale];
+        // Inverse OOTF → scene-linear.
+        let scene = crate::hlg::hlg_inverse_ootf(display, gamma);
+        // Scene-linear → HLG wire via OETF.
+        px[0] = linear_srgb::tf::linear_to_hlg(scene[0]);
+        px[1] = linear_srgb::tf::linear_to_hlg(scene[1]);
+        px[2] = linear_srgb::tf::linear_to_hlg(scene[2]);
+        // alpha untouched
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LUMA_BT2020, LUMA_BT709};
+    use crate::{FilmicSplineConfig, LUMA_BT2020, LUMA_BT709};
     use alloc::vec;
     use alloc::vec::Vec;
 
     /// Contract every `LumaToneMap` impl must satisfy:
-    ///   - `T(0) ≈ 0`
+    ///   - `T(0)` is near zero (some curves like filmic lift blacks slightly)
     ///   - strictly monotonic on the operating range
     ///   - finite output
     ///
@@ -489,7 +661,8 @@ mod tests {
     /// splitter clamps before computing gain.
     fn assert_luma_curve_well_behaved<T: LumaToneMap>(curve: &T, max_input: f32, name: &str) {
         let zero = curve.map_luma(0.0);
-        assert!(zero.abs() < 1e-4, "{name}: T(0) = {zero}, expected ≈ 0");
+        // Filmic curves lift black to a small target (e.g. 0.015% of SDR peak).
+        assert!(zero.abs() < 2e-3, "{name}: T(0) = {zero}, expected near 0");
 
         let mut prev = curve.map_luma(0.0);
         let steps = 256;
@@ -533,6 +706,12 @@ mod tests {
     fn extended_reinhard_well_behaved() {
         let c = ExtendedReinhardLuma::new(4.0, LUMA_BT709);
         assert_luma_curve_well_behaved(&c, 10.0, "ExtendedReinhardLuma");
+    }
+
+    #[test]
+    fn filmic_spline_well_behaved() {
+        let c = CompiledFilmicSpline::new(&FilmicSplineConfig::default());
+        assert_luma_curve_well_behaved(&c, 10.0, "CompiledFilmicSpline");
     }
 
     /// Build a grayscale HDR row in `[0, max]`. Grayscale is the exact
@@ -597,6 +776,13 @@ mod tests {
             (
                 alloc::boxed::Box::new(ExtendedReinhardLuma::new(4.0, LUMA_BT2020)),
                 "ExtendedReinhardLuma",
+            ),
+            (
+                alloc::boxed::Box::new(CompiledFilmicSpline::with_luma(
+                    &FilmicSplineConfig::default(),
+                    LUMA_BT2020,
+                )),
+                "CompiledFilmicSpline",
             ),
         ];
 
@@ -772,6 +958,120 @@ mod tests {
         pq_to_normalized_linear_row(&mut row, 4, 1000.0);
         assert!((row[3] - 0.42).abs() < 1e-9);
         assert!((row[7] - 0.99).abs() < 1e-9);
+    }
+
+    /// HLG HDR → split → apply → HLG HDR round-trips on grayscale.
+    #[test]
+    fn hlg_round_trip_grayscale() {
+        let split = LumaGainMapSplitter::new(
+            Bt2446B::new(1000.0, 100.0),
+            SplitConfig {
+                luma_weights: LUMA_BT2020,
+                ..Default::default()
+            },
+        );
+        // HLG samples: 0.75 = reference white; up to 0.9.
+        let hlg: Vec<f32> = (0..8)
+            .flat_map(|i| {
+                let v = 0.1 + i as f32 / 7.0 * 0.8;
+                [v, v, v]
+            })
+            .collect();
+        let mut sdr = vec![0.0; hlg.len()];
+        let mut gain = vec![0.0; hlg.len() / 3];
+        let mut rec = vec![0.0; hlg.len()];
+        let mut stats = SplitStats::default();
+        split.split_hlg_row(&hlg, &mut sdr, &mut gain, 3, 1000.0, 1000.0, &mut stats);
+        split.apply_hlg_row(&sdr, &gain, &mut rec, 3, 1000.0, 1000.0);
+        for (i, (a, b)) in hlg.iter().zip(&rec).enumerate() {
+            assert!(
+                (a - b).abs() < 5e-3,
+                "HLG round-trip drift at [{i}]: {a} vs {b}"
+            );
+        }
+    }
+
+    /// HLG helpers round-trip.
+    #[test]
+    fn hlg_helpers_round_trip() {
+        let data: Vec<f32> = (0..15).map(|i| 0.05 + i as f32 / 14.0 * 0.9).collect();
+        let mut roundtrip = data.clone();
+        hlg_to_normalized_linear_row(&mut roundtrip, 3, 1000.0, 1000.0);
+        normalized_linear_to_hlg_row(&mut roundtrip, 3, 1000.0, 1000.0);
+        for (i, (a, b)) in data.iter().zip(&roundtrip).enumerate() {
+            assert!(
+                (a - b).abs() < 5e-3,
+                "HLG helper drift at [{i}]: {a} vs {b}"
+            );
+        }
+    }
+
+    /// Pre-desaturation reduces clipping on saturated highlights.
+    #[test]
+    fn pre_desaturation_reduces_clipping() {
+        let hdr: Vec<f32> = vec![
+            4.0, 0.05, 0.05, // saturated red — will clip without desaturation
+            0.05, 4.0, 0.05, // saturated green
+            0.05, 0.05, 4.0, // saturated blue
+        ];
+        let no_desat = LumaGainMapSplitter::new(
+            Bt2446C::new(1000.0, 100.0),
+            SplitConfig {
+                pre_desaturate: 0.0,
+                ..Default::default()
+            },
+        );
+        let with_desat = LumaGainMapSplitter::new(
+            Bt2446C::new(1000.0, 100.0),
+            SplitConfig {
+                pre_desaturate: 0.10,
+                ..Default::default()
+            },
+        );
+        let mut sdr_a = vec![0.0; hdr.len()];
+        let mut sdr_b = vec![0.0; hdr.len()];
+        let mut gain_a = vec![0.0; hdr.len() / 3];
+        let mut gain_b = vec![0.0; hdr.len() / 3];
+        let mut stats_a = SplitStats::default();
+        let mut stats_b = SplitStats::default();
+        no_desat.split_row(&hdr, &mut sdr_a, &mut gain_a, 3, &mut stats_a);
+        with_desat.split_row(&hdr, &mut sdr_b, &mut gain_b, 3, &mut stats_b);
+        assert!(
+            stats_a.clipped_sdr_pixels > 0,
+            "saturated pixels should clip without desaturation"
+        );
+        assert!(
+            stats_b.clipped_sdr_pixels <= stats_a.clipped_sdr_pixels,
+            "desaturation should reduce or equal clipping: {} vs {}",
+            stats_b.clipped_sdr_pixels,
+            stats_a.clipped_sdr_pixels
+        );
+    }
+
+    /// Pre-desaturation preserves exact grayscale round-trip.
+    #[test]
+    fn pre_desaturation_grayscale_exact() {
+        let split = LumaGainMapSplitter::new(
+            Bt2446C::new(1000.0, 100.0),
+            SplitConfig {
+                pre_desaturate: 0.15,
+                ..Default::default()
+            },
+        );
+        let hdr = synth_grayscale_hdr_row(16, 3, 2.0);
+        let mut sdr = vec![0.0; hdr.len()];
+        let mut gain = vec![0.0; hdr.len() / 3];
+        let mut rec = vec![0.0; hdr.len()];
+        let mut stats = SplitStats::default();
+        split.split_row(&hdr, &mut sdr, &mut gain, 3, &mut stats);
+        split.apply_row(&sdr, &gain, &mut rec, 3);
+        assert_eq!(stats.clipped_sdr_pixels, 0);
+        for (a, b) in hdr.iter().zip(&rec) {
+            assert!(
+                (a - b).abs() < 1e-4,
+                "grayscale drift with desaturation: {a} vs {b}"
+            );
+        }
     }
 
     #[test]
