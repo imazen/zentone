@@ -44,15 +44,20 @@
 //!
 //! # Experimental (`experimental` feature)
 //!
-//! - [`experimental::AdaptiveTonemapper`] — fits a LUT from an HDR/SDR pair.
-//! - [`experimental::StreamingTonemapper`] — spatially-local, single-pass,
+//! Enable the `experimental` feature to get:
+//!
+//! - `experimental::AdaptiveTonemapper` — fits a LUT from an HDR/SDR pair.
+//! - `experimental::StreamingTonemapper` — spatially-local, single-pass,
 //!   bounded-memory, pull API.
-//! - [`experimental::ProfileToneCurve`] — DNG camera-profile tone curve;
+//! - `experimental::LumaGainMapSplitter` — round-trippable HDR ↔ (SDR, log2 gain)
+//!   for gain-map encoders.
+//! - `experimental::ProfileToneCurve` — DNG camera-profile tone curve;
 //!   per-channel or luminance-preserving views via [`ToneMap`].
-//! - [`experimental::detect::detect_standard`] — identifies which standard
+//! - `experimental::detect::detect_standard` — identifies which standard
 //!   curve was applied to a fitted LUT.
 //!
 //! Lightly tested; API may change without semver bumps until stabilized.
+//! See the `experimental` module docs when the feature is enabled.
 
 #![no_std]
 #![forbid(unsafe_code)]

@@ -4,6 +4,16 @@ HDR to SDR tone mapping in safe Rust. Classical curves, ITU-R BT.2408/BT.2446 st
 
 `no_std + alloc`. `#![forbid(unsafe_code)]`. Zero allocation in hot paths. SIMD-accelerated on x86-64 (AVX2+FMA) with scalar fallback everywhere else.
 
+> **⚠️ Under active development as of April 2026.** Both `zentone` and
+> its downstream consumer [`ultrahdr-core`](https://github.com/imazen/ultrahdr)
+> are being actively shaped; public APIs are especially prone to change
+> through the next few releases. Anything under `experimental` is
+> explicitly unstable (see `[features]` in `Cargo.toml`); the stable
+> surface (tone curves, BT.2408/BT.2446, filmic spline, pipeline
+> helpers) follows semver but minor bumps may still rename or
+> reorganize. Pin minor versions and read `CHANGELOG.md` before
+> upgrading.
+
 ## Quick start
 
 ```rust

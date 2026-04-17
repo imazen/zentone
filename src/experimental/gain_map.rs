@@ -647,7 +647,7 @@ pub fn normalized_linear_to_hlg_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FilmicSplineConfig, LUMA_BT2020, LUMA_BT709};
+    use crate::{FilmicSplineConfig, LUMA_BT709, LUMA_BT2020};
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -767,8 +767,14 @@ mod tests {
         let hdr = synth_grayscale_hdr_row(16, 3, 1.5);
 
         let curves: Vec<(alloc::boxed::Box<dyn LumaToneMap>, &'static str)> = vec![
-            (alloc::boxed::Box::new(Bt2446A::new(1000.0, 100.0)), "Bt2446A"),
-            (alloc::boxed::Box::new(Bt2446B::new(1000.0, 100.0)), "Bt2446B"),
+            (
+                alloc::boxed::Box::new(Bt2446A::new(1000.0, 100.0)),
+                "Bt2446A",
+            ),
+            (
+                alloc::boxed::Box::new(Bt2446B::new(1000.0, 100.0)),
+                "Bt2446B",
+            ),
             (
                 alloc::boxed::Box::new(Bt2408Yrgb::with_luma(4000.0, 1000.0, LUMA_BT2020)),
                 "Bt2408Yrgb",
@@ -799,10 +805,7 @@ mod tests {
                 "{name}: grayscale should never clip"
             );
             for (i, (a, b)) in hdr.iter().zip(&rec).enumerate() {
-                assert!(
-                    (a - b).abs() < 1e-4,
-                    "{name}: drift at [{i}]: {a} vs {b}"
-                );
+                assert!((a - b).abs() < 1e-4, "{name}: drift at [{i}]: {a} vs {b}");
             }
         }
     }
@@ -855,10 +858,7 @@ mod tests {
     /// Alpha is preserved through encode and decode on RGBA rows.
     #[test]
     fn rgba_alpha_passthrough() {
-        let split = LumaGainMapSplitter::new(
-            Bt2446C::new(1000.0, 100.0),
-            SplitConfig::default(),
-        );
+        let split = LumaGainMapSplitter::new(Bt2446C::new(1000.0, 100.0), SplitConfig::default());
         let hdr = synth_grayscale_hdr_row(4, 4, 0.6);
         let mut sdr = vec![0.0; hdr.len()];
         let mut gain = vec![0.0; hdr.len() / 4];
@@ -944,10 +944,7 @@ mod tests {
         pq_to_normalized_linear_row(&mut roundtrip, 3, 1000.0);
         normalized_linear_to_pq_row(&mut roundtrip, 3, 1000.0);
         for (i, (a, b)) in data.iter().zip(&roundtrip).enumerate() {
-            assert!(
-                (a - b).abs() < 1e-3,
-                "PQ helper drift at [{i}]: {a} vs {b}"
-            );
+            assert!((a - b).abs() < 1e-3, "PQ helper drift at [{i}]: {a} vs {b}");
         }
     }
 
@@ -1077,8 +1074,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "channels must be 3 or 4")]
     fn bad_channel_count_panics() {
-        let split =
-            LumaGainMapSplitter::new(Bt2446C::new(1000.0, 100.0), SplitConfig::default());
+        let split = LumaGainMapSplitter::new(Bt2446C::new(1000.0, 100.0), SplitConfig::default());
         let mut sdr = [0.0_f32; 12];
         let mut gain = [0.0_f32; 6];
         let mut stats = SplitStats::default();

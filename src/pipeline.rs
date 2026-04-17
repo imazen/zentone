@@ -6,13 +6,14 @@
 //! # Configuration
 //!
 //! [`PipelineConfig`] controls the tone mapping application space via
-//! [`ToneMapSpace`](crate::gamut::ToneMapSpace): RGB (per-channel) vs
+//! [`ToneMapSpace`]: RGB (per-channel) vs
 //! luma-preserving (better color, fewer out-of-gamut). Out-of-gamut colors
 //! after the BT.2020→BT.709 matrix are always handled with hue-preserving
-//! [`soft_clip`](crate::gamut::soft_clip).
+//! [`soft_clip`].
 //!
 //! The simple functions ([`tonemap_pq_to_linear_srgb`], etc.) use defaults
-//! (RGB per-channel). For control, use [`tonemap_pq_to_linear_srgb_config`].
+//! (RGB per-channel). For control, see [`tonemap_pq_to_linear_srgb_config`],
+//! [`tonemap_pq_to_srgb8_config`], [`tonemap_hlg_to_linear_srgb_config`].
 
 use crate::ToneMap;
 use crate::gamut::{
@@ -24,14 +25,14 @@ use crate::gamut::{
 ///
 /// Controls which color space the tone curve is applied in.
 /// Out-of-gamut colors after gamut matrix conversion are always
-/// handled with hue-preserving [`soft_clip`](crate::gamut::soft_clip).
+/// handled with hue-preserving [`soft_clip`].
 ///
 /// For principled perceptual gamut compression (rather than post-matrix
 /// clipping), use ACES 2.0 ([issue #14](https://github.com/imazen/zentone/issues/14))
 /// which compresses in Hellwig 2022 JMh space.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
-pub(crate) struct PipelineConfig {
+pub struct PipelineConfig {
     /// Color space for tone curve application.
     pub tone_map_space: ToneMapSpace,
 }
@@ -65,7 +66,7 @@ pub fn tonemap_pq_to_linear_srgb(pq_row: &[f32], out: &mut [f32], tm: &dyn ToneM
 ///
 /// Pipeline: PQ EOTF → linear BT.2020 → tonemap (in configured space) →
 /// BT.2020→BT.709 → gamut clip.
-pub(crate) fn tonemap_pq_to_linear_srgb_config(
+pub fn tonemap_pq_to_linear_srgb_config(
     pq_row: &[f32],
     out: &mut [f32],
     tm: &dyn ToneMap,
@@ -109,7 +110,7 @@ pub fn tonemap_pq_to_srgb8(pq_row: &[f32], out: &mut [u8], tm: &dyn ToneMap, cha
 }
 
 /// Tonemap a PQ-encoded BT.2020 RGB row to sRGB u8 with explicit config.
-pub(crate) fn tonemap_pq_to_srgb8_config(
+pub fn tonemap_pq_to_srgb8_config(
     pq_row: &[f32],
     out: &mut [u8],
     tm: &dyn ToneMap,
@@ -166,7 +167,7 @@ pub fn tonemap_hlg_to_linear_srgb(
 }
 
 /// Tonemap an HLG-encoded BT.2020 RGB row to linear sRGB with explicit config.
-pub(crate) fn tonemap_hlg_to_linear_srgb_config(
+pub fn tonemap_hlg_to_linear_srgb_config(
     hlg_row: &[f32],
     out: &mut [f32],
     tm: &dyn ToneMap,
