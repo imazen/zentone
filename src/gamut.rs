@@ -25,7 +25,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[non_exhaustive]
 #[allow(dead_code)] // LumaPreserving used in pipeline tests
-pub enum ToneMapSpace {
+pub(crate) enum ToneMapSpace {
     /// Apply the tone curve independently to each RGB channel.
     /// Fast but reduces saturation, especially on bright saturated colors.
     /// Produces more out-of-gamut values after gamut conversion.

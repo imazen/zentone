@@ -1,19 +1,17 @@
 //! HDR→SDR pipeline helpers.
 //!
 //! Convenience functions that compose transfer-function decoding,
-//! tone mapping, gamut conversion, and sRGB encoding into single calls.
+//! tone mapping, gamut conversion, and sRGB encoding into single calls:
+//! [`tonemap_pq_to_linear_srgb`], [`tonemap_pq_to_srgb8`],
+//! [`tonemap_hlg_to_linear_srgb`].
 //!
-//! # Configuration
-//!
-//! [`PipelineConfig`] controls the tone mapping application space via
-//! [`ToneMapSpace`]: RGB (per-channel) vs
-//! luma-preserving (better color, fewer out-of-gamut). Out-of-gamut colors
-//! after the BT.2020→BT.709 matrix are always handled with hue-preserving
-//! [`soft_clip`].
-//!
-//! The simple functions ([`tonemap_pq_to_linear_srgb`], etc.) use defaults
-//! (RGB per-channel). For control, see [`tonemap_pq_to_linear_srgb_config`],
-//! [`tonemap_pq_to_srgb8_config`], [`tonemap_hlg_to_linear_srgb_config`].
+//! These apply the tone curve in RGB (per-channel) space by default and
+//! handle any out-of-gamut pixels after the BT.2020→BT.709 matrix with a
+//! hue-preserving soft clip. That combination is the right "just works"
+//! default; more control (luma-preserving application space, different
+//! clip policy) is an internal concern today and not yet part of the
+//! public surface. If you need it, open an issue — the knobs exist
+//! internally but are not stabilized.
 
 use crate::ToneMap;
 use crate::gamut::{
@@ -21,18 +19,18 @@ use crate::gamut::{
     tonemap_luma_preserving,
 };
 
-/// Pipeline configuration for HDR→SDR conversion.
+/// Pipeline configuration for HDR→SDR conversion (internal).
 ///
 /// Controls which color space the tone curve is applied in.
 /// Out-of-gamut colors after gamut matrix conversion are always
-/// handled with hue-preserving [`soft_clip`].
+/// handled with hue-preserving soft-clipping.
 ///
 /// For principled perceptual gamut compression (rather than post-matrix
 /// clipping), use ACES 2.0 ([issue #14](https://github.com/imazen/zentone/issues/14))
 /// which compresses in Hellwig 2022 JMh space.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
-pub struct PipelineConfig {
+pub(crate) struct PipelineConfig {
     /// Color space for tone curve application.
     pub tone_map_space: ToneMapSpace,
 }
@@ -56,8 +54,9 @@ fn apply_tonemap(rgb: [f32; 3], tm: &dyn ToneMap, space: ToneMapSpace) -> [f32; 
 
 /// Tonemap a PQ-encoded BT.2020 RGB row to linear sRGB.
 ///
-/// Uses default config (RGB per-channel + SoftClip). For control, use
-/// [`tonemap_pq_to_linear_srgb_config`].
+/// Pipeline: PQ EOTF → linear BT.2020 → tone map (per-channel) →
+/// BT.2020→BT.709 matrix → hue-preserving soft-clip on out-of-gamut
+/// pixels.
 pub fn tonemap_pq_to_linear_srgb(pq_row: &[f32], out: &mut [f32], tm: &dyn ToneMap, channels: u8) {
     tonemap_pq_to_linear_srgb_config(pq_row, out, tm, channels, &PipelineConfig::default());
 }
@@ -66,7 +65,7 @@ pub fn tonemap_pq_to_linear_srgb(pq_row: &[f32], out: &mut [f32], tm: &dyn ToneM
 ///
 /// Pipeline: PQ EOTF → linear BT.2020 → tonemap (in configured space) →
 /// BT.2020→BT.709 → gamut clip.
-pub fn tonemap_pq_to_linear_srgb_config(
+pub(crate) fn tonemap_pq_to_linear_srgb_config(
     pq_row: &[f32],
     out: &mut [f32],
     tm: &dyn ToneMap,
@@ -104,13 +103,14 @@ pub fn tonemap_pq_to_linear_srgb_config(
 
 /// Tonemap a PQ-encoded BT.2020 RGB row to sRGB-encoded u8.
 ///
-/// Uses default config. For control, use [`tonemap_pq_to_srgb8_config`].
+/// Same pipeline as [`tonemap_pq_to_linear_srgb`], with a final sRGB
+/// OETF + `u8` quantization on each output byte.
 pub fn tonemap_pq_to_srgb8(pq_row: &[f32], out: &mut [u8], tm: &dyn ToneMap, channels: u8) {
     tonemap_pq_to_srgb8_config(pq_row, out, tm, channels, &PipelineConfig::default());
 }
 
 /// Tonemap a PQ-encoded BT.2020 RGB row to sRGB u8 with explicit config.
-pub fn tonemap_pq_to_srgb8_config(
+pub(crate) fn tonemap_pq_to_srgb8_config(
     pq_row: &[f32],
     out: &mut [u8],
     tm: &dyn ToneMap,
@@ -148,7 +148,8 @@ pub fn tonemap_pq_to_srgb8_config(
 
 /// Tonemap an HLG-encoded BT.2020 RGB row to linear sRGB.
 ///
-/// Uses default config. For control, use [`tonemap_hlg_to_linear_srgb_config`].
+/// Pipeline: HLG EOTF + OOTF (for `display_peak_nits`) → linear display
+/// BT.2020 → tone map (per-channel) → BT.2020→BT.709 matrix → soft-clip.
 pub fn tonemap_hlg_to_linear_srgb(
     hlg_row: &[f32],
     out: &mut [f32],
@@ -167,7 +168,7 @@ pub fn tonemap_hlg_to_linear_srgb(
 }
 
 /// Tonemap an HLG-encoded BT.2020 RGB row to linear sRGB with explicit config.
-pub fn tonemap_hlg_to_linear_srgb_config(
+pub(crate) fn tonemap_hlg_to_linear_srgb_config(
     hlg_row: &[f32],
     out: &mut [f32],
     tm: &dyn ToneMap,
