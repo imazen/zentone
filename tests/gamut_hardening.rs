@@ -575,6 +575,33 @@ fn fuzz_scalar_simd_agreement() {
 // ============================================================================
 
 #[test]
+fn soft_clip_row_simd_is_identity_on_in_gamut_pixels() {
+    // Sweep the in-gamut cube [0, 1]^3 densely.
+    let mut row: Vec<[f32; 3]> = (0..32u32)
+        .flat_map(|r| {
+            (0..32u32).flat_map(move |g| {
+                (0..32u32).map(move |b| [r as f32 / 31.0, g as f32 / 31.0, b as f32 / 31.0])
+            })
+        })
+        .collect();
+    let original = row.clone();
+
+    soft_clip_row_simd(&mut row);
+
+    for (i, (out, expected)) in row.iter().zip(original.iter()).enumerate() {
+        for c in 0..3 {
+            let err = (out[c] - expected[c]).abs();
+            assert!(
+                err < 2e-6,
+                "in-gamut pixel {i} channel {c}: input {} → output {} (err {err})",
+                expected[c],
+                out[c]
+            );
+        }
+    }
+}
+
+#[test]
 fn strip_length_sweep_tail_correctness() {
     // For every length 0..32, build a row of that length and confirm scalar
     // and SIMD agree. This catches off-by-ones in the chunks_exact tail loop.

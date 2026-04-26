@@ -34,9 +34,7 @@
 //! ```
 
 use crate::ToneMap;
-use crate::gamut::{
-    BT2020_TO_BT709, apply_matrix_row_simd, is_out_of_gamut_mask_simd, soft_clip_row_simd,
-};
+use crate::gamut::{BT2020_TO_BT709, apply_matrix_row_simd, soft_clip_row_simd};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -61,21 +59,17 @@ pub enum HlgOotfMode {
 // SIMD strip-form fused pipelines.
 //
 // Compose the building blocks (`apply_matrix_row_simd`, `soft_clip_row_simd`,
-// `is_out_of_gamut_mask_simd`, `hlg_ootf_row_simd`) plus `linear-srgb`'s
-// `pq_to_linear_slice` / `hlg_to_linear_slice` / `linear_to_srgb_u8_slice`
-// SIMD slice forms with `ToneMap::map_strip_simd` for the curve step.
+// `hlg_ootf_row_simd`) plus `linear-srgb`'s `pq_to_linear_slice` /
+// `hlg_to_linear_slice` / `linear_to_srgb_u8_slice` SIMD slice forms with
+// `ToneMap::map_strip_simd` for the curve step.
 // ============================================================================
 
 /// Tonemap a PQ-encoded BT.2020 RGB strip to linear sRGB f32 (SIMD).
 ///
 /// Pipeline:
 /// PQ EOTF (via `linear-srgb`) → `tm.map_strip_simd` → BT.2020→BT.709 matrix
-/// → out-of-gamut mask + hue-preserving soft clip on flagged pixels.
-///
-/// The OOG branch is masked rather than per-pixel: a tiny mask buffer
-/// (one f32 per pixel) is filled by [`is_out_of_gamut_mask_simd`], pixels
-/// with `mask >= 0.5` are gathered into a side buffer, soft-clipped, and
-/// scattered back. This avoids running soft clip on the in-gamut majority.
+/// → hue-preserving soft clip applied unconditionally (identity on in-gamut
+/// pixels, so the in-gamut majority sees no behavioral change).
 ///
 /// `pq_row` and `out` must have equal length.
 ///
@@ -287,52 +281,13 @@ pub fn tonemap_pq_to_srgb8_rgba_row_simd(
 
 /// Apply BT.2020 → BT.709 matrix to a strip and soft-clip out-of-gamut pixels.
 ///
-/// Two-pass approach for cache friendliness on long strips:
-/// 1. Vectorized matrix apply across the whole strip.
-/// 2. Vectorized OOG mask scan; if any pixels are flagged, gather them into
-///    a small contiguous buffer, soft-clip in SIMD, scatter back.
-///
-/// Doing the soft clip on the gathered subset keeps the common case (in-gamut
-/// pixels) on the fast path — most video content is mostly in gamut after
-/// tone-mapping, so paying the gather/scatter only on flagged pixels wins
-/// over running `soft_clip_row_simd` on every pixel.
+/// `soft_clip_row_simd` is identity-equivalent on in-gamut pixels (verified by
+/// the dense `[0, 1]^3` sweep in `tests/gamut_hardening.rs`), so applying it
+/// unconditionally avoids the per-call mask buffer + gather/scatter dance and
+/// keeps the kernel branch-free on the hot path.
 fn apply_matrix_and_soft_clip(strip: &mut [[f32; 3]]) {
     apply_matrix_row_simd(&BT2020_TO_BT709, strip);
-
-    // OOG mask. Stack-allocate the mask via a pre-sized Vec; for typical
-    // strip widths (a few hundred pixels) this is one alloc and lives only
-    // for the duration of this call.
-    let mut mask = vec![0.0_f32; strip.len()];
-    is_out_of_gamut_mask_simd(strip, &mut mask);
-
-    // Count how many pixels need clipping. Fast majority-in-gamut path:
-    // if zero, return.
-    let oog_count = mask.iter().filter(|&&m| m >= 0.5).count();
-    if oog_count == 0 {
-        return;
-    }
-
-    // If most pixels are out of gamut (>50%), clip everything in-place.
-    // The threshold is a heuristic — gather/scatter is only worth it when
-    // the OOG fraction is small enough that the bookkeeping pays off.
-    if oog_count * 2 >= strip.len() {
-        soft_clip_row_simd(strip);
-        return;
-    }
-
-    // Otherwise gather into a side buffer, clip, scatter back.
-    let mut gathered: Vec<[f32; 3]> = Vec::with_capacity(oog_count);
-    let mut indices: Vec<usize> = Vec::with_capacity(oog_count);
-    for (i, (&m, px)) in mask.iter().zip(strip.iter()).enumerate() {
-        if m >= 0.5 {
-            gathered.push(*px);
-            indices.push(i);
-        }
-    }
-    soft_clip_row_simd(&mut gathered);
-    for (&i, px) in indices.iter().zip(gathered.iter()) {
-        strip[i] = *px;
-    }
+    soft_clip_row_simd(strip);
 }
 
 #[cfg(test)]

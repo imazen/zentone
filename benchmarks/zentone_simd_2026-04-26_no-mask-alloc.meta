@@ -1,0 +1,17 @@
+# zentone scalar-vs-SIMD bench — 2026-04-26 (post mask-alloc removal)
+# parent commit (jj @-): 960068f0 (main: fix(gamut): SIMD soft_clip out-of-gamut when min(rgb) > 1)
+# this change (jj @): 04f5333ef260 (perf(pipeline): drop unconditional Vec mask, use soft_clip_row_simd directly)
+# command: cargo bench --bench pipeline_bench --features experimental
+# zenbench format: --format=csv (then post-processed to scalar_ns/simd_ns/speedup pairs)
+# uname: Linux lilith 6.6.87.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
+# hardware: AMD Ryzen 9 7950X (water-cooled), 128 GB RAM (per CLAUDE.md)
+# rustc: rustc 1.95.0 (59807616e 2026-04-14)
+# delta vs zentone_simd_2026-04-26.csv (apply_matrix_and_soft_clip rewrite):
+#   bt2446b @ 256:   1003.9 → 865.1 ns  (-13.8%)
+#   bt2446b @ 1024:  3949.8 → 3463.2 ns (-12.3%)
+#   bt2446c @ 256:   1106.6 → 932.3 ns  (-15.7%)
+#   bt2446c @ 1024:  4332.3 → 3703.4 ns (-14.5%)
+#   pq_to_srgb8 @ 1024: 14152.0 → 13413.1 ns (-5.2%)
+# Small-strip gains exceed the ~50-100 ns alloc-cost prediction because the
+# SIMD soft_clip is enabled even when mask was previously gated, and the gather
+# /scatter scalar fallback is gone — the in-gamut majority just runs SIMD now.
