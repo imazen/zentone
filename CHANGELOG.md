@@ -47,6 +47,14 @@ adheres to semver.
 - API tier section in the crate-level rustdoc landing page distinguishing
   hot-path strip APIs, reference per-pixel functions, and experimental
   surface (this release).
+- `benches/pipeline_bench.rs` — scalar-vs-SIMD bench harness covering
+  PR1 curve kernels (regression gate), PR2 building blocks
+  (`apply_matrix_row_simd`, `soft_clip_row_simd`, `hlg_ootf_*_row_simd`),
+  PR4 stateful curve `map_strip_simd` overrides at three strip widths
+  (256/1024/4096), and one end-to-end `tonemap_pq_to_srgb8_row_simd`
+  pair. Results checked into `benchmarks/zentone_simd_*.csv`. SIMD wins
+  every cell, range 1.21× (BT.2446B) – 26.97× (HLG OOTF approx),
+  median 2.25×.
 
 ### Changed
 

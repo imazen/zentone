@@ -63,3 +63,8 @@ required-features = ["experimental"]
 [[bench]]
 name = "tonemap_bench"
 harness = false
+
+[[bench]]
+name = "pipeline_bench"
+harness = false
+required-features = ["experimental"]

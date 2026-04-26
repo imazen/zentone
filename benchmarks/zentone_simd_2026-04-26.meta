@@ -1,0 +1,7 @@
+# zentone scalar-vs-SIMD bench — 2026-04-26
+# parent commit (jj @-): 8f45ffc05755
+# command: cargo bench --bench pipeline_bench --features experimental
+# zenbench format: --format=csv (then post-processed to scalar_ns/simd_ns/speedup pairs)
+# uname: Linux lilith 6.6.87.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
+# hardware: AMD Ryzen 9 7950X (water-cooled), 128 GB RAM (per CLAUDE.md)
+# rustc: rustc 1.95.0 (59807616e 2026-04-14)
