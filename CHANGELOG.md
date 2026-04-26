@@ -100,6 +100,16 @@ adheres to semver.
   channels to `min(r, 1)` (white). Now routes through `clip_sorted` like
   every other branch and produces the correct hue-preserving clipped red
   (7ae5c05).
+- ARM NEON regression in `simd::reinhard_jodie_*_tier`,
+  `simd::narkowicz_*_tier`, and `simd::hable_*_tier`: extreme inputs
+  (negative for ReinhardJodie, near `f32::MAX` for Narkowicz/Hable)
+  produced NaN on aarch64. The trailing `.min(one).max(zero)` masks NaN
+  to a finite value on x86 SSE/AVX (`_mm_min_ps` returns the second
+  operand on NaN) but ARM `vminq_f32` propagates NaN, exposing
+  -1/0 → ±Inf and Inf/Inf → NaN paths the scalar reference avoids via
+  early-out. SIMD kernels now pre-clamp inputs to a finite, in-domain
+  range matching the scalar's effective domain so NaN never enters the
+  arithmetic. Caught by `tests/bruteforce_robustness.rs`.
 
 ### Removed
 

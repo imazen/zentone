@@ -170,6 +170,16 @@ fn reinhard_4_tier(token: Token, row: &mut [f32]) {
 // Narkowicz — `x * (a*x + b) / (x * (c*x + d) + e)`, RGB and RGBA.
 // ============================================================================
 
+// Pre-clamp x to [0, X_MAX] before the rational. This matches the scalar
+// `filmic_narkowicz` early-out for x <= 0 and x > 65536 (where the curve
+// has saturated well past 1.0 anyway) and prevents x*x overflowing to Inf
+// for huge inputs (which would yield Inf/Inf = NaN). The final `.min(one)`
+// would mask NaN to 1.0 on x86 SSE/AVX (returns 2nd operand on NaN) but
+// NOT on ARM NEON (`vminq_f32` propagates NaN), so without this pre-clamp
+// the NEON path fails the bruteforce_robustness test on f32::MAX-class
+// inputs. 65536 is well past the asymptote (≈1.033, clamped to 1.0).
+const NARKOWICZ_X_MAX: f32 = 65536.0;
+
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 fn narkowicz_3_tier(token: Token, row: &mut [f32]) {
     let a = f32x8::splat(token, 2.51);
@@ -179,9 +189,10 @@ fn narkowicz_3_tier(token: Token, row: &mut [f32]) {
     let e = f32x8::splat(token, 0.14);
     let zero = f32x8::zero(token);
     let one = f32x8::splat(token, 1.0);
+    let xmax = f32x8::splat(token, NARKOWICZ_X_MAX);
     let (chunks, tail) = f32x8::partition_slice_mut(token, row);
     for chunk in chunks.iter_mut() {
-        let x = f32x8::load(token, chunk);
+        let x = f32x8::load(token, chunk).max(zero).min(xmax);
         (x * (a * x + b) / (x * (c * x + d) + e))
             .max(zero)
             .min(one)
@@ -201,10 +212,11 @@ fn narkowicz_4_tier(token: Token, row: &mut [f32]) {
     let e = f32x8::splat(token, 0.14);
     let zero = f32x8::zero(token);
     let one = f32x8::splat(token, 1.0);
+    let xmax = f32x8::splat(token, NARKOWICZ_X_MAX);
     let (chunks, tail) = f32x8::partition_slice_mut(token, row);
     for chunk in chunks.iter_mut() {
         let alphas = [chunk[3], chunk[7]];
-        let x = f32x8::load(token, chunk);
+        let x = f32x8::load(token, chunk).max(zero).min(xmax);
         (x * (a * x + b) / (x * (c * x + d) + e))
             .max(zero)
             .min(one)
@@ -223,6 +235,16 @@ fn narkowicz_4_tier(token: Token, row: &mut [f32]) {
 // Hable filmic — rational polynomial with white-point scale, RGB and RGBA.
 // ============================================================================
 
+// Pre-clamp `x*EXPOSURE_BIAS` to a safe range. Without this, huge inputs
+// (>~1e19) cause `x * (A*x + ...)` to overflow to +Inf in both numerator
+// and denominator, yielding Inf/Inf = NaN. On x86 the trailing `.min(one)`
+// hides the NaN by returning the second operand, but ARM NEON's
+// `vminq_f32` propagates NaN — so the bruteforce_robustness test fails on
+// aarch64 for f32::MAX-class inputs. The Hable curve saturates well below
+// x = 11.2 (the white point), so any cap >> that is safe; 65536 is the
+// same cap used for Narkowicz and well within f32 squaring headroom.
+const HABLE_X_MAX: f32 = 65536.0;
+
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 fn hable_3_tier(token: Token, row: &mut [f32]) {
     let a = f32x8::splat(token, 0.15);
@@ -239,9 +261,11 @@ fn hable_3_tier(token: Token, row: &mut [f32]) {
         1.0 / p(11.2)
     });
     let one = f32x8::splat(token, 1.0);
+    let xmax = f32x8::splat(token, HABLE_X_MAX);
+    let neg_xmax = f32x8::splat(token, -HABLE_X_MAX);
     let (chunks, tail) = f32x8::partition_slice_mut(token, row);
     for chunk in chunks.iter_mut() {
-        let x = f32x8::load(token, chunk) * exp;
+        let x = (f32x8::load(token, chunk).min(xmax).max(neg_xmax)) * exp;
         let r = ((x * (a * x + cb) + de) / (x * (a * x + bv) + df) - ef) * ws;
         r.min(one).store(chunk);
     }
@@ -266,10 +290,12 @@ fn hable_4_tier(token: Token, row: &mut [f32]) {
         1.0 / p(11.2)
     });
     let one = f32x8::splat(token, 1.0);
+    let xmax = f32x8::splat(token, HABLE_X_MAX);
+    let neg_xmax = f32x8::splat(token, -HABLE_X_MAX);
     let (chunks, tail) = f32x8::partition_slice_mut(token, row);
     for chunk in chunks.iter_mut() {
         let alphas = [chunk[3], chunk[7]];
-        let x = f32x8::load(token, chunk) * exp;
+        let x = (f32x8::load(token, chunk).min(xmax).max(neg_xmax)) * exp;
         let r = ((x * (a * x + cb) + de) / (x * (a * x + bv) + df) - ef) * ws;
         r.min(one).store(chunk);
         chunk[3] = alphas[0];
@@ -400,6 +426,21 @@ fn ext_reinhard_4_tier(token: Token, row: &mut [f32], l_max: f32, luma: [f32; 3]
 
 /// Reinhard Jodie: per-channel Reinhard blended with luma-based Reinhard.
 /// out = (1-tv) * (rgb * luma_scale) + tv², tv = rgb/(1+rgb)
+//
+// The scalar `reinhard_jodie` early-returns [0,0,0] when luma <= 0, which
+// covers the all-negative input case. The SIMD path has no such gate, so
+// for input r=g=b=-1, `tv = -1/(1+-1) = -1/0 = -Inf`, then
+// `(1-tv)*(...) + tv² = Inf*finite + Inf = NaN`. The trailing
+// `.min(one).max(zero)` masks NaN to a finite value on x86 SSE/AVX (min
+// returns the 2nd operand on NaN) but ARM NEON `vminq_f32` propagates
+// NaN, so aarch64 fails the bruteforce_robustness test.
+//
+// Fix: clamp r,g,b to non-negative before the rational. Linear light is
+// non-negative anyway; the simple Reinhard SIMD already does this. For
+// non-negative r, `1+r >= 1 > 0`, so tv ∈ [0, 1) and the whole
+// expression is finite. This matches scalar behavior on the test grid
+// (all-equal channels) and is consistent with the per-channel Reinhard
+// kernel's input handling.
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 fn reinhard_jodie_3_tier(token: Token, row: &mut [f32], luma: [f32; 3]) {
     let lr = f32x8::splat(token, luma[0]);
@@ -418,9 +459,9 @@ fn reinhard_jodie_3_tier(token: Token, row: &mut [f32], luma: [f32; 3]) {
             ga[i] = chunk[i * 3 + 1];
             ba[i] = chunk[i * 3 + 2];
         }
-        let r = f32x8::load(token, &ra);
-        let g = f32x8::load(token, &ga);
-        let b = f32x8::load(token, &ba);
+        let r = f32x8::load(token, &ra).max(zero);
+        let g = f32x8::load(token, &ga).max(zero);
+        let b = f32x8::load(token, &ba).max(zero);
         let l = r * lr + g * lg + b * lb;
         let luma_scale = one / (one + l);
         let tvr = r / (one + r);
@@ -470,9 +511,12 @@ fn reinhard_jodie_4_tier(token: Token, row: &mut [f32], luma: [f32; 3]) {
             ga[i] = chunk[i * 4 + 1];
             ba[i] = chunk[i * 4 + 2];
         }
-        let r = f32x8::load(token, &ra);
-        let g = f32x8::load(token, &ga);
-        let b = f32x8::load(token, &ba);
+        // See comment on reinhard_jodie_3_tier — clamp inputs to non-negative
+        // to match scalar's `if luma <= 0 → return zero` early-out and avoid
+        // -1/0 → NaN that NEON's vminq_f32 won't suppress.
+        let r = f32x8::load(token, &ra).max(zero);
+        let g = f32x8::load(token, &ga).max(zero);
+        let b = f32x8::load(token, &ba).max(zero);
         let l = r * lr + g * lg + b * lb;
         let luma_scale = one / (one + l);
         let tvr = r / (one + r);
