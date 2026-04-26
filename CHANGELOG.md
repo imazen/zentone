@@ -11,7 +11,9 @@ adheres to semver.
 <!-- Breaking changes that will ship together in the next major (or minor for 0.x) release.
      Add items here as you discover them. Do NOT ship these piecemeal — batch them. -->
 
-## [0.2.0] - 2026-04-26
+## [0.1.0] - 2026-04-26
+
+First publish to crates.io.
 
 ### Changed
 
@@ -111,11 +113,11 @@ adheres to semver.
 ### Removed
 
 - `pipeline::tonemap_pq_to_linear_srgb` — superseded by
-  `pipeline::tonemap_pq_row_simd` in 0.2.0.
+  `pipeline::tonemap_pq_row_simd` in this release.
 - `pipeline::tonemap_pq_to_srgb8` — superseded by
-  `pipeline::tonemap_pq_to_srgb8_row_simd` in 0.2.0.
+  `pipeline::tonemap_pq_to_srgb8_row_simd` in this release.
 - `pipeline::tonemap_hlg_to_linear_srgb` — superseded by
-  `pipeline::tonemap_hlg_row_simd` in 0.2.0.
+  `pipeline::tonemap_hlg_row_simd` in this release.
 
 The `&[f32]` + `channels: u8` forms are no longer present; migrate to the
 SIMD strip-form siblings (`&[[f32; 3]]` / `&[[f32; 4]]`).
