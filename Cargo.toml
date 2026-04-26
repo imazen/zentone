@@ -6,6 +6,8 @@ rust-version = "1.89"
 license = "AGPL-3.0-only OR LicenseRef-Imazen-Commercial"
 description = "HDR to SDR tone mapping: classical curves (Reinhard, ACES, AgX, BT.2408, filmic), plus experimental adaptive and streaming tonemappers"
 repository = "https://github.com/imazen/zentone"
+documentation = "https://docs.rs/zentone"
+readme = "README.md"
 keywords = ["hdr", "tonemap", "bt2408", "agx", "image"]
 categories = ["multimedia::images", "graphics", "no-std"]
 exclude = [
@@ -14,13 +16,19 @@ exclude = [
     "FEEDBACK.md",
     ".claude/",
     ".github/",
+    ".workongoing",
     "Cross.toml",
     "justfile",
     "fuzz/",
+    "reference-checks/",
+    "benchmarks/",
+    "GAIN-MAP-ARCHITECTURE.md",
 ]
 
 [lints.rust]
 unexpected_cfgs = { level = "allow" }
+unsafe_code = "forbid"
+missing_docs = "warn"
 
 [features]
 default = ["std"]
@@ -32,8 +40,8 @@ experimental = []
 [dependencies]
 linear-srgb = { version = "0.6.8", default-features = false, features = ["transfer"] }
 libm = { version = "0.2", default-features = false }
-archmage = { version = "0.9.18", default-features = false, features = ["macros"] }
-magetypes = { version = "0.9.18", default-features = false }
+archmage = { version = "0.9.22", default-features = false, features = ["macros"] }
+magetypes = { version = "0.9.22", default-features = false }
 
 [dev-dependencies]
 gainforge = "0.4.1"
