@@ -90,7 +90,7 @@ fn pq_to_linear_srgb_all_outputs_in_gamut() {
         for (i, chunk) in out.chunks_exact(3).enumerate() {
             for (ch, &v) in chunk.iter().enumerate() {
                 assert!(
-                    v.is_finite() && v >= -1e-6 && v <= 1.0 + 1e-6,
+                    v.is_finite() && (-1e-6..=1.0 + 1e-6).contains(&v),
                     "{name}: neutral ramp pixel {i} ch {ch} = {v} (out of [0,1])"
                 );
             }
@@ -104,7 +104,7 @@ fn pq_to_linear_srgb_all_outputs_in_gamut() {
         for (i, chunk) in out.chunks_exact(3).enumerate() {
             for (ch, &v) in chunk.iter().enumerate() {
                 assert!(
-                    v.is_finite() && v >= -1e-6 && v <= 1.0 + 1e-6,
+                    v.is_finite() && (-1e-6..=1.0 + 1e-6).contains(&v),
                     "{name}: saturated pixel {i} ch {ch} = {v} (out of [0,1])"
                 );
             }
@@ -167,7 +167,7 @@ fn hlg_to_linear_srgb_all_outputs_in_gamut() {
         for (i, chunk) in out.chunks_exact(3).enumerate() {
             for (ch, &v) in chunk.iter().enumerate() {
                 assert!(
-                    v.is_finite() && v >= -1e-6 && v <= 1.0 + 1e-6,
+                    v.is_finite() && (-1e-6..=1.0 + 1e-6).contains(&v),
                     "{name}: HLG pixel {i} ch {ch} = {v}"
                 );
             }
@@ -187,7 +187,7 @@ fn hlg_to_linear_srgb_all_outputs_in_gamut() {
         for (i, chunk) in out.chunks_exact(3).enumerate() {
             for (ch, &v) in chunk.iter().enumerate() {
                 assert!(
-                    v.is_finite() && v >= -1e-6 && v <= 1.0 + 1e-6,
+                    v.is_finite() && (-1e-6..=1.0 + 1e-6).contains(&v),
                     "{name}: HLG saturated pixel {i} ch {ch} = {v}"
                 );
             }
@@ -392,7 +392,7 @@ fn pq_wide_gamut_grid_all_in_range() {
     let mut violations = 0;
     for (i, chunk) in out.chunks_exact(3).enumerate() {
         for (ch, &v) in chunk.iter().enumerate() {
-            if !v.is_finite() || v < -1e-5 || v > 1.0 + 1e-5 {
+            if !v.is_finite() || !(-1e-5..=1.0 + 1e-5).contains(&v) {
                 violations += 1;
                 if violations <= 5 {
                     eprintln!(

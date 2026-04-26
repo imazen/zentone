@@ -80,7 +80,7 @@ fn black_maps_to_near_black() {
                 );
             } else {
                 assert!(
-                    v >= 0.0 && v < 0.005,
+                    (0.0..0.005).contains(&v),
                     "{name}: black[{ch}] = {v} (expected [0, 0.005))"
                 );
             }
@@ -126,7 +126,7 @@ fn sdr_white_maps_to_bounded_output() {
         let out = tm.map_rgb(white);
         for (ch, &v) in out.iter().enumerate() {
             assert!(
-                v.is_finite() && v >= 0.0 && v <= 1.5,
+                v.is_finite() && (0.0..=1.5).contains(&v),
                 "{name}: white[{ch}] = {v} (expected [0, 1.5])"
             );
         }
@@ -171,7 +171,10 @@ fn map_row_black_row_stays_black() {
             if name == "AcesAp1" {
                 assert!(v.abs() < 0.005, "{name}: black row RGB[{i}] = {v}");
             } else {
-                assert!(v >= 0.0 && v < 0.005, "{name}: black row RGB[{i}] = {v}");
+                assert!(
+                    (0.0..0.005).contains(&v),
+                    "{name}: black row RGB[{i}] = {v}"
+                );
             }
         }
 

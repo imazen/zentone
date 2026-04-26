@@ -314,7 +314,7 @@ mod tests {
         tonemap_pq_to_linear_srgb_config(&pq, &mut out, &tm, 3, &cfg);
         for (i, &v) in out.iter().enumerate() {
             assert!(
-                v.is_finite() && v >= 0.0 && v <= 1.01,
+                v.is_finite() && (0.0..=1.01).contains(&v),
                 "luma-preserving cfg: ch {i} = {v}"
             );
         }
@@ -383,7 +383,10 @@ mod tests {
         let mut out = [0.0_f32; 3];
         tonemap_pq_to_linear_srgb_config(&pq, &mut out, &tm, 3, &cfg);
         for (i, &v) in out.iter().enumerate() {
-            assert!(v >= 0.0 && v <= 1.0, "soft clip: ch {i} = {v} out of [0,1]");
+            assert!(
+                (0.0..=1.0).contains(&v),
+                "soft clip: ch {i} = {v} out of [0,1]"
+            );
         }
     }
 }

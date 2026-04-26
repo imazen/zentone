@@ -101,10 +101,9 @@ fn map_rgb_edge_values_all_finite() {
                     // Skip the full 24³ cross product — too slow.
                     // Test: diagonal (same value all channels) + each edge
                     // value with mid-gray in other channels.
-                    if i != j || j != k {
-                        if !(j == 9 && k == 9) && !(i == 9 && k == 9) && !(i == 9 && j == 9) {
-                            continue;
-                        }
+                    let nines = (i == 9) as u32 + (j == 9) as u32 + (k == 9) as u32;
+                    if (i != j || j != k) && nines < 2 {
+                        continue;
                     }
 
                     let input = [r, g, b];
@@ -180,11 +179,11 @@ fn map_row_edge_values_all_finite() {
         let mut row = row_rgba.clone();
         tm.map_row(&mut row, 4);
         for (i, chunk) in row.chunks_exact(4).enumerate() {
-            for ch in 0..3 {
-                if chunk[ch].is_nan() || chunk[ch].is_infinite() {
+            for (ch, &v) in chunk.iter().take(3).enumerate() {
+                if v.is_nan() || v.is_infinite() {
                     failures.push(format!(
-                        "{name}: map_row RGBA pixel {i} (input={}) ch {ch} = {}",
-                        EDGE_VALUES[i], chunk[ch]
+                        "{name}: map_row RGBA pixel {i} (input={}) ch {ch} = {v}",
+                        EDGE_VALUES[i],
                     ));
                 }
             }

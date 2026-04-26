@@ -53,11 +53,10 @@ fn bt2408_identity_when_no_compression_needed() {
     let values = [0.0, 0.01, 0.1, 0.5, 0.9, 1.0];
     for &v in &values {
         let out = tm.map_rgb([v, v, v]);
-        for ch in 0..3 {
+        for (ch, &o) in out.iter().enumerate() {
             assert!(
-                (out[ch] - v).abs() < 0.01,
-                "BT.2408 (no compression): input={v}, out[{ch}]={}, expected≈{v}",
-                out[ch]
+                (o - v).abs() < 0.01,
+                "BT.2408 (no compression): input={v}, out[{ch}]={o}, expected≈{v}",
             );
         }
     }
@@ -82,11 +81,10 @@ fn bt2446c_linear_segment_is_proportional() {
         // applies tone curve (k1 * pct), normalizes back (/100).
         // Expected: v * k1 (since the linear segment is Y_SDR = k1 * Y_HDR).
         let expected = v * k1;
-        for ch in 0..3 {
+        for (ch, &o) in out.iter().enumerate() {
             assert!(
-                (out[ch] - expected).abs() < 0.02,
-                "BT.2446C linear: input={v}, out[{ch}]={}, expected≈{expected:.4}",
-                out[ch]
+                (o - expected).abs() < 0.02,
+                "BT.2446C linear: input={v}, out[{ch}]={o}, expected≈{expected:.4}",
             );
         }
     }
@@ -151,11 +149,10 @@ fn near_black_stays_near_black() {
     for (name, tm) in classical_curves() {
         for &v in &[0.0, 0.001, 0.005, 0.01] {
             let out = tm.map_rgb([v, v, v]);
-            for ch in 0..3 {
+            for (ch, &o) in out.iter().enumerate() {
                 assert!(
-                    out[ch] < 0.1,
-                    "{name}: near-black input={v} produced out[{ch}]={} (too bright)",
-                    out[ch]
+                    o < 0.1,
+                    "{name}: near-black input={v} produced out[{ch}]={o} (too bright)",
                 );
             }
         }

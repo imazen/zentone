@@ -281,7 +281,7 @@ fn custom_pipeline_gamut_convert_and_soft_clip() {
     // All output must be in [0, 1]
     for (i, &v) in tonemapped.iter().enumerate() {
         assert!(
-            v >= 0.0 && v <= 1.0,
+            (0.0..=1.0).contains(&v),
             "custom pipeline: [{i}] = {v} out of [0,1]"
         );
     }
@@ -311,7 +311,7 @@ fn pq_pipeline_all_tonemappers_in_range() {
 
         for (i, &v) in out.iter().enumerate() {
             assert!(
-                v.is_finite() && v >= -1e-6 && v <= 1.0 + 1e-6,
+                v.is_finite() && (-1e-6..=1.0 + 1e-6).contains(&v),
                 "{name}: PQ pipeline [{i}] = {v}"
             );
         }
