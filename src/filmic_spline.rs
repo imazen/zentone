@@ -66,6 +66,37 @@ impl Default for FilmicSplineConfig {
 }
 
 /// Compiled filmic spline (precomputed from [`FilmicSplineConfig`]).
+///
+/// # When to pick this
+///
+/// Calibrated photographic workflows where you want independent control
+/// over toe (shadows), linear (mid-tones), shoulder (highlights), and
+/// per-pixel highlight desaturation. Heavier than the closed-form curves
+/// in [`ToneMapCurve`](crate::ToneMapCurve), but the only option in
+/// zentone with a tunable shoulder.
+///
+/// For "I just have an HDR peak in linear light" use
+/// [`for_hdr_peak`](Self::for_hdr_peak) — it derives `white_point_source`
+/// from the peak / middle-gray ratio so the spline covers the dynamic
+/// range. For graded HDR10/HLG content with known mastering peaks, use
+/// [`Bt2408Tonemapper`](crate::Bt2408Tonemapper) or
+/// [`Bt2446A`](crate::Bt2446A) instead — they're calibrated to specific
+/// nits values.
+///
+/// # Examples
+///
+/// ```
+/// use zentone::{CompiledFilmicSpline, FilmicSplineConfig, ToneMap};
+///
+/// // Defaults: linear output (output_power = 1.0), wide latitude.
+/// let spline = CompiledFilmicSpline::new(&FilmicSplineConfig::default());
+/// let sdr = spline.map_rgb([2.5, 1.5, 0.8]);
+/// assert!(sdr.iter().all(|&c| (0.0..=1.0).contains(&c)));
+///
+/// // Or auto-configure for a known scene-linear peak.
+/// let spline = CompiledFilmicSpline::for_hdr_peak(10.0); // 10× SDR white
+/// let _ = spline.map_rgb([8.0, 4.0, 2.0]);
+/// ```
 #[derive(Debug, Clone)]
 pub struct CompiledFilmicSpline {
     m1: [f32; 3],

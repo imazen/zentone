@@ -16,13 +16,36 @@ use crate::ToneMap;
 
 /// BT.2446 Method B simplified HLG tonemapper.
 ///
-/// Operates on linear-light BT.2020 RGB. Input: 1.0 = `hdr_peak_nits`.
-/// Output: SDR linear in [0, 1].
+/// Operates on linear-light BT.2020 RGB. Input: `1.0 = hdr_peak_nits`.
+/// Output: SDR linear in `[0, 1]`.
 ///
 /// The key idea: by setting HLG EOTF display peak to 291 cd/m², the
-/// HLG→linear→SDR path is near-identity for most of the signal range.
+/// HLG → linear → SDR path is near-identity for most of the signal range.
 /// Above the breakpoint (~78% SDR), highlights are logarithmically
 /// compressed rather than clipped.
+///
+/// # When to pick this
+///
+/// Live HLG broadcast → SDR. Conservative on clipped highlights (90% SDR
+/// maps to 75% HLG = HDR Reference White), so over-exposed regions in the
+/// source don't get amplified the way [`Bt2446A`](crate::Bt2446A) might.
+/// Cheap (single log call per pixel above the breakpoint, no perceptual
+/// log domain). For graded HDR10 content, prefer
+/// [`Bt2408Tonemapper`](crate::Bt2408Tonemapper) or
+/// [`Bt2446A`](crate::Bt2446A) instead.
+///
+/// Reference: ITU-R BT.2446-1 §5 (03/2021), aligned with BT.2408 Annex 10
+/// (NBCU "hybrid-linear" workflow).
+///
+/// # Examples
+///
+/// ```
+/// use zentone::{Bt2446B, ToneMap};
+///
+/// let curve = Bt2446B::new(1000.0, 100.0);
+/// let sdr = curve.map_rgb([0.5, 0.5, 0.5]);
+/// assert!(sdr.iter().all(|&c| (0.0..=1.0).contains(&c)));
+/// ```
 pub struct Bt2446B {
     /// Breakpoint luminance (normalized to input peak).
     breakpoint: f32,

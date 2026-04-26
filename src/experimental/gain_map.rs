@@ -58,10 +58,22 @@ use linear_srgb::tf::{linear_to_pq, pq_to_linear};
 
 /// A scalar luma tone curve: `Y_HDR` (linear, ≥0) → `Y_SDR` (linear).
 ///
-/// Implementors must be **strictly monotonic** on the operating range
-/// and produce output in `[0, 1]`. The trait is intentionally distinct
-/// from [`ToneMap`] — only curves whose natural mode of use is luma-only
-/// should implement it. Per-channel and matrix-based curves do not.
+/// # Contract
+///
+/// - **Input**: linear-light luminance, normalized so `1.0` matches the
+///   curve's configured HDR peak. For the ITU curves this is
+///   `hdr_peak_nits`; for [`ExtendedReinhardLuma`] it's `l_max`. Always
+///   non-negative.
+/// - **Output**: linear-light SDR luminance. Most implementors stay in
+///   `[0, 1]`; some (e.g. [`Bt2446C`](crate::Bt2446C) past its inflection
+///   point) may slightly exceed. The [`LumaGainMapSplitter`] clamps before
+///   computing gain.
+/// - **Strictly monotonic** on the operating range. The splitter relies on
+///   monotonicity to invert the curve via per-pixel gain.
+///
+/// The trait is intentionally distinct from [`ToneMap`] — only curves
+/// whose natural mode of use is luma-only should implement it. Per-channel
+/// and matrix-based curves do not.
 ///
 /// To wrap an ad-hoc closure, use [`LumaFn`].
 pub trait LumaToneMap {

@@ -24,8 +24,31 @@ const LB: f32 = 0.0593;
 /// BT.2446 Method A tonemapper.
 ///
 /// Construct with `new()`, then apply via the [`ToneMap`] trait. Input
-/// is linear-light BT.2020 RGB normalized so 1.0 = 1000 cd/m². Output
-/// is gamma-domain BT.2020 RGB normalized so 1.0 = 100 cd/m².
+/// is linear-light BT.2020 RGB normalized so `1.0 = hdr_peak_nits`.
+/// Output is gamma-domain BT.2020 RGB normalized so `1.0 = sdr_peak_nits`.
+///
+/// # When to pick this
+///
+/// The most rigorously validated HDR → SDR curve in zentone — the only
+/// one with a published psychophysical study showing imperceptible
+/// degradation after a full HDR → SDR → HDR round-trip on graded content.
+/// Pick when broadcast-grade fidelity matters. Heavier than
+/// [`Bt2408Tonemapper`](crate::Bt2408Tonemapper) (extra perceptual-log domain conversion + Hunt
+/// color correction), so reserve for offline transcodes or when subjective
+/// tests confirm the difference is worth it.
+///
+/// Reference: ITU-R BT.2446-1 (03/2021) §4 + Annex 1 (12 participants,
+/// 115 images, Sony BVM-X300, 2AFC, p ≈ 0.17 indistinguishability).
+///
+/// # Examples
+///
+/// ```
+/// use zentone::{Bt2446A, ToneMap};
+///
+/// let curve = Bt2446A::new(1000.0, 100.0);
+/// let sdr = curve.map_rgb([0.6, 0.4, 0.2]);
+/// assert!(sdr.iter().all(|&c| (0.0..=1.0).contains(&c)));
+/// ```
 pub struct Bt2446A {
     rho_hdr: f32,
     inv_log_rho_hdr: f32,

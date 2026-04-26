@@ -1,17 +1,32 @@
-//! HDR→SDR pipeline helpers.
+//! HDR → SDR pipeline helpers.
 //!
 //! Convenience functions that compose transfer-function decoding,
-//! tone mapping, gamut conversion, and sRGB encoding into single calls:
-//! [`tonemap_pq_to_linear_srgb`], [`tonemap_pq_to_srgb8`],
-//! [`tonemap_hlg_to_linear_srgb`].
+//! tone mapping, BT.2020 → BT.709 gamut conversion, and (optionally) sRGB
+//! u8 encoding into single calls. The tone curve is plugged in as
+//! `&dyn ToneMap` so any zentone tonemapper works.
 //!
-//! These apply the tone curve in RGB (per-channel) space by default and
-//! handle any out-of-gamut pixels after the BT.2020→BT.709 matrix with a
-//! hue-preserving soft clip. That combination is the right "just works"
-//! default; more control (luma-preserving application space, different
-//! clip policy) is an internal concern today and not yet part of the
-//! public surface. If you need it, open an issue — the knobs exist
-//! internally but are not stabilized.
+//! - [`tonemap_pq_to_linear_srgb`]  — PQ → linear sRGB f32
+//! - [`tonemap_pq_to_srgb8`]        — PQ → sRGB-encoded `u8`
+//! - [`tonemap_hlg_to_linear_srgb`] — HLG (with display peak nits) → linear sRGB f32
+//!
+//! All three apply the tone curve in RGB (per-channel) space and handle
+//! any out-of-gamut pixels after the matrix with a hue-preserving soft
+//! clip. That combination is the right "just works" default; more control
+//! (luma-preserving application space, different clip policy) is an
+//! internal concern today and not yet part of the public surface. If you
+//! need it, open an issue.
+//!
+//! # Examples
+//!
+//! ```
+//! use zentone::{Bt2408Tonemapper, pipeline::tonemap_pq_to_srgb8};
+//!
+//! // PQ-encoded BT.2020 row, 4000 cd/m² master, target sRGB display.
+//! let pq_row = [0.58_f32, 0.58, 0.58]; // ~203 nits, mid-gray
+//! let curve = Bt2408Tonemapper::new(4000.0, 1000.0);
+//! let mut srgb_out = [0u8; 3];
+//! tonemap_pq_to_srgb8(&pq_row, &mut srgb_out, &curve, 3);
+//! ```
 
 use crate::ToneMap;
 use crate::gamut::{

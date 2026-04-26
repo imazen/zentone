@@ -11,6 +11,31 @@
 /// Implementors provide [`map_rgb`](Self::map_rgb). Row-level methods are
 /// provided with defaults that const-unroll the per-pixel loop based on
 /// `channels` (3 for RGB, 4 for RGBA — alpha is passed through unchanged).
+///
+/// # Contract
+///
+/// - **Input**: linear-light RGB. Decode any wire-format transfer (PQ, HLG,
+///   sRGB) before calling. The valid range depends on the curve — most
+///   accept any non-negative finite value; some (e.g.
+///   [`Bt2390`](crate::ToneMapCurve::Bt2390)) require pre-normalized input.
+///   See per-curve docs.
+/// - **Input scale**: the curve decides what `1.0` means. ITU curves
+///   ([`Bt2408Tonemapper`](crate::Bt2408Tonemapper),
+///   [`Bt2446A`](crate::Bt2446A) /
+///   [`B`](crate::Bt2446B) /
+///   [`C`](crate::Bt2446C)) use `1.0 = hdr_peak_nits`; classical curves
+///   ([`ToneMapCurve`](crate::ToneMapCurve), [`AgX`](crate::AgxLook),
+///   filmic) treat input as scene-linear with `1.0 = SDR diffuse white`.
+/// - **Output**: linear SDR RGB. Most curves produce values in `[0, 1]`;
+///   some unclamped variants may slightly exceed (e.g.
+///   [`Bt2446C`](crate::Bt2446C) targets `[0, 1.09]` for super-whites).
+/// - **Monotonic** on luminance: doubling the input never decreases the
+///   output luminance. Per-channel curves are also per-channel monotonic;
+///   matrix-based curves ([`AcesAp1`](crate::ToneMapCurve::AcesAp1),
+///   [`AgX`](crate::AgxLook)) are monotonic on neutral input but may
+///   redistribute saturation.
+/// - **Black at black**: `T(0,0,0) = (0,0,0)` (filmic spline lifts black
+///   by `black_point_target`, configurable to 0).
 pub trait ToneMap {
     /// Map a single linear-light RGB triple to linear SDR output.
     ///

@@ -18,8 +18,8 @@ use crate::ToneMap;
 
 /// BT.2446 Method C tonemapper.
 ///
-/// Operates on linear-light RGB. Input: 1.0 = `hdr_peak_nits`.
-/// Output: 1.0 = `sdr_peak_nits`.
+/// Operates on linear-light RGB. Input: `1.0 = hdr_peak_nits`.
+/// Output: `1.0 = sdr_peak_nits` (allows super-whites up to 1.09).
 ///
 /// The tone curve is:
 /// ```text
@@ -27,8 +27,36 @@ use crate::ToneMap;
 /// Y_SDR = k2 * ln(Y_HDR / Y_ip) + k4                for Y_HDR >= Y_ip
 /// ```
 ///
-/// Where `Y_ip = exp((k4 - k1 * k3) / k2)` (the inflection point,
-/// derived from continuity).
+/// Where `Y_ip = k4 / k1` (the inflection point, derived from C0
+/// continuity).
+///
+/// # When to pick this
+///
+/// Pick when you need an **invertible** tone curve — the algebraic inverse
+/// is exact (modulo optional crosstalk), so HDR → SDR → HDR round-trips
+/// with no quantization error. This makes Method C the natural target for
+/// gain-map workflows (`experimental::LumaGainMapSplitter`) and for curve
+/// detection (`experimental::detect::detect_standard`). Default parameters
+/// are tuned for skin-tone preservation per BT.2408 Annex 4.
+///
+/// Reference: ITU-R BT.2446-1 §6 (03/2021).
+///
+/// # Examples
+///
+/// ```
+/// use zentone::{Bt2446C, ToneMap};
+///
+/// // 1000 cd/m² HDR content → 100 cd/m² SDR.
+/// let curve = Bt2446C::new(1000.0, 100.0);
+/// let sdr = curve.map_rgb([2.0, 1.0, 0.5]);
+/// assert!(sdr.iter().all(|&c| c.is_finite() && c >= 0.0));
+///
+/// // Round-trip on luminance is exact.
+/// let y_hdr_pct = 50.0;
+/// let y_sdr_pct = 0.83802 * y_hdr_pct; // below inflection: linear
+/// let back_pct = curve.inverse_tone_curve(y_sdr_pct);
+/// assert!((back_pct - y_hdr_pct).abs() < 1e-3);
+/// ```
 pub struct Bt2446C {
     k1: f32,
     k2: f32,

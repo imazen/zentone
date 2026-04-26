@@ -1,18 +1,57 @@
-//! HDR → SDR tone mapping in safe Rust.
+//! HDR → SDR tone mapping curves in safe Rust.
 //!
-//! Classical curves (Reinhard, Narkowicz, Hable, ACES, AgX), ITU-R BT.2408/BT.2446
-//! standards, darktable filmic spline, plus experimental adaptive and streaming
-//! tonemappers. `no_std + alloc`, zero allocation in hot paths, SIMD-accelerated
-//! on x86-64 (AVX2+FMA) with scalar fallback everywhere else.
+//! zentone is a library of tone-mapping **curves** — the math that compresses
+//! HDR luminance into an SDR display range. It is **not** a full color
+//! management pipeline: linearization, primary conversion, OETF encoding, and
+//! ICC handling live in [`linear-srgb`](https://docs.rs/linear-srgb) and
+//! [`zenpixels-convert`](https://docs.rs/zenpixels-convert). Use zentone
+//! when you have linear-light HDR samples and need to choose a curve.
 //!
-//! # Core trait
+//! `no_std + alloc`, zero allocation in hot paths, SIMD-accelerated on
+//! x86-64 (AVX2+FMA) with scalar fallback everywhere else.
 //!
-//! Every tonemapper implements [`ToneMap`]. Apply it per pixel with
-//! [`map_rgb`](ToneMap::map_rgb), in-place on a row with
-//! [`map_row`](ToneMap::map_row), or with separate src/dst via
-//! [`map_into`](ToneMap::map_into). Row methods dispatch to const-generic
-//! inner loops on `channels` (3 or 4); alpha is preserved, stride arithmetic
-//! is compile-time folded.
+//! # What's in the box
+//!
+//! Curves come in four families. Each implements the [`ToneMap`] trait;
+//! pick by use case, not by name.
+//!
+//! - **Classical, stateless** — [`ToneMapCurve`]: simple Reinhard
+//!   (`x/(1+x)`), extended Reinhard with white point, Reinhard-Jodie,
+//!   tuned Reinhard (display-aware nits), Narkowicz, Hable, ACES AP1,
+//!   AgX (Blender) with [`Default`/`Punchy`/`Golden`](AgxLook) looks,
+//!   BT.2390 EETF, and `Clamp`. No state, no allocation, SIMD-accelerated
+//!   row paths.
+//! - **ITU broadcast standards** — [`Bt2408Tonemapper`] (BT.2408 Annex 5
+//!   PQ-domain Hermite spline, YRGB or MaxRGB), [`Bt2446A`] / [`Bt2446B`]
+//!   / [`Bt2446C`] (BT.2446 Methods A, B, C). Constructed once with
+//!   `(content_max_nits, display_max_nits)`.
+//! - **Filmic spline** — [`CompiledFilmicSpline`] / [`FilmicSplineConfig`]:
+//!   darktable / Blender-style rational spline with toe / linear / shoulder
+//!   regions and per-pixel highlight desaturation. Heavy parameter surface
+//!   for calibrated workflows.
+//! - **Experimental** (behind the `experimental` feature) — adaptive LUT
+//!   fitting, single-pass streaming tonemap with local adaptation, gain-map
+//!   splitter for ISO 21496-1 / Apple Ultra HDR, DNG ProfileToneCurve.
+//!
+//! # Quick start
+//!
+//! Every tonemapper takes a linear-light RGB triple and returns linear SDR
+//! RGB. Wire format decoding (PQ / HLG / sRGB) and primary conversion
+//! happen before / after.
+//!
+//! ```
+//! use zentone::{Bt2446C, ToneMap};
+//!
+//! // 1000 cd/m² HDR content → 203 cd/m² SDR (HDR Reference White).
+//! // Input scale: 1.0 = hdr_peak_nits; output scale: 1.0 = sdr_peak_nits.
+//! let curve = Bt2446C::new(1000.0, 203.0);
+//! let sdr = curve.map_rgb([2.0, 1.0, 0.5]);
+//! assert!(sdr.iter().all(|&c| c.is_finite() && c >= 0.0));
+//! ```
+//!
+//! For an entire row, use [`map_row`](ToneMap::map_row) (in place) or
+//! [`map_into`](ToneMap::map_into) (separate dst). Both dispatch on
+//! `channels` (3 = RGB, 4 = RGBA, alpha preserved):
 //!
 //! ```
 //! use zentone::{ToneMap, ToneMapCurve};
@@ -20,37 +59,52 @@
 //! ToneMapCurve::Narkowicz.map_row(&mut row, 3);
 //! ```
 //!
-//! # Implementations
+//! # Choosing a curve
 //!
-//! - [`ToneMapCurve`] — stateless enum: Reinhard (simple / extended / Jodie /
-//!   tuned), Narkowicz, Hable, ACES AP1, AgX (Default / Punchy / Golden),
-//!   BT.2390, Clamp. SIMD-accelerated where applicable.
-//! - [`Bt2408Tonemapper`] — ITU-R BT.2408 Annex 5 PQ-domain Hermite spline
-//!   EETF with YRGB or MaxRGB application space.
-//! - [`Bt2446A`] / [`Bt2446B`] / [`Bt2446C`] — ITU-R BT.2446 Methods A, B,
-//!   and C (psychophysically-verified, broadcast, and parametric-with-inverse).
-//! - [`CompiledFilmicSpline`] — darktable/Blender-style filmic with
-//!   configurable latitude, contrast, balance, saturation, and output power.
+//! | Need | Pick |
+//! |---|---|
+//! | "Just give me something cheap and decent" | [`ToneMapCurve::Narkowicz`] or [`HableFilmic`](ToneMapCurve::HableFilmic) |
+//! | Game engine / shader port | [`ToneMapCurve::AcesAp1`] or [`Agx`](ToneMapCurve::Agx) |
+//! | Broadcast-grade HDR10 / HLG → SDR with display peak nits | [`Bt2408Tonemapper`] (PQ-domain) or [`Bt2446A`] |
+//! | Live HLG → SDR, conservative on clipped highlights | [`Bt2446B`] |
+//! | HDR → SDR with **mathematical inverse** (round-trip / detection) | [`Bt2446C`] |
+//! | Calibrated photo workflow with toe / shoulder control | [`CompiledFilmicSpline`] |
+//! | ISO 21496-1 / Ultra HDR gain map encoder | `experimental::LumaGainMapSplitter` |
+//! | Re-derive a curve from an HDR/SDR reference pair | `experimental::AdaptiveTonemapper` |
 //!
-//! Variants that need luminance weights take them at construction time via
-//! [`LUMA_BT709`] or [`LUMA_BT2020`].
+//! Curves that need RGB→Y weights take them at construction time via
+//! [`LUMA_BT709`], [`LUMA_BT2020`], or [`LUMA_P3`]. Pick the one that
+//! matches the input primaries — passing BT.709 weights for BT.2020 input
+//! over-desaturates greens.
+//!
+//! # Auxiliary trait
+//!
+//! [`experimental::LumaToneMap`](experimental/trait.LumaToneMap.html) is the
+//! scalar Y → Y' interface used by the gain-map splitter. Distinct from
+//! [`ToneMap`] because per-channel and matrix-based curves don't have a
+//! coherent "luma-only" interpretation.
 //!
 //! # Utility modules
 //!
-//! - [`gamut`] — 6 gamut conversion matrices (BT.709, BT.2020, Display P3).
-//! - [`hlg`] — HLG system gamma, OOTF, inverse OOTF, `hlg_to_display`.
-//! - [`sdr_hdr`] — reference-white scaling (100↔203 nits), OOTF gamma.
-//! - [`pipeline`] — one-call PQ→sRGB and HLG→sRGB with pluggable `&dyn ToneMap`.
+//! - [`gamut`] — 6 gamut conversion matrices (BT.709 ↔ BT.2020 ↔ Display P3)
+//!   plus a hue-preserving [`soft_clip`](gamut::soft_clip).
+//! - [`hlg`] — HLG system gamma, OOTF, inverse OOTF, full HLG → display.
+//! - [`sdr_hdr`] — reference-white scaling (100 ↔ 203 nits), OOTF gamma
+//!   adjustments per BT.2408 §5.1.
+//! - [`pipeline`] — one-call [`tonemap_pq_to_linear_srgb`](pipeline::tonemap_pq_to_linear_srgb)
+//!   / [`tonemap_pq_to_srgb8`](pipeline::tonemap_pq_to_srgb8)
+//!   / [`tonemap_hlg_to_linear_srgb`](pipeline::tonemap_hlg_to_linear_srgb)
+//!   that compose linearization + tone map + gamut conversion + soft clip.
 //!
 //! # Experimental (`experimental` feature)
 //!
-//! Enable the `experimental` feature to get:
+//! Behind a feature flag because the APIs are still in flux:
 //!
 //! - `experimental::AdaptiveTonemapper` — fits a LUT from an HDR/SDR pair.
-//! - `experimental::StreamingTonemapper` — spatially-local, single-pass,
-//!   bounded-memory, pull API.
+//! - `experimental::StreamingTonemapper` — single-pass spatially-local
+//!   tonemap with bounded-memory pull API.
 //! - `experimental::LumaGainMapSplitter` — round-trippable HDR ↔ (SDR, log2 gain)
-//!   for gain-map encoders.
+//!   for ISO 21496-1 / Apple Ultra HDR gain-map encoders.
 //! - `experimental::ProfileToneCurve` — DNG camera-profile tone curve;
 //!   per-channel or luminance-preserving views via [`ToneMap`].
 //! - `experimental::detect::detect_standard` — identifies which standard
