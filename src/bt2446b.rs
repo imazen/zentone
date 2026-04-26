@@ -113,6 +113,19 @@ impl ToneMap for Bt2446B {
             (rgb[2] * ratio).clamp(0.0, 1.0),
         ]
     }
+
+    fn map_strip_simd(&self, strip: &mut [[f32; 3]]) {
+        archmage::incant!(
+            crate::simd::curves::bt2446b_tier(
+                strip,
+                self.breakpoint,
+                self.gain,
+                self.log_scale,
+                self.log_offset,
+            ),
+            [v3, neon, wasm128, scalar]
+        );
+    }
 }
 
 #[cfg(test)]

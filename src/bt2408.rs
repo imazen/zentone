@@ -256,6 +256,29 @@ impl Bt2408Tonemapper {
     }
 }
 
+impl Bt2408Tonemapper {
+    /// Pack the tonemapper's precomputed coefficients for the SIMD strip
+    /// kernel.
+    #[inline]
+    fn simd_params(&self) -> crate::simd::curves::Bt2408Params {
+        crate::simd::curves::Bt2408Params {
+            luma: self.luma,
+            content_max_nits: self.content_max_nits,
+            display_max_nits: self.display_max_nits,
+            inv_display_max: self.inv_display_max,
+            content_min_pq: self.content_min_pq,
+            content_range_pq: self.content_range_pq,
+            inv_content_range_pq: self.inv_content_range_pq,
+            min_lum: self.min_lum,
+            max_lum: self.max_lum,
+            ks: self.ks,
+            one_minus_ks: self.one_minus_ks,
+            inv_one_minus_ks: self.inv_one_minus_ks,
+            normalizer: self.normalizer,
+        }
+    }
+}
+
 impl ToneMap for Bt2408Tonemapper {
     fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
         let signal = match self.space {
@@ -270,6 +293,20 @@ impl ToneMap for Bt2408Tonemapper {
         }
         let scale = self.make_luma_scale(signal_nits);
         [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale]
+    }
+
+    fn map_strip_simd(&self, strip: &mut [[f32; 3]]) {
+        let params = self.simd_params();
+        match self.space {
+            EetfSpace::Yrgb => archmage::incant!(
+                crate::simd::curves::bt2408_yrgb_tier(strip, &params),
+                [v3, neon, wasm128, scalar]
+            ),
+            EetfSpace::MaxRgb => archmage::incant!(
+                crate::simd::curves::bt2408_maxrgb_tier(strip, &params),
+                [v3, neon, wasm128, scalar]
+            ),
+        }
     }
 }
 

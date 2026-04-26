@@ -204,6 +204,15 @@ impl ToneMap for Bt2446C {
             (sdr[2] / 100.0).clamp(0.0, 1.09),
         ]
     }
+
+    fn map_strip_simd(&self, strip: &mut [[f32; 3]]) {
+        archmage::incant!(
+            crate::simd::curves::bt2446c_tier(
+                strip, self.k1, self.k2, self.k4, self.y_ip, self.alpha,
+            ),
+            [v3, neon, wasm128, scalar]
+        );
+    }
 }
 
 #[cfg(test)]

@@ -135,6 +135,19 @@ impl ToneMap for Bt2446A {
 
         [r_out, g_out, b_out]
     }
+
+    fn map_strip_simd(&self, strip: &mut [[f32; 3]]) {
+        archmage::incant!(
+            crate::simd::curves::bt2446a_tier(
+                strip,
+                self.rho_hdr,
+                self.inv_log_rho_hdr,
+                self.rho_sdr,
+                self.inv_rho_sdr_minus_1,
+            ),
+            [v3, neon, wasm128, scalar]
+        );
+    }
 }
 
 #[cfg(test)]

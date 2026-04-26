@@ -372,6 +372,152 @@ fn filmic_spline_matches_darktable_rgb() {
     println!("filmic_spline_rgb: checked {checked} rows, max_err={max_err:.6e}");
 }
 
+/// Strip-form companion: drive the SIMD `map_strip_simd` path over the same
+/// darktable goldens. Tolerance widens to absorb the SIMD log/exp helpers
+/// (`log2_midp`, `exp2_midp` are ~3 ULP each); the desat exp2 path can
+/// shift the final mapped value by a few units in the fourth decimal.
+#[test]
+fn filmic_spline_strip_matches_darktable_rgb() {
+    let csv = read_csv("darktable_filmic.csv");
+    let mut checked = 0;
+    let mut max_err: f32 = 0.0;
+
+    // Group golden rows by config so we can build per-config strips and
+    // hand them to `map_strip_simd` in one call.
+    use std::collections::BTreeMap;
+    type Row = ([f32; 3], [f32; 3]);
+    let mut by_cfg: BTreeMap<String, Vec<Row>> = BTreeMap::new();
+    for cols in parse_rows(&csv, "config,r_in,g_in,b_in,r_out,g_out,b_out") {
+        if cols.len() != 7 {
+            continue;
+        }
+        let config_name = cols[0].to_string();
+        let rgb_in = [
+            cols[1].parse::<f32>().unwrap(),
+            cols[2].parse::<f32>().unwrap(),
+            cols[3].parse::<f32>().unwrap(),
+        ];
+        let expected = [
+            cols[4].parse::<f32>().unwrap(),
+            cols[5].parse::<f32>().unwrap(),
+            cols[6].parse::<f32>().unwrap(),
+        ];
+        by_cfg
+            .entry(config_name)
+            .or_default()
+            .push((rgb_in, expected));
+    }
+
+    for (cfg_name, rows) in &by_cfg {
+        let cfg = filmic_config(cfg_name);
+        let spline = CompiledFilmicSpline::new(&cfg);
+        let inputs: Vec<[f32; 3]> = rows.iter().map(|(i, _)| *i).collect();
+        let mut strip = inputs.clone();
+        spline.map_strip_simd(&mut strip);
+
+        for (i, (rgb_in, expected)) in rows.iter().enumerate() {
+            for c in 0..3 {
+                let err = (strip[i][c] - expected[c]).abs();
+                max_err = max_err.max(err);
+                assert!(
+                    err < 5e-4,
+                    "filmic_strip {cfg_name} at {rgb_in:?}[{c}]: simd={}, darktable={}, err={err}",
+                    strip[i][c],
+                    expected[c]
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 60, "too few filmic strip rows: {checked}");
+    println!("filmic_spline_strip: checked {checked} rows, max_err={max_err:.6e}");
+}
+
+/// Strip-form companion to `bt2408_tonemap_nits_matches_libplacebo_pq`.
+/// The libplacebo golden is a 1D nits→nits function; we drive
+/// `map_strip_simd` on a neutral gray strip whose values map back to the
+/// per-channel scale the kernel applies, then compare against the scalar
+/// `tonemap_nits` reference. This pins the SIMD strip kernel to the same
+/// libplacebo golden chain (PQ EOTF → spline → PQ OETF).
+#[test]
+fn bt2408_strip_matches_libplacebo_neutral_gray() {
+    let csv = read_csv("libplacebo_bt2390.csv");
+
+    // Group rows by (content, display) so each test config gets its own strip.
+    use std::collections::BTreeMap;
+    let mut by_pair: BTreeMap<(u32, u32), Vec<(f32, f32)>> = BTreeMap::new();
+    for cols in parse_rows(
+        &csv,
+        "content_nits,display_nits,knee_offset,input_nits,output_linear",
+    ) {
+        if cols.len() != 5 {
+            continue;
+        }
+        let content: f32 = cols[0].parse().unwrap();
+        let display: f32 = cols[1].parse().unwrap();
+        let offset: f32 = cols[2].parse().unwrap();
+        let input_nits: f32 = cols[3].parse().unwrap();
+        let expected_nits: f32 = cols[4].parse().unwrap();
+        if (offset - 0.5).abs() > 0.01 || content <= display {
+            continue;
+        }
+        by_pair
+            .entry((content.to_bits(), display.to_bits()))
+            .or_default()
+            .push((input_nits, expected_nits));
+    }
+
+    let mut total_checked = 0;
+    let mut max_rel: f32 = 0.0;
+    for ((c_bits, d_bits), rows) in &by_pair {
+        let content = f32::from_bits(*c_bits);
+        let display = f32::from_bits(*d_bits);
+        let tm = Bt2408Tonemapper::with_luma(content, display, LUMA_BT709);
+
+        // Build a neutral-gray strip in content-normalized linear. For each
+        // input_nits, the strip pixel is `[input_nits/content, ...]` so the
+        // YRGB luminance equals the requested value.
+        let strip_in: Vec<[f32; 3]> = rows
+            .iter()
+            .map(|(input_nits, _)| {
+                let v = input_nits / content;
+                [v, v, v]
+            })
+            .collect();
+        let mut strip = strip_in.clone();
+        tm.map_strip_simd(&mut strip);
+
+        for (i, (input_nits, expected_nits)) in rows.iter().enumerate() {
+            // Strip output is display-normalized linear; convert back to nits.
+            let actual_nits = strip[i][0] * display;
+            let err = (actual_nits - expected_nits).abs();
+            let rel = if expected_nits.abs() > 1.0 {
+                err / expected_nits.abs()
+            } else {
+                err
+            };
+            max_rel = max_rel.max(rel);
+            // Looser than the scalar test (PQ_TOLERANCE) because the SIMD
+            // path adds `log2_midp`/`exp2_midp` precision loss on top of
+            // libplacebo's PQ rational polynomial.
+            assert!(
+                rel < 5e-4,
+                "BT.2408 strip mismatch: content={content}, display={display}, \
+                 input={input_nits} nits: simd={actual_nits}, libplacebo={expected_nits}, \
+                 rel_err={rel}"
+            );
+            total_checked += 1;
+            // unused-var supression
+            let _ = (input_nits, i);
+        }
+    }
+    assert!(
+        total_checked > 10,
+        "too few BT.2408 strip rows: {total_checked}"
+    );
+    println!("bt2408_strip_libplacebo: checked {total_checked} rows, max_rel_err={max_rel:.6e}");
+}
+
 /// Test the raw spline evaluation (apply_spline) against darktable's
 /// filmic_spline at multiple x values.
 #[test]

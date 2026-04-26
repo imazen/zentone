@@ -10,6 +10,7 @@ use crate::ToneMap;
 use archmage::incant;
 
 pub(crate) mod blocks;
+pub(crate) mod curves;
 
 // ============================================================================
 // Public dispatch — match on channel count, route to a magetypes _tier fn.

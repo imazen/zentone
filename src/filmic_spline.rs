@@ -286,6 +286,34 @@ impl CompiledFilmicSpline {
     }
 }
 
+impl CompiledFilmicSpline {
+    /// Pack the spline coefficients for the SIMD strip kernel.
+    #[inline]
+    fn simd_params(&self) -> crate::simd::curves::FilmicSimdParams {
+        crate::simd::curves::FilmicSimdParams {
+            m1_toe: self.m1[0],
+            m1_shoulder: self.m1[1],
+            m2_toe: self.m2[0],
+            m2_shoulder: self.m2[1],
+            m2_lin: self.m2[2],
+            m3_toe: self.m3[0],
+            m3_shoulder: self.m3[1],
+            m4_toe: self.m4[0],
+            m4_shoulder: self.m4[1],
+            m1_lin: self.m1[2],
+            latitude_min: self.latitude_min,
+            latitude_max: self.latitude_max,
+            grey_source: self.grey_source,
+            black_source: self.black_source,
+            dynamic_range: self.dynamic_range,
+            sigma_toe: self.sigma_toe,
+            sigma_shoulder: self.sigma_shoulder,
+            saturation: self.saturation,
+            luma: self.luma,
+        }
+    }
+}
+
 impl ToneMap for CompiledFilmicSpline {
     fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
         let mut norm = (rgb[0] * self.luma[0] + rgb[1] * self.luma[1] + rgb[2] * self.luma[2])
@@ -305,6 +333,14 @@ impl ToneMap for CompiledFilmicSpline {
             ((ratios[1] + (1.0 - ratios[1]) * (1.0 - desat)) * mapped).clamp(0.0, 1.0),
             ((ratios[2] + (1.0 - ratios[2]) * (1.0 - desat)) * mapped).clamp(0.0, 1.0),
         ]
+    }
+
+    fn map_strip_simd(&self, strip: &mut [[f32; 3]]) {
+        let params = self.simd_params();
+        archmage::incant!(
+            crate::simd::curves::filmic_spline_tier(strip, &params),
+            [v3, neon, wasm128, scalar]
+        );
     }
 }
 

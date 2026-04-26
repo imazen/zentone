@@ -385,11 +385,14 @@ fn tonemap_pq_row_simd_matches_scalar() {
                     let v = px[c];
                     let err = (s - v).abs();
                     max_err = max_err.max(err);
-                    // 2e-6 absolute, scaled by output magnitude (FMA + soft
-                    // clip path). PQ EOTF accuracy in linear-srgb is
-                    // ~rational poly grade, so we widen a bit.
+                    // PQ EOTF/OETF go through `pow_midp` (~3 ULP × ~3 chained
+                    // calls in the fused pipeline). Bt2408's `map_strip_simd`
+                    // override (PR4) folds another `pow_midp` chain into the
+                    // strip path, widening the cumulative error vs the scalar
+                    // reference. Use 2e-5 × magnitude to cover the worst-case
+                    // ULP stack-up across the full PQ→tonemap→sRGB pipeline.
                     let mag = s.abs().max(v.abs()).max(1.0);
-                    let tol = 5e-6 * mag;
+                    let tol = 2e-5 * mag;
                     let _ = flat.len();
                     assert!(
                         err < tol,
@@ -508,6 +511,193 @@ fn tonemap_pq_to_srgb8_row_simd_matches_scalar() {
     println!(
         "tonemap_pq_to_srgb8_row_simd: {cases} comparisons, max_diff={max_diff} LSB, \
          over_one={over_one} ({pct:.3}%)"
+    );
+}
+
+// ============================================================================
+// PR4 — `map_strip_simd` overrides on transcendental-using curves
+// ============================================================================
+//
+// These tests pin the new SIMD strip kernels for `Bt2408Tonemapper`,
+// `Bt2446A/B/C`, and `CompiledFilmicSpline` against their per-pixel scalar
+// references. Tolerance reflects the precision of the underlying SIMD
+// transcendental: `pow_midp` / `log2_midp` / `exp2_midp` are ~3 ULP, so the
+// kernel's cumulative output error stacks up to a few times that.
+//
+// Random rows of size 1..=1024 cover the chunk-of-8 SIMD body and the
+// scalar tail; the property grid mixes greys, primaries, secondaries, and
+// HDR-up-to-10× values that exercise the out-of-range branches in each
+// curve.
+
+/// Random RGB strip (deterministic per `seed`) with HDR-up-to-10× values.
+fn random_strip(n: usize, seed: u64) -> Vec<[f32; 3]> {
+    // Splitmix64 LCG for reproducibility; we don't need crypto-quality
+    // randomness, just decorrelated property samples.
+    let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut next_u32 = || {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        ((z ^ (z >> 31)) & 0xFFFF_FFFF) as u32
+    };
+    let mut next_f01 = || (next_u32() as f32) / (u32::MAX as f32);
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        // Half SDR-range, half HDR up to 10×, sprinkled with negative
+        // values to exercise the max(0, ·) clamps.
+        let scale = if next_f01() < 0.5 { 1.0 } else { 10.0 };
+        let r = next_f01() * scale - 0.05;
+        let g = next_f01() * scale - 0.05;
+        let b = next_f01() * scale - 0.05;
+        out.push([r, g, b]);
+    }
+    out
+}
+
+/// Run the property grid + a few random rows of varying size against the
+/// supplied curve, comparing `map_strip_simd` against per-pixel `map_rgb`.
+/// Returns `(cases, max_err)`.
+fn check_strip_vs_per_pixel<T: zentone::ToneMap + ?Sized>(tm: &T, abs_tol: f32) -> (usize, f32) {
+    let mut max_err = 0.0_f32;
+    let mut cases = 0;
+    let mut strips: Vec<Vec<[f32; 3]>> = Vec::new();
+    // Property strip (re-use same shape as PR2 tests).
+    let mut prop = property_strip();
+    strips.push(prop.split_off(0));
+    // Random rows: 1, 7, 8, 17, 64, 257, 1024 (mix of <8, multiple-of-8,
+    // off-by-one, and large to dwarf the tail).
+    for &n in &[1_usize, 7, 8, 17, 64, 257, 1024] {
+        strips.push(random_strip(n, n as u64 * 0x1234_5678));
+    }
+    for strip in strips.iter() {
+        let mut via_simd = strip.clone();
+        tm.map_strip_simd(&mut via_simd);
+        for (i, px_in) in strip.iter().enumerate() {
+            let expected = tm.map_rgb(*px_in);
+            for c in 0..3 {
+                let mag = expected[c].abs().max(via_simd[i][c].abs()).max(1.0);
+                let tol = abs_tol * mag;
+                let err = (via_simd[i][c] - expected[c]).abs();
+                max_err = max_err.max(err);
+                assert!(
+                    err < tol,
+                    "strip[{i},{c}] in={px_in:?}: simd={} ref={} err={err:.3e} tol={tol:.3e}",
+                    via_simd[i][c],
+                    expected[c]
+                );
+                cases += 1;
+            }
+        }
+    }
+    (cases, max_err)
+}
+
+#[test]
+fn bt2408_strip_simd_matches_per_pixel() {
+    use zentone::Bt2408Tonemapper;
+    // Both spaces (Yrgb default + max-RGB), and an extra peak ratio.
+    let curves = [
+        Bt2408Tonemapper::new(4000.0, 1000.0),
+        Bt2408Tonemapper::new(1000.0, 203.0),
+        Bt2408Tonemapper::max_rgb(4000.0, 1000.0),
+        Bt2408Tonemapper::max_rgb(1000.0, 203.0),
+    ];
+    let mut total = 0;
+    let mut total_max = 0.0_f32;
+    for tm in curves.iter() {
+        // PQ OETF + EOTF stack 4 `pow_midp` calls (~3 ULP each); the
+        // luma-scale divide `new_lum / signal_nits` amplifies that on
+        // saturated single-channel inputs (`signal_nits` collapses to a
+        // tiny luminance for pure blue, which inflates the ratio's relative
+        // error). Allow 1e-4 × magnitude to cover the worst case.
+        let (n, m) = check_strip_vs_per_pixel(tm, 1e-4);
+        total += n;
+        total_max = total_max.max(m);
+    }
+    println!("bt2408_strip_simd_matches_per_pixel: {total} comparisons, max_err={total_max:.3e}");
+}
+
+#[test]
+fn bt2446a_strip_simd_matches_per_pixel() {
+    use zentone::Bt2446A;
+    let curves = [Bt2446A::new(1000.0, 100.0), Bt2446A::new(4000.0, 100.0)];
+    let mut total = 0;
+    let mut total_max = 0.0_f32;
+    for tm in curves.iter() {
+        // 3× pow_midp(1/2.4) for gamma encoding + log2_midp (perceptual
+        // linearization) + exp2_midp (rho_sdr^y_c) + chained `f / y_p` and
+        // YCbCr cancellation `b_p - y_p`. Subtractive cancellation on
+        // saturated colors (one channel ~1.0 with luma weight 0.06 →
+        // `b_p - y_p` near zero in absolute terms) inflates relative error
+        // through the f-multiply. 5e-4 × magnitude covers the long tail.
+        let (n, m) = check_strip_vs_per_pixel(tm, 5e-4);
+        total += n;
+        total_max = total_max.max(m);
+    }
+    println!("bt2446a_strip_simd_matches_per_pixel: {total} comparisons, max_err={total_max:.3e}");
+}
+
+#[test]
+fn bt2446b_strip_simd_matches_per_pixel() {
+    use zentone::Bt2446B;
+    let curves = [Bt2446B::new(1000.0, 100.0), Bt2446B::new(4000.0, 100.0)];
+    let mut total = 0;
+    let mut total_max = 0.0_f32;
+    for tm in curves.iter() {
+        // Single log2_midp call → 3 ULP grade.
+        let (n, m) = check_strip_vs_per_pixel(tm, 1e-5);
+        total += n;
+        total_max = total_max.max(m);
+    }
+    println!("bt2446b_strip_simd_matches_per_pixel: {total} comparisons, max_err={total_max:.3e}");
+}
+
+#[test]
+fn bt2446c_strip_simd_matches_per_pixel() {
+    use zentone::Bt2446C;
+    let curves = [
+        Bt2446C::new(1000.0, 100.0),
+        Bt2446C::with_params(1000.0, 100.0, 0.83802, 15.09968, 0.74204, 78.99439, 0.1),
+    ];
+    let mut total = 0;
+    let mut total_max = 0.0_f32;
+    for tm in curves.iter() {
+        // log2_midp + crosstalk matrix (FMA chain). 3 ULP × small constant.
+        let (n, m) = check_strip_vs_per_pixel(tm, 1e-5);
+        total += n;
+        total_max = total_max.max(m);
+    }
+    println!("bt2446c_strip_simd_matches_per_pixel: {total} comparisons, max_err={total_max:.3e}");
+}
+
+#[test]
+fn filmic_spline_strip_simd_matches_per_pixel() {
+    use zentone::{CompiledFilmicSpline, FilmicSplineConfig};
+    // Default config + darktable-like config + saturation pulled wide
+    // (exercises the desat exp2 path more visibly).
+    let mut cfg_dt = FilmicSplineConfig::default();
+    cfg_dt.output_power = 4.0;
+    cfg_dt.latitude = 0.01;
+    cfg_dt.white_point_source = 4.0;
+    cfg_dt.contrast = 1.0;
+    let mut cfg_sat = FilmicSplineConfig::default();
+    cfg_sat.saturation = 50.0;
+    let cfgs = [FilmicSplineConfig::default(), cfg_dt, cfg_sat];
+    let curves: Vec<CompiledFilmicSpline> = cfgs.iter().map(CompiledFilmicSpline::new).collect();
+    let mut total = 0;
+    let mut total_max = 0.0_f32;
+    for tm in curves.iter() {
+        // log2_midp (shaper) + 2× exp2_midp (desaturate). 3 ULP × small mag
+        // through rational spline = ~2e-5 worst case at default params,
+        // up to 5e-5 with darktable's hardness-4 config (output is ~1e-1
+        // scale before the rational spline amplifies error).
+        let (n, m) = check_strip_vs_per_pixel(tm, 5e-5);
+        total += n;
+        total_max = total_max.max(m);
+    }
+    println!(
+        "filmic_spline_strip_simd_matches_per_pixel: {total} comparisons, max_err={total_max:.3e}"
     );
 }
 
