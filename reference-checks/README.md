@@ -27,10 +27,22 @@ reference-checks/
 ├── libultrahdr_reinhard.cpp        libultrahdr extended-Reinhard excerpt
 ├── libultrahdr_apply_gain.cpp      libultrahdr applyGain excerpt
 ├── libultrahdr_compute_gain.cpp    libultrahdr computeGain excerpt (encode side)
+├── libultrahdr_luminance.cpp       libultrahdr per-gamut luminance dot products
+├── libultrahdr_gamut.cpp           libultrahdr 6 gamut-conversion matrices
+├── libultrahdr_hlg_ootf.cpp        libultrahdr HLG OOTF / inverse OOTF
+├── libavif_apply_gain.cpp          libavif gain-map weight + apply
+├── libplacebo_bt2390.cpp           libplacebo BT.2390 EETF
+├── darktable_filmic.cpp            darktable filmic spline
 └── golden/
     ├── libultrahdr_reinhard.csv
     ├── libultrahdr_apply_gain.csv
-    └── libultrahdr_compute_gain.csv
+    ├── libultrahdr_compute_gain.csv
+    ├── libultrahdr_luminance.csv
+    ├── libultrahdr_gamut.csv
+    ├── libultrahdr_hlg_ootf.csv
+    ├── libavif_apply_gain.csv
+    ├── libplacebo_bt2390.csv
+    └── darktable_filmic.csv
 ```
 
 Each `.cpp` file starts with a header block recording:
@@ -48,6 +60,12 @@ Each `.cpp` file starts with a header block recording:
 | libultrahdr | `applyGain(Color e, float gain, metadata)` single-channel | `lib/src/gainmapmath.cpp:797-803` | `8cbc983` |
 | libultrahdr | `applyGain(Color e, Color gain, metadata)` per-channel | `lib/src/gainmapmath.cpp:818-834` | `8cbc983` |
 | libultrahdr | `computeGain` encode side | `lib/src/gainmapmath.cpp:779-788` | `8cbc983` |
+| libultrahdr | `srgbLuminance` / `p3Luminance` / `bt2100Luminance` | `lib/src/gainmapmath.cpp:94/164/195` | `8cbc983` |
+| libultrahdr | 6 gamut-conversion matrices (`bt709↔p3`, `bt709↔bt2100`, `p3↔bt2100`) | `lib/src/gainmapmath.cpp:609-633` | `8cbc983` |
+| libultrahdr | `hlgOotf` / `hlgInverseOotf` (BT.2100 luminance, parameterized gamma) | `lib/src/gainmapmath.cpp:294/304` | `8cbc983` |
+| libavif | `avifGetGainMapWeight` + `avifApplyGainPixel` | upstream extraction | (see `libavif_apply_gain.cpp`) |
+| libplacebo | BT.2390 EETF (PQ + scene-linear) | upstream extraction | (see `libplacebo_bt2390.cpp`) |
+| darktable | filmic spline | upstream extraction | (see `darktable_filmic.cpp`) |
 
 ## Regenerating the golden files
 

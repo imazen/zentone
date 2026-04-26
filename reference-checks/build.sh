@@ -27,6 +27,9 @@ build_and_run() {
 build_and_run libultrahdr_reinhard
 build_and_run libultrahdr_apply_gain
 build_and_run libultrahdr_compute_gain
+build_and_run libultrahdr_luminance
+build_and_run libultrahdr_gamut
+build_and_run libultrahdr_hlg_ootf
 build_and_run libavif_apply_gain
 build_and_run libplacebo_bt2390
 build_and_run darktable_filmic
