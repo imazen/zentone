@@ -5,28 +5,43 @@
 //! u8 encoding into single calls. The tone curve is plugged in as
 //! `&dyn ToneMap` so any zentone tonemapper works.
 //!
-//! - [`tonemap_pq_to_linear_srgb`]  — PQ → linear sRGB f32
-//! - [`tonemap_pq_to_srgb8`]        — PQ → sRGB-encoded `u8`
-//! - [`tonemap_hlg_to_linear_srgb`] — HLG (with display peak nits) → linear sRGB f32
+//! All entry points apply the tone curve in RGB (per-channel) space and
+//! handle any out-of-gamut pixels after the matrix with a hue-preserving
+//! soft clip. That combination is the right "just works" default; more
+//! control (luma-preserving application space, different clip policy) is
+//! an internal concern today and not yet part of the public surface. If
+//! you need it, open an issue.
 //!
-//! All three apply the tone curve in RGB (per-channel) space and handle
-//! any out-of-gamut pixels after the matrix with a hue-preserving soft
-//! clip. That combination is the right "just works" default; more control
-//! (luma-preserving application space, different clip policy) is an
-//! internal concern today and not yet part of the public surface. If you
-//! need it, open an issue.
+//! # Hot path — SIMD strip form
 //!
-//! # Examples
+//! Use these for any non-trivial workload (a row, a strip, a whole image).
+//! Inputs are packed `&[[f32; 3]]` / `&[[f32; 4]]` / `&[[u8; 3]]` slices.
+//!
+//! - [`tonemap_pq_row_simd`]          — PQ → linear sRGB f32 RGB
+//! - [`tonemap_pq_rgba_row_simd`]     — PQ → linear sRGB f32 RGBA (alpha preserved)
+//! - [`tonemap_pq_to_srgb8_row_simd`] — PQ → sRGB-encoded `u8` RGB
+//! - [`tonemap_pq_to_srgb8_rgba_row_simd`] — PQ → sRGB-encoded `u8` RGBA
+//! - [`tonemap_hlg_row_simd`]         — HLG → linear sRGB f32 RGB
+//! - [`tonemap_hlg_rgba_row_simd`]    — HLG → linear sRGB f32 RGBA
 //!
 //! ```
-//! use zentone::{Bt2408Tonemapper, pipeline::tonemap_pq_to_srgb8};
+//! use zentone::{Bt2408Tonemapper, pipeline::tonemap_pq_to_srgb8_row_simd};
 //!
-//! // PQ-encoded BT.2020 row, 4000 cd/m² master, target sRGB display.
-//! let pq_row = [0.58_f32, 0.58, 0.58]; // ~203 nits, mid-gray
+//! // PQ-encoded BT.2020 RGB strip, 4000 cd/m² master, target sRGB display.
+//! let pq = vec![[0.58_f32, 0.58, 0.58]; 1024]; // ~203 nits, mid-gray
 //! let curve = Bt2408Tonemapper::new(4000.0, 1000.0);
-//! let mut srgb_out = [0u8; 3];
-//! tonemap_pq_to_srgb8(&pq_row, &mut srgb_out, &curve, 3);
+//! let mut srgb_out = vec![[0u8; 3]; 1024];
+//! tonemap_pq_to_srgb8_row_simd(&pq, &mut srgb_out, &curve);
 //! ```
+//!
+//! # Deprecated scalar entry points
+//!
+//! The original `&[f32]` + `channels: u8` forms are kept for back-compat
+//! but produce scalar code:
+//!
+//! - `tonemap_pq_to_linear_srgb`  — superseded by [`tonemap_pq_row_simd`]
+//! - `tonemap_pq_to_srgb8`        — superseded by [`tonemap_pq_to_srgb8_row_simd`]
+//! - `tonemap_hlg_to_linear_srgb` — superseded by [`tonemap_hlg_row_simd`]
 
 use crate::ToneMap;
 use crate::gamut::{
@@ -94,6 +109,11 @@ fn apply_tonemap(rgb: [f32; 3], tm: &dyn ToneMap, space: ToneMapSpace) -> [f32; 
 /// Pipeline: PQ EOTF → linear BT.2020 → tone map (per-channel) →
 /// BT.2020→BT.709 matrix → hue-preserving soft-clip on out-of-gamut
 /// pixels.
+#[deprecated(
+    since = "0.2.0",
+    note = "use `tonemap_pq_row_simd` for AoS [[f32; 3]] strips with SIMD throughput. \
+            The `&[f32]` + `channels: u8` form is kept for back-compat but is scalar."
+)]
 pub fn tonemap_pq_to_linear_srgb(pq_row: &[f32], out: &mut [f32], tm: &dyn ToneMap, channels: u8) {
     tonemap_pq_to_linear_srgb_config(pq_row, out, tm, channels, &PipelineConfig::default());
 }
@@ -142,6 +162,12 @@ pub(crate) fn tonemap_pq_to_linear_srgb_config(
 ///
 /// Same pipeline as [`tonemap_pq_to_linear_srgb`], with a final sRGB
 /// OETF + `u8` quantization on each output byte.
+#[deprecated(
+    since = "0.2.0",
+    note = "use `tonemap_pq_to_srgb8_row_simd` for AoS [[f32; 3]] → [[u8; 3]] strips \
+            with SIMD throughput. The `&[f32]` + `channels: u8` form is kept for \
+            back-compat but is scalar."
+)]
 pub fn tonemap_pq_to_srgb8(pq_row: &[f32], out: &mut [u8], tm: &dyn ToneMap, channels: u8) {
     tonemap_pq_to_srgb8_config(pq_row, out, tm, channels, &PipelineConfig::default());
 }
@@ -187,6 +213,11 @@ pub(crate) fn tonemap_pq_to_srgb8_config(
 ///
 /// Pipeline: HLG EOTF + OOTF (for `display_peak_nits`) → linear display
 /// BT.2020 → tone map (per-channel) → BT.2020→BT.709 matrix → soft-clip.
+#[deprecated(
+    since = "0.2.0",
+    note = "use `tonemap_hlg_row_simd` for AoS [[f32; 3]] strips with SIMD throughput. \
+            The `&[f32]` + `channels: u8` form is kept for back-compat but is scalar."
+)]
 pub fn tonemap_hlg_to_linear_srgb(
     hlg_row: &[f32],
     out: &mut [f32],
@@ -544,6 +575,7 @@ mod tests {
     use crate::Bt2408Tonemapper;
 
     #[test]
+    #[allow(deprecated)] // scalar fallback path, deprecation expected.
     fn pq_to_linear_srgb_black() {
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
         let pq = [0.0_f32; 3];
@@ -555,6 +587,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // scalar fallback path, deprecation expected.
     fn pq_to_srgb8_produces_valid_bytes() {
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
         // SDR reference white in PQ: ~0.58
@@ -566,6 +599,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // scalar fallback path, deprecation expected.
     fn hlg_to_linear_srgb_at_reference_white() {
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
         // HLG 75% = reference white
@@ -578,6 +612,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // scalar fallback path, deprecation expected.
     fn rgba_alpha_preserved() {
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
         let pq = [0.5_f32, 0.5, 0.5, 0.42];
@@ -639,6 +674,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // scalar fallback path, deprecation expected.
     fn pipeline_config_default_matches_simple_function() {
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
         let pq = [0.5_f32, 0.4, 0.3];

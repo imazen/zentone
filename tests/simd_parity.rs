@@ -311,6 +311,7 @@ fn hlg_ootf_approx_row_matches_reference() {
 // PR3 — fused pipeline kernels: parity vs scalar pipeline + sRGB8 quantization.
 // ============================================================================
 
+#[allow(deprecated)] // scalar fallback path used as the parity reference.
 use zentone::pipeline::{
     tonemap_hlg_row_simd, tonemap_hlg_to_linear_srgb, tonemap_pq_row_simd,
     tonemap_pq_to_linear_srgb, tonemap_pq_to_srgb8, tonemap_pq_to_srgb8_row_simd,
@@ -356,6 +357,7 @@ fn synth_pipeline_strip(n: usize, seed: u64) -> Vec<[f32; 3]> {
 /// PQ → linear sRGB SIMD fused pipeline must match the scalar reference
 /// to within FMA tolerance.
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn tonemap_pq_row_simd_matches_scalar() {
     let curves: Vec<Box<dyn zentone::ToneMap>> = vec![
         Box::new(Bt2408Tonemapper::new(4000.0, 1000.0)),
@@ -409,6 +411,7 @@ fn tonemap_pq_row_simd_matches_scalar() {
 
 /// HLG → linear sRGB SIMD fused pipeline must match the scalar reference.
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn tonemap_hlg_row_simd_matches_scalar() {
     let curves: Vec<Box<dyn zentone::ToneMap>> = vec![
         Box::new(Bt2408Tonemapper::new(4000.0, 1000.0)),
@@ -460,6 +463,7 @@ fn tonemap_hlg_row_simd_matches_scalar() {
 
 /// PQ → sRGB u8 SIMD fused pipeline must match scalar within ±1 LSB.
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn tonemap_pq_to_srgb8_row_simd_matches_scalar() {
     let curves: Vec<Box<dyn zentone::ToneMap>> = vec![
         Box::new(Bt2408Tonemapper::new(4000.0, 1000.0)),

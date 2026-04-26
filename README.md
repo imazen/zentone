@@ -14,6 +14,10 @@ HDR to SDR tone mapping in safe Rust. Classical curves, ITU-R BT.2408/BT.2446 st
 > reorganize. Pin minor versions and read `CHANGELOG.md` before
 > upgrading.
 
+> **v0.2 introduces SIMD strip-form APIs** — see `pipeline::*_row_simd`
+> and `ToneMap::map_strip_simd`. The old `&[f32]` + `channels: u8`
+> pipeline functions are deprecated; see `CHANGELOG.md` for migration.
+
 ## Quick start
 
 ```rust
@@ -45,6 +49,19 @@ use zentone::{ToneMap, ToneMapCurve};
 let src = [2.5_f32, 1.8, 0.4, 0.8, 2.0, 0.1];
 let mut dst = [0.0_f32; 6];
 ToneMapCurve::HableFilmic.map_into(&src, &mut dst, 3);
+```
+
+Fused SIMD pipeline (PQ → tone-map → BT.709 → soft-clip → sRGB), the hot
+path for any non-trivial workload:
+
+```rust
+use zentone::{Bt2408Tonemapper, pipeline::tonemap_pq_to_srgb8_row_simd};
+
+// PQ-encoded BT.2020 RGB strip, 4000 cd/m² master.
+let pq = vec![[0.58_f32, 0.58, 0.58]; 1024];
+let curve = Bt2408Tonemapper::new(4000.0, 1000.0);
+let mut srgb = vec![[0u8; 3]; 1024];
+tonemap_pq_to_srgb8_row_simd(&pq, &mut srgb, &curve);
 ```
 
 ## Tonemappers

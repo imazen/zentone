@@ -292,6 +292,7 @@ fn custom_pipeline_gamut_convert_and_soft_clip() {
 // ============================================================================
 
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn pq_pipeline_all_tonemappers_in_range() {
     use zentone::pipeline::tonemap_pq_to_linear_srgb;
 

@@ -80,6 +80,7 @@ fn pipeline_tonemappers() -> Vec<(&'static str, Box<dyn ToneMap>)> {
 // ============================================================================
 
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn pq_to_linear_srgb_all_outputs_in_gamut() {
     for (name, tm) in pipeline_tonemappers() {
         // Neutral ramp
@@ -117,6 +118,7 @@ fn pq_to_linear_srgb_all_outputs_in_gamut() {
 // ============================================================================
 
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn pq_to_srgb8_all_bytes_valid() {
     for (name, tm) in pipeline_tonemappers() {
         let ramp = pq_neutral_ramp(64, 4000.0);
@@ -150,6 +152,7 @@ fn pq_to_srgb8_all_bytes_valid() {
 // ============================================================================
 
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn hlg_to_linear_srgb_all_outputs_in_gamut() {
     for (name, tm) in pipeline_tonemappers() {
         // HLG ramp: 0.0 to 1.0 in HLG signal space
@@ -200,6 +203,7 @@ fn hlg_to_linear_srgb_all_outputs_in_gamut() {
 // ============================================================================
 
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn pq_neutral_gray_stays_neutral() {
     for (name, tm) in pipeline_tonemappers() {
         // AgX's inset/outset matrices create some per-channel divergence
@@ -238,6 +242,7 @@ fn pq_neutral_gray_stays_neutral() {
 // ============================================================================
 
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn pq_saturated_preserves_channel_ordering() {
     let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
 
@@ -270,6 +275,7 @@ fn pq_saturated_preserves_channel_ordering() {
 // ============================================================================
 
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn all_pipelines_preserve_alpha() {
     let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
     let alpha = 0.42_f32;
@@ -310,6 +316,7 @@ fn all_pipelines_preserve_alpha() {
 // ============================================================================
 
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn pq_linear_and_srgb8_pipelines_agree() {
     let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
     let ramp = pq_neutral_ramp(32, 4000.0);
@@ -346,6 +353,7 @@ fn pq_linear_and_srgb8_pipelines_agree() {
 // ============================================================================
 
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn pq_pipeline_monotonic_on_neutral_ramp() {
     for (name, tm) in pipeline_tonemappers() {
         let ramp = pq_neutral_ramp(128, 4000.0);
@@ -370,6 +378,7 @@ fn pq_pipeline_monotonic_on_neutral_ramp() {
 // ============================================================================
 
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn pq_wide_gamut_grid_all_in_range() {
     let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
 

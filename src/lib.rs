@@ -10,6 +10,43 @@
 //! `no_std + alloc`, zero allocation in hot paths, SIMD-accelerated on
 //! x86-64 (AVX2+FMA) with scalar fallback everywhere else.
 //!
+//! # API tiers
+//!
+//! The public surface splits into three tiers; pick by workload, not by
+//! name recognition.
+//!
+//! - **Hot path — strip / row SIMD.** Use these for any non-trivial
+//!   workload (a row, a strip, a whole image). Inputs are packed
+//!   `&[[f32; 3]]` / `&[[f32; 4]]` / `&[[u8; 3]]` slices; kernels dispatch
+//!   through [`archmage`](https://docs.rs/archmage) at runtime.
+//!   Examples: [`pipeline::tonemap_pq_row_simd`],
+//!   [`pipeline::tonemap_pq_rgba_row_simd`],
+//!   [`pipeline::tonemap_hlg_row_simd`],
+//!   [`pipeline::tonemap_pq_to_srgb8_row_simd`],
+//!   [`gamut::apply_matrix_row_simd`], [`gamut::soft_clip_row_simd`],
+//!   [`hlg::hlg_ootf_row_simd`], and the
+//!   [`ToneMap::map_strip_simd`]
+//!   trait method (with SIMD overrides on `Bt2408Tonemapper`, `Bt2446A`,
+//!   `Bt2446B`, `Bt2446C`, and [`CompiledFilmicSpline`]).
+//! - **Reference / per-pixel.** [`ToneMap::map_rgb`], [`gamut::apply_matrix`],
+//!   [`gamut::soft_clip`], [`hlg::hlg_ootf`], and the named-curve scalar
+//!   functions in [`curves`] (`reinhard_simple`, `bt2390_tonemap`,
+//!   `narkowicz_aces`, etc.). These are the parity surface — suitable for
+//!   one-off use, doctests, and cross-checks against external reference
+//!   implementations. Calls inside an inner loop should usually go through
+//!   the row form instead.
+//! - **Experimental.** Behind the `experimental` feature, semver-unstable.
+//!   Covers [`experimental::LumaToneMap`](experimental/trait.LumaToneMap.html)
+//!   and the gain-map splitter for ISO 21496-1 / Apple Ultra HDR,
+//!   `Bt2408Yrgb`, the streaming tonemapper, the adaptive LUT fitter, and
+//!   the DNG `ProfileToneCurve`. APIs may change without semver bumps until
+//!   stabilized.
+//!
+//! The scalar `pipeline::tonemap_pq_to_linear_srgb` /
+//! `tonemap_pq_to_srgb8` / `tonemap_hlg_to_linear_srgb` (`&[f32]` +
+//! `channels: u8`) are deprecated in favor of the strip-form siblings; see
+//! `CHANGELOG.md` for migration notes.
+//!
 //! # What's in the box
 //!
 //! Curves come in four families. Each implements the [`ToneMap`] trait;
@@ -59,6 +96,19 @@
 //! ToneMapCurve::Narkowicz.map_row(&mut row, 3);
 //! ```
 //!
+//! For a fused PQ→tone-map→sRGB-gamut pipeline on a packed strip
+//! (the canonical hot-path shape):
+//!
+//! ```
+//! use zentone::{Bt2446C, pipeline::tonemap_pq_row_simd};
+//!
+//! // 1024 PQ-encoded BT.2020 RGB pixels — 0.58 ≈ HDR Reference White.
+//! let pq = vec![[0.58_f32, 0.58, 0.58]; 1024];
+//! let mut out = vec![[0.0_f32; 3]; 1024];
+//! let curve = Bt2446C::new(1000.0, 203.0);
+//! tonemap_pq_row_simd(&pq, &mut out, &curve);
+//! ```
+//!
 //! # Choosing a curve
 //!
 //! | Need | Pick |
@@ -91,10 +141,13 @@
 //! - [`hlg`] — HLG system gamma, OOTF, inverse OOTF, full HLG → display.
 //! - [`sdr_hdr`] — reference-white scaling (100 ↔ 203 nits), OOTF gamma
 //!   adjustments per BT.2408 §5.1.
-//! - [`pipeline`] — one-call [`tonemap_pq_to_linear_srgb`](pipeline::tonemap_pq_to_linear_srgb)
-//!   / [`tonemap_pq_to_srgb8`](pipeline::tonemap_pq_to_srgb8)
-//!   / [`tonemap_hlg_to_linear_srgb`](pipeline::tonemap_hlg_to_linear_srgb)
-//!   that compose linearization + tone map + gamut conversion + soft clip.
+//! - [`pipeline`] — fused linearization + tone map + gamut conversion +
+//!   soft clip. The SIMD strip-form entry points
+//!   [`tonemap_pq_row_simd`](pipeline::tonemap_pq_row_simd) /
+//!   [`tonemap_pq_to_srgb8_row_simd`](pipeline::tonemap_pq_to_srgb8_row_simd) /
+//!   [`tonemap_hlg_row_simd`](pipeline::tonemap_hlg_row_simd) are the hot
+//!   path; their `&[f32]` + `channels: u8` siblings (`tonemap_pq_to_linear_srgb`
+//!   etc.) are `#[deprecated]` and scalar-only.
 //!
 //! # Experimental (`experimental` feature)
 //!

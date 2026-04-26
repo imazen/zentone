@@ -481,6 +481,7 @@ fn per_channel_sweep_monotonic() {
 // ============================================================================
 
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn pq_pipeline_no_luminance_spikes() {
     use zentone::pipeline::tonemap_pq_to_linear_srgb;
 

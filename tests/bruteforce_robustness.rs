@@ -268,6 +268,7 @@ fn bit_sweep_no_nan_or_inf() {
 // ============================================================================
 
 #[test]
+#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn pipeline_pq_edge_cases_no_nan() {
     use zentone::pipeline::tonemap_pq_to_linear_srgb;
 
