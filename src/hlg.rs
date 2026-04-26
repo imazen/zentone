@@ -114,6 +114,79 @@ pub fn hlg_to_display(hlg_signal: [f32; 3], display_peak_nits: f32) -> [f32; 3] 
     hlg_ootf(scene, gamma)
 }
 
+// ============================================================================
+// SIMD strip-form siblings — building blocks for fused HLG pipelines.
+// 8-pixel SOA dispatch via `archmage::incant!`. Per-pixel reference
+// functions above stay the parity surface and the scalar tail.
+// ============================================================================
+
+/// Chromaticity-preserving HLG OOTF applied to an RGB strip in place (SIMD).
+///
+/// SIMD-equivalent to calling [`hlg_ootf`] per pixel: compute BT.2100
+/// luminance once, raise to `pow(Y, gamma - 1)`, multiply each channel.
+/// Pixels with `Y <= 0` are forced to `[0, 0, 0]` to match the per-pixel
+/// reference. Tail pixels fall through to scalar `pow`.
+///
+/// `gamma` is the HLG system gamma from [`hlg_system_gamma`].
+///
+/// # Examples
+///
+/// ```
+/// use zentone::hlg::{hlg_ootf_row_simd, hlg_system_gamma};
+/// let mut row = [[0.5_f32, 0.3, 0.8]];
+/// hlg_ootf_row_simd(&mut row, hlg_system_gamma(1000.0));
+/// ```
+#[inline]
+pub fn hlg_ootf_row_simd(row: &mut [[f32; 3]], gamma: f32) {
+    let k = gamma - 1.0;
+    archmage::incant!(
+        crate::simd::blocks::hlg_ootf_exact_tier(row, k),
+        [v3, neon, wasm128, scalar]
+    );
+}
+
+/// Inverse of [`hlg_ootf_row_simd`]: display-linear → scene-linear (SIMD).
+///
+/// SIMD-equivalent to [`hlg_inverse_ootf`] per pixel. Same `Y <= 0 → 0`
+/// behavior as the forward direction.
+#[inline]
+pub fn hlg_inverse_ootf_row_simd(row: &mut [[f32; 3]], gamma: f32) {
+    // Per-pixel `hlg_inverse_ootf` uses `pow(Y, (1 - gamma) / gamma)`.
+    let k = (1.0 - gamma) / gamma;
+    archmage::incant!(
+        crate::simd::blocks::hlg_ootf_exact_tier(row, k),
+        [v3, neon, wasm128, scalar]
+    );
+}
+
+/// Per-channel HLG OOTF approx applied to an RGB strip in place (SIMD).
+///
+/// SIMD-equivalent to [`hlg_ootf_approx`]: three independent `pow(c, gamma)`
+/// calls per pixel, no luminance coupling.
+///
+/// **Not chromaticity-preserving.** Use only when bit-matching libultrahdr's
+/// encode path; the spec-correct default is [`hlg_ootf_row_simd`].
+#[inline]
+pub fn hlg_ootf_approx_row_simd(row: &mut [[f32; 3]], gamma: f32) {
+    archmage::incant!(
+        crate::simd::blocks::hlg_ootf_approx_tier(row, gamma),
+        [v3, neon, wasm128, scalar]
+    );
+}
+
+/// Inverse of [`hlg_ootf_approx_row_simd`] (SIMD).
+///
+/// **Not chromaticity-preserving.** Use only for libultrahdr-compat
+/// round-trips; the spec-correct inverse is [`hlg_inverse_ootf_row_simd`].
+#[inline]
+pub fn hlg_inverse_ootf_approx_row_simd(row: &mut [[f32; 3]], gamma: f32) {
+    let inv = 1.0 / gamma;
+    archmage::incant!(
+        crate::simd::blocks::hlg_ootf_approx_tier(row, inv),
+        [v3, neon, wasm128, scalar]
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -9,6 +9,8 @@ use crate::ToneMap;
 
 use archmage::incant;
 
+pub(crate) mod blocks;
+
 // ============================================================================
 // Public dispatch — match on channel count, route to a magetypes _tier fn.
 // Symbol names and signatures are part of the crate-internal API and must

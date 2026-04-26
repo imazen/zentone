@@ -188,9 +188,14 @@ pub fn soft_clip(rgb: [f32; 3]) -> [f32; 3] {
             // r >= b > g
             clip_sorted(&mut r, &mut b, &mut g);
         } else {
-            // r >= g == b (or g == b == 0 edge)
-            r = r.min(1.0);
-            g = g.min(1.0);
+            // r >= g == b — degenerate sort key. clip_sorted treats this as
+            // hi == lo and maps every channel to min(hi, 1.0); we replicate
+            // that here so all three channels clamp uniformly. Forgetting `b`
+            // would leave it over-range on equal-channel HDR greys.
+            let new_hi = r.min(1.0);
+            r = new_hi;
+            g = new_hi;
+            b = new_hi;
         }
     } else if r >= b {
         // g > r >= b
@@ -218,6 +223,101 @@ fn clip_sorted(hi: &mut f32, mid: &mut f32, lo: &mut f32) {
     }
     *hi = new_hi;
     *lo = new_lo;
+}
+
+// ============================================================================
+// SIMD strip-form siblings — building blocks for fused tone-mapping pipelines.
+// Per-pixel functions above (`apply_matrix`, `soft_clip`, `is_out_of_gamut`)
+// remain the parity surface; these strip kernels gather 8 pixels into SOA
+// `f32x8` lanes, do the math, and scatter back. The scalar tail falls through
+// to the per-pixel reference. Dispatch is via `archmage::incant!` (V4 AVX-512
+// where available, V3 AVX2+FMA, NEON, WASM128, scalar).
+// ============================================================================
+
+/// Apply a 3×3 matrix to an RGB strip in place (8-pixel SOA SIMD).
+///
+/// Each pixel is `[r, g, b]`; output = `M * pixel`. SIMD-equivalent to calling
+/// [`apply_matrix`] in a loop over `row`. Tail pixels (< 8) fall through to
+/// the scalar reference.
+///
+/// # Examples
+///
+/// ```
+/// use zentone::gamut::{apply_matrix_row_simd, BT2020_TO_BT709};
+/// let mut row = [[0.5_f32, 0.3, 0.8], [0.0, 1.0, 0.0]];
+/// apply_matrix_row_simd(&BT2020_TO_BT709, &mut row);
+/// ```
+#[inline]
+pub fn apply_matrix_row_simd(matrix: &[[f32; 3]; 3], row: &mut [[f32; 3]]) {
+    archmage::incant!(
+        crate::simd::blocks::apply_matrix_rgb_tier(matrix, row),
+        [v4, v3, neon, wasm128, scalar]
+    );
+}
+
+/// Apply a 3×3 matrix to an RGBA strip in place; alpha is untouched.
+///
+/// Each pixel is `[r, g, b, a]`; output = `[M * [r,g,b], a]`. Tail pixels
+/// fall through to the scalar reference (alpha preserved).
+#[inline]
+pub fn apply_matrix_row_simd_rgba(matrix: &[[f32; 3]; 3], row: &mut [[f32; 4]]) {
+    archmage::incant!(
+        crate::simd::blocks::apply_matrix_rgba_tier(matrix, row),
+        [v4, v3, neon, wasm128, scalar]
+    );
+}
+
+/// Hue-preserving soft clip applied to an RGB strip in place (SIMD).
+///
+/// SIMD-equivalent to calling [`soft_clip`] per pixel. Negatives are clamped
+/// to 0; in-gamut pixels (`max(r,g,b) <= 1`) pass through; over-range pixels
+/// are scaled by the same uniform per-channel formula
+/// `out = lo + (c - lo) * (min(hi,1) - lo) / (hi - lo)` so hue is preserved.
+///
+/// # Examples
+///
+/// ```
+/// use zentone::gamut::soft_clip_row_simd;
+/// let mut row = [[0.8_f32, 1.3, 1.1]];
+/// soft_clip_row_simd(&mut row);
+/// for c in row[0] { assert!((0.0..=1.0).contains(&c)); }
+/// ```
+#[inline]
+pub fn soft_clip_row_simd(row: &mut [[f32; 3]]) {
+    archmage::incant!(
+        crate::simd::blocks::soft_clip_tier(row),
+        [v4, v3, neon, wasm128, scalar]
+    );
+}
+
+/// Lane-wise out-of-gamut mask: write `1.0` where any channel is outside
+/// `[0, 1]`, else `0.0`.
+///
+/// `out` must have the same length as `row`. Useful for the fused pipelines
+/// that conditionally apply soft clip — reload 8 mask floats into an `f32x8`,
+/// compare against `0.5`, and blend the soft-clipped output against the
+/// pass-through.
+///
+/// Returns `1.0`/`0.0` floats rather than a `magetypes::simd::f32x8` mask
+/// because the mask type's lane width and bit pattern are tier-specific
+/// (they vary across V4 / V3 / NEON / WASM128) — exposing them in the public
+/// API would tie users to a particular dispatch tier. Floats compose cleanly
+/// with all SIMD pipelines and degrade gracefully to scalar code.
+///
+/// # Panics
+///
+/// Panics if `out.len() != row.len()`.
+#[inline]
+pub fn is_out_of_gamut_mask_simd(row: &[[f32; 3]], out: &mut [f32]) {
+    assert_eq!(
+        row.len(),
+        out.len(),
+        "is_out_of_gamut_mask_simd: row and out length must match"
+    );
+    archmage::incant!(
+        crate::simd::blocks::is_out_of_gamut_mask_tier(row, out),
+        [v4, v3, neon, wasm128, scalar]
+    );
 }
 
 #[cfg(test)]
