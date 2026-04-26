@@ -120,13 +120,16 @@ pub(crate) fn apply_matrix_rgba_tier(token: Token, m: &[[f32; 3]; 3], row: &mut 
 ///
 /// Vectorized form of [`crate::gamut::soft_clip`]: max(0, c) on negatives,
 /// then if any channel exceeds 1.0, scale all three with a uniform formula
-/// derived from the sorted `(hi, mid, lo)`. With `hi = max(r,g,b)` and
-/// `lo = min(r,g,b)`, every channel obeys
-/// `out = lo + (c - lo) * (min(hi,1) - lo) / (hi - lo)` which collapses to
-/// `out = c` for `c == lo` and `out = min(hi,1)` for `c == hi`. The pixels
-/// where `hi <= 1` pass through untouched via a lane-wise blend, and the
-/// degenerate `hi == lo` case is also handled by the same blend (mapped to
-/// `min(hi,1)`).
+/// derived from the sorted `(hi, mid, lo)`. With `hi = max(r,g,b)`,
+/// `lo = min(r,g,b)`, `new_hi = min(hi,1)`, `new_lo = min(lo,1)`, every
+/// channel obeys
+/// `out = new_lo + (c - lo) * (new_hi - new_lo) / (hi - lo)` which collapses
+/// to `out = new_lo` for `c == lo` and `out = new_hi` for `c == hi`. Clamping
+/// `lo` is required: when every channel exceeds 1 (e.g. `[1.5, 2.0, 1.2]`)
+/// the lane with `c == lo` would otherwise stay at its raw value > 1. The
+/// pixels where `hi <= 1` pass through untouched via a lane-wise blend, and
+/// the degenerate `hi == lo` case is also handled by the same blend (mapped
+/// to `new_hi`).
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 pub(crate) fn soft_clip_tier(token: Token, row: &mut [[f32; 3]]) {
     let zero = f32x8::zero(token);
@@ -154,15 +157,21 @@ pub(crate) fn soft_clip_tier(token: Token, row: &mut [[f32; 3]]) {
         let hi = r.max(g).max(b);
         let lo = r.min(g).min(b);
         let new_hi = hi.min(one);
+        // Clamp lo too — when every channel exceeds 1 (e.g. `[1.5, 2.0, 1.2]`)
+        // an unclamped `lo` leaves the `c == lo` lane at its original value
+        // (1.2 in the example), producing out-of-gamut output. The scalar
+        // `clip_sorted` clamps `new_lo = lo.min(1.0)` for exactly this reason.
+        let new_lo = lo.min(one);
         let denom = hi - lo;
         // Safe denominator — lanes where denom == 0 get replaced by the
         // hi==lo branch below.
-        let factor = (new_hi - lo) / denom.max(denom_eps);
+        let factor = (new_hi - new_lo) / denom.max(denom_eps);
 
-        // Uniform per-channel formula: out = lo + (c - lo) * factor.
-        let cr = lo + (r - lo) * factor;
-        let cg = lo + (g - lo) * factor;
-        let cb = lo + (b - lo) * factor;
+        // Uniform per-channel formula: out = new_lo + (c - lo) * factor.
+        // For c == lo: out = new_lo (clamped). For c == hi: out = new_hi.
+        let cr = new_lo + (r - lo) * factor;
+        let cg = new_lo + (g - lo) * factor;
+        let cb = new_lo + (b - lo) * factor;
 
         // Where hi == lo (all channels equal-ish), every channel maps to new_hi.
         let eq = denom.simd_le(denom_eps);

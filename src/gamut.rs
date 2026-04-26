@@ -88,6 +88,9 @@ pub fn apply_matrix_row(m: &[[f32; 3]; 3], row: &mut [f32], channels: usize) {
 // ============================================================================
 
 /// Returns `true` if any channel is outside `[0, 1]`.
+///
+/// NaN is treated as in-gamut (NaN comparisons are always false). If you
+/// need NaN to be flagged, check separately with `is_nan()` first.
 #[inline]
 pub fn is_out_of_gamut(rgb: [f32; 3]) -> bool {
     rgb[0] < 0.0 || rgb[0] > 1.0 || rgb[1] < 0.0 || rgb[1] > 1.0 || rgb[2] < 0.0 || rgb[2] > 1.0
@@ -100,9 +103,28 @@ pub fn is_out_of_gamut(rgb: [f32; 3]) -> bool {
 /// `(mid - min) / (max - min)`. This keeps hue constant while pulling
 /// over-range values back into `[0, 1]`.
 ///
-/// Negative values (under-range from matrix conversion) are clamped to 0
-/// separately. This handles the common case where BT.2020 → BT.709
-/// produces small negative values on saturated colors.
+/// # Behaviour at boundaries
+///
+/// - **Negatives**: under-range values (typical of BT.2020 → BT.709 on
+///   saturated colors) are clamped to 0 *before* the hue-preserving step.
+///   Negatives do not propagate to the output.
+/// - **All-channels-over-range** (`min(r,g,b) > 1`): both `hi` and `lo`
+///   are clamped to 1, so the output is `[1, 1, 1]`. This loses chroma
+///   but is the only sensible result — the input is "whiter than white"
+///   and there is no in-gamut hue ratio to preserve.
+/// - **NaN inputs**: `f32::max(NaN, 0.0)` returns 0 in Rust, so any NaN
+///   channel becomes 0 after the negative-clamp step. The output is
+///   guaranteed finite for any finite-or-NaN input.
+/// - **+∞ inputs**: behave like a very large positive — the channel is
+///   clamped to 1 and the others rescale to 0 (since `(c - lo) / (hi - lo)`
+///   tends to 0 as `hi → ∞`).
+/// - **All-equal channels**: the hue ratio is undefined (`(mid-lo)/(hi-lo) = 0/0`);
+///   every channel is mapped to `min(hi, 1)`.
+///
+/// The output is always within `[0, 1]` for any non-NaN input and within
+/// `[0, 1] ∪ {NaN}` only if a NaN survives `f32::max` (it does not on
+/// stable Rust). [`is_out_of_gamut`] is therefore guaranteed `false` after
+/// `soft_clip` on any finite input.
 #[inline]
 pub fn soft_clip(rgb: [f32; 3]) -> [f32; 3] {
     let [mut r, mut g, mut b] = rgb;
@@ -216,7 +238,8 @@ pub fn apply_matrix_row_simd_rgba(matrix: &[[f32; 3]; 3], row: &mut [[f32; 4]]) 
 /// SIMD-equivalent to calling [`soft_clip`] per pixel. Negatives are clamped
 /// to 0; in-gamut pixels (`max(r,g,b) <= 1`) pass through; over-range pixels
 /// are scaled by the same uniform per-channel formula
-/// `out = lo + (c - lo) * (min(hi,1) - lo) / (hi - lo)` so hue is preserved.
+/// `out = min(lo,1) + (c - lo) * (min(hi,1) - min(lo,1)) / (hi - lo)` so hue
+/// is preserved and the result is clamped to `[0, 1]`.
 ///
 /// # Examples
 ///
