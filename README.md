@@ -6,6 +6,13 @@ zentone is a **curve library**, not a color pipeline. It expects linear-light f3
 
 > **Active development as of April 2026.** Public APIs may rename or reorganize through the next few minor releases; anything under the `experimental` feature is explicitly unstable and may change without semver bumps. Pin minor versions and read `CHANGELOG.md` before upgrading. This is the first publish to crates.io — the in-development `&[f32]` + `channels: u8` pipeline forms were removed before release in favor of the SIMD strip-form APIs (`&[[f32; 3]]` / `&[[f32; 4]]`).
 
+```toml
+[dependencies]
+zentone = "0.1"
+```
+
+Or `cargo add zentone`. `std` and `avx512` are on by default; build with `--no-default-features` for `no_std`, and add `experimental` for the adaptive/streaming tonemappers.
+
 ## Getting started
 
 A per-pixel curve, no setup:
