@@ -268,30 +268,23 @@ fn bit_sweep_no_nan_or_inf() {
 // ============================================================================
 
 #[test]
-#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn pipeline_pq_edge_cases_no_nan() {
-    use zentone::pipeline::tonemap_pq_to_linear_srgb;
+    use zentone::pipeline::tonemap_pq_row_simd;
 
     let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
 
     // PQ values outside [0,1], negative, zero, near-1
-    let edge_pq: Vec<f32> = vec![
+    let edge_pq: [f32; 15] = [
         0.0, -0.0, 1e-10, 0.001, 0.1, 0.5, 0.58, 0.75, 0.9, 0.99, 1.0, 1.001, 1.5, -0.1, -1.0,
     ];
 
-    let mut src = Vec::with_capacity(edge_pq.len() * 3);
-    for &v in &edge_pq {
-        src.push(v);
-        src.push(v);
-        src.push(v);
-    }
-
-    let mut out = vec![0.0_f32; src.len()];
-    tonemap_pq_to_linear_srgb(&src, &mut out, &tm, 3);
+    let src: Vec<[f32; 3]> = edge_pq.iter().map(|&v| [v, v, v]).collect();
+    let mut out = vec![[0.0_f32; 3]; src.len()];
+    tonemap_pq_row_simd(&src, &mut out, &tm);
 
     let mut failures = Vec::new();
-    for (i, chunk) in out.chunks_exact(3).enumerate() {
-        for (ch, &v) in chunk.iter().enumerate() {
+    for (i, px) in out.iter().enumerate() {
+        for (ch, &v) in px.iter().enumerate() {
             if v.is_nan() || v.is_infinite() {
                 failures.push(format!("PQ pipeline: input={} → ch {ch} = {v}", edge_pq[i]));
             }

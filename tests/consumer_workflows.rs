@@ -292,29 +292,28 @@ fn custom_pipeline_gamut_convert_and_soft_clip() {
 // ============================================================================
 
 #[test]
-#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn pq_pipeline_all_tonemappers_in_range() {
-    use zentone::pipeline::tonemap_pq_to_linear_srgb;
+    use zentone::pipeline::tonemap_pq_row_simd;
 
     // 16 neutral PQ gray ramp pixels
-    let mut pq_row = Vec::with_capacity(16 * 3);
+    let mut pq_row: Vec<[f32; 3]> = Vec::with_capacity(16);
     for i in 0..16 {
         let nits = 4000.0 * (i as f32 / 15.0);
         let pq = linear_srgb::tf::linear_to_pq(nits / 10000.0);
-        pq_row.push(pq);
-        pq_row.push(pq);
-        pq_row.push(pq);
+        pq_row.push([pq, pq, pq]);
     }
 
     for (name, tm) in all_configs() {
-        let mut out = vec![0.0_f32; pq_row.len()];
-        tonemap_pq_to_linear_srgb(&pq_row, &mut out, tm.as_ref(), 3);
+        let mut out = vec![[0.0_f32; 3]; pq_row.len()];
+        tonemap_pq_row_simd(&pq_row, &mut out, tm.as_ref());
 
-        for (i, &v) in out.iter().enumerate() {
-            assert!(
-                v.is_finite() && (-1e-6..=1.0 + 1e-6).contains(&v),
-                "{name}: PQ pipeline [{i}] = {v}"
-            );
+        for (i, px) in out.iter().enumerate() {
+            for (ch, &v) in px.iter().enumerate() {
+                assert!(
+                    v.is_finite() && (-1e-6..=1.0 + 1e-6).contains(&v),
+                    "{name}: PQ pipeline [{i}][{ch}] = {v}"
+                );
+            }
         }
     }
 }

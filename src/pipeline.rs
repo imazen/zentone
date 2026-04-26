@@ -12,9 +12,8 @@
 //! an internal concern today and not yet part of the public surface. If
 //! you need it, open an issue.
 //!
-//! # Hot path — SIMD strip form
+//! # SIMD strip form
 //!
-//! Use these for any non-trivial workload (a row, a strip, a whole image).
 //! Inputs are packed `&[[f32; 3]]` / `&[[f32; 4]]` / `&[[u8; 3]]` slices.
 //!
 //! - [`tonemap_pq_row_simd`]          — PQ → linear sRGB f32 RGB
@@ -33,20 +32,10 @@
 //! let mut srgb_out = vec![[0u8; 3]; 1024];
 //! tonemap_pq_to_srgb8_row_simd(&pq, &mut srgb_out, &curve);
 //! ```
-//!
-//! # Deprecated scalar entry points
-//!
-//! The original `&[f32]` + `channels: u8` forms are kept for back-compat
-//! but produce scalar code:
-//!
-//! - `tonemap_pq_to_linear_srgb`  — superseded by [`tonemap_pq_row_simd`]
-//! - `tonemap_pq_to_srgb8`        — superseded by [`tonemap_pq_to_srgb8_row_simd`]
-//! - `tonemap_hlg_to_linear_srgb` — superseded by [`tonemap_hlg_row_simd`]
 
 use crate::ToneMap;
 use crate::gamut::{
-    BT2020_TO_BT709, ToneMapSpace, apply_matrix, apply_matrix_row_simd, is_out_of_gamut,
-    is_out_of_gamut_mask_simd, soft_clip, soft_clip_row_simd, tonemap_luma_preserving,
+    BT2020_TO_BT709, apply_matrix_row_simd, is_out_of_gamut_mask_simd, soft_clip_row_simd,
 };
 use alloc::vec;
 use alloc::vec::Vec;
@@ -68,240 +57,18 @@ pub enum HlgOotfMode {
     LibultrahdrCompat,
 }
 
-/// Pipeline configuration for HDR→SDR conversion (internal).
-///
-/// Controls which color space the tone curve is applied in.
-/// Out-of-gamut colors after gamut matrix conversion are always
-/// handled with hue-preserving soft-clipping.
-///
-/// For principled perceptual gamut compression (rather than post-matrix
-/// clipping), use ACES 2.0 ([issue #14](https://github.com/imazen/zentone/issues/14))
-/// which compresses in Hellwig 2022 JMh space.
-#[derive(Debug, Clone, Copy)]
-#[non_exhaustive]
-pub(crate) struct PipelineConfig {
-    /// Color space for tone curve application.
-    pub tone_map_space: ToneMapSpace,
-    /// HLG OOTF formula for HLG-input pipelines.
-    pub hlg_ootf_mode: HlgOotfMode,
-}
-
-impl Default for PipelineConfig {
-    fn default() -> Self {
-        Self {
-            tone_map_space: ToneMapSpace::Rgb,
-            hlg_ootf_mode: HlgOotfMode::Exact,
-        }
-    }
-}
-
-/// Apply a tone curve to a linear RGB triple respecting the configured space.
-#[inline]
-fn apply_tonemap(rgb: [f32; 3], tm: &dyn ToneMap, space: ToneMapSpace) -> [f32; 3] {
-    match space {
-        ToneMapSpace::Rgb => tm.map_rgb(rgb),
-        ToneMapSpace::LumaPreserving { luma } => tonemap_luma_preserving(rgb, luma, tm),
-    }
-}
-
-/// Tonemap a PQ-encoded BT.2020 RGB row to linear sRGB.
-///
-/// Pipeline: PQ EOTF → linear BT.2020 → tone map (per-channel) →
-/// BT.2020→BT.709 matrix → hue-preserving soft-clip on out-of-gamut
-/// pixels.
-#[deprecated(
-    since = "0.2.0",
-    note = "use `tonemap_pq_row_simd` for AoS [[f32; 3]] strips with SIMD throughput. \
-            The `&[f32]` + `channels: u8` form is kept for back-compat but is scalar."
-)]
-pub fn tonemap_pq_to_linear_srgb(pq_row: &[f32], out: &mut [f32], tm: &dyn ToneMap, channels: u8) {
-    tonemap_pq_to_linear_srgb_config(pq_row, out, tm, channels, &PipelineConfig::default());
-}
-
-/// Tonemap a PQ-encoded BT.2020 RGB row to linear sRGB with explicit config.
-///
-/// Pipeline: PQ EOTF → linear BT.2020 → tonemap (in configured space) →
-/// BT.2020→BT.709 → gamut clip.
-pub(crate) fn tonemap_pq_to_linear_srgb_config(
-    pq_row: &[f32],
-    out: &mut [f32],
-    tm: &dyn ToneMap,
-    channels: u8,
-    cfg: &PipelineConfig,
-) {
-    debug_assert_eq!(pq_row.len(), out.len());
-    let ch = channels as usize;
-
-    for (src, dst) in pq_row.chunks_exact(ch).zip(out.chunks_exact_mut(ch)) {
-        let linear_2020 = [
-            linear_srgb::tf::pq_to_linear(src[0]),
-            linear_srgb::tf::pq_to_linear(src[1]),
-            linear_srgb::tf::pq_to_linear(src[2]),
-        ];
-
-        let tonemapped = apply_tonemap(linear_2020, tm, cfg.tone_map_space);
-        let bt709 = {
-            let rgb = apply_matrix(&BT2020_TO_BT709, tonemapped);
-            if is_out_of_gamut(rgb) {
-                soft_clip(rgb)
-            } else {
-                rgb
-            }
-        };
-
-        dst[0] = bt709[0];
-        dst[1] = bt709[1];
-        dst[2] = bt709[2];
-        if ch == 4 {
-            dst[3] = src[3];
-        }
-    }
-}
-
-/// Tonemap a PQ-encoded BT.2020 RGB row to sRGB-encoded u8.
-///
-/// Same pipeline as [`tonemap_pq_to_linear_srgb`], with a final sRGB
-/// OETF + `u8` quantization on each output byte.
-#[deprecated(
-    since = "0.2.0",
-    note = "use `tonemap_pq_to_srgb8_row_simd` for AoS [[f32; 3]] → [[u8; 3]] strips \
-            with SIMD throughput. The `&[f32]` + `channels: u8` form is kept for \
-            back-compat but is scalar."
-)]
-pub fn tonemap_pq_to_srgb8(pq_row: &[f32], out: &mut [u8], tm: &dyn ToneMap, channels: u8) {
-    tonemap_pq_to_srgb8_config(pq_row, out, tm, channels, &PipelineConfig::default());
-}
-
-/// Tonemap a PQ-encoded BT.2020 RGB row to sRGB u8 with explicit config.
-pub(crate) fn tonemap_pq_to_srgb8_config(
-    pq_row: &[f32],
-    out: &mut [u8],
-    tm: &dyn ToneMap,
-    channels: u8,
-    cfg: &PipelineConfig,
-) {
-    debug_assert_eq!(pq_row.len(), out.len());
-    let ch = channels as usize;
-
-    for (src, dst) in pq_row.chunks_exact(ch).zip(out.chunks_exact_mut(ch)) {
-        let linear_2020 = [
-            linear_srgb::tf::pq_to_linear(src[0]),
-            linear_srgb::tf::pq_to_linear(src[1]),
-            linear_srgb::tf::pq_to_linear(src[2]),
-        ];
-
-        let tonemapped = apply_tonemap(linear_2020, tm, cfg.tone_map_space);
-        let bt709 = {
-            let rgb = apply_matrix(&BT2020_TO_BT709, tonemapped);
-            if is_out_of_gamut(rgb) {
-                soft_clip(rgb)
-            } else {
-                rgb
-            }
-        };
-
-        dst[0] = linear_to_srgb_u8(bt709[0]);
-        dst[1] = linear_to_srgb_u8(bt709[1]);
-        dst[2] = linear_to_srgb_u8(bt709[2]);
-        if ch == 4 {
-            dst[3] = (src[3] * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-        }
-    }
-}
-
-/// Tonemap an HLG-encoded BT.2020 RGB row to linear sRGB.
-///
-/// Pipeline: HLG EOTF + OOTF (for `display_peak_nits`) → linear display
-/// BT.2020 → tone map (per-channel) → BT.2020→BT.709 matrix → soft-clip.
-#[deprecated(
-    since = "0.2.0",
-    note = "use `tonemap_hlg_row_simd` for AoS [[f32; 3]] strips with SIMD throughput. \
-            The `&[f32]` + `channels: u8` form is kept for back-compat but is scalar."
-)]
-pub fn tonemap_hlg_to_linear_srgb(
-    hlg_row: &[f32],
-    out: &mut [f32],
-    tm: &dyn ToneMap,
-    display_peak_nits: f32,
-    channels: u8,
-) {
-    tonemap_hlg_to_linear_srgb_config(
-        hlg_row,
-        out,
-        tm,
-        display_peak_nits,
-        channels,
-        &PipelineConfig::default(),
-    );
-}
-
-/// Tonemap an HLG-encoded BT.2020 RGB row to linear sRGB with explicit config.
-pub(crate) fn tonemap_hlg_to_linear_srgb_config(
-    hlg_row: &[f32],
-    out: &mut [f32],
-    tm: &dyn ToneMap,
-    display_peak_nits: f32,
-    channels: u8,
-    cfg: &PipelineConfig,
-) {
-    let gamma = crate::hlg::hlg_system_gamma(display_peak_nits);
-    let ch = channels as usize;
-
-    for (src, dst) in hlg_row.chunks_exact(ch).zip(out.chunks_exact_mut(ch)) {
-        let scene = [
-            linear_srgb::tf::hlg_to_linear(src[0]),
-            linear_srgb::tf::hlg_to_linear(src[1]),
-            linear_srgb::tf::hlg_to_linear(src[2]),
-        ];
-
-        let display = match cfg.hlg_ootf_mode {
-            HlgOotfMode::Exact => crate::hlg::hlg_ootf(scene, gamma),
-            HlgOotfMode::LibultrahdrCompat => crate::hlg::hlg_ootf_approx(scene, gamma),
-        };
-        let tonemapped = apply_tonemap(display, tm, cfg.tone_map_space);
-        let bt709 = {
-            let rgb = apply_matrix(&BT2020_TO_BT709, tonemapped);
-            if is_out_of_gamut(rgb) {
-                soft_clip(rgb)
-            } else {
-                rgb
-            }
-        };
-
-        dst[0] = bt709[0];
-        dst[1] = bt709[1];
-        dst[2] = bt709[2];
-        if ch == 4 {
-            dst[3] = src[3];
-        }
-    }
-}
-
-#[inline]
-fn linear_to_srgb_u8(v: f32) -> u8 {
-    let v = v.clamp(0.0, 1.0);
-    let e = linear_srgb::tf::linear_to_srgb(v);
-    (e * 255.0 + 0.5).clamp(0.0, 255.0) as u8
-}
-
 // ============================================================================
-// SIMD strip-form fused pipelines (PR3).
+// SIMD strip-form fused pipelines.
 //
-// Compose PR2's building blocks (`apply_matrix_row_simd`, `soft_clip_row_simd`,
+// Compose the building blocks (`apply_matrix_row_simd`, `soft_clip_row_simd`,
 // `is_out_of_gamut_mask_simd`, `hlg_ootf_row_simd`) plus `linear-srgb`'s
 // `pq_to_linear_slice` / `hlg_to_linear_slice` / `linear_to_srgb_u8_slice`
 // SIMD slice forms with `ToneMap::map_strip_simd` for the curve step.
-//
-// Each `_row_simd` function is a strip-form sibling to one of the existing
-// scalar functions above. Inputs and outputs are `&[[f32; 3]]` / `&mut [[f32; 3]]`
-// (or RGBA / u8 variants); the scalar functions remain the parity surface and
-// the fallback for shapes that don't fit the strip APIs.
 // ============================================================================
 
 /// Tonemap a PQ-encoded BT.2020 RGB strip to linear sRGB f32 (SIMD).
 ///
-/// Strip-form sibling of [`tonemap_pq_to_linear_srgb`] for callers that
-/// already have packed `[[f32; 3]]` buffers. Pipeline:
+/// Pipeline:
 /// PQ EOTF (via `linear-srgb`) → `tm.map_strip_simd` → BT.2020→BT.709 matrix
 /// → out-of-gamut mask + hue-preserving soft clip on flagged pixels.
 ///
@@ -377,7 +144,7 @@ pub fn tonemap_pq_rgba_row_simd(pq_row: &[[f32; 4]], out: &mut [[f32; 4]], tm: &
 
 /// Tonemap an HLG-encoded BT.2020 RGB strip to linear sRGB f32 (SIMD).
 ///
-/// Strip-form sibling of [`tonemap_hlg_to_linear_srgb`]. Pipeline:
+/// Pipeline:
 /// HLG EOTF → spec-correct `hlg_ootf_row_simd` (computed for the system gamma
 /// of `display_peak_nits`) → `tm.map_strip_simd` → BT.2020→BT.709 →
 /// soft-clip OOG.
@@ -454,9 +221,8 @@ pub fn tonemap_hlg_rgba_row_simd(
 
 /// Tonemap a PQ-encoded BT.2020 RGB strip to sRGB-encoded `u8` (SIMD).
 ///
-/// Strip-form sibling of [`tonemap_pq_to_srgb8`]. Same pipeline as
-/// [`tonemap_pq_row_simd`] up through the soft clip, then a final
-/// `linear_to_srgb_u8_slice` (`linear-srgb`) emits sRGB-encoded bytes.
+/// Same pipeline as [`tonemap_pq_row_simd`] up through the soft clip, then a
+/// final `linear_to_srgb_u8_slice` (`linear-srgb`) emits sRGB-encoded bytes.
 ///
 /// `pq_row` and `out` must have equal length.
 #[inline]
@@ -575,137 +341,59 @@ mod tests {
     use crate::Bt2408Tonemapper;
 
     #[test]
-    #[allow(deprecated)] // scalar fallback path, deprecation expected.
     fn pq_to_linear_srgb_black() {
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
-        let pq = [0.0_f32; 3];
-        let mut out = [0.0_f32; 3];
-        tonemap_pq_to_linear_srgb(&pq, &mut out, &tm, 3);
-        for c in out {
+        let pq = [[0.0_f32; 3]];
+        let mut out = [[0.0_f32; 3]];
+        tonemap_pq_row_simd(&pq, &mut out, &tm);
+        for c in out[0] {
             assert!(c.abs() < 1e-3, "black should stay black: {c}");
         }
     }
 
     #[test]
-    #[allow(deprecated)] // scalar fallback path, deprecation expected.
     fn pq_to_srgb8_produces_valid_bytes() {
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
         // SDR reference white in PQ: ~0.58
-        let pq = [0.58_f32, 0.58, 0.58];
-        let mut out = [0u8; 3];
-        tonemap_pq_to_srgb8(&pq, &mut out, &tm, 3);
+        let pq = [[0.58_f32, 0.58, 0.58]];
+        let mut out = [[0u8; 3]];
+        tonemap_pq_to_srgb8_row_simd(&pq, &mut out, &tm);
         // 203 nits in a 4000-nit content range → modest gray after EETF
-        assert!(out[0] > 30 && out[0] < 255, "SDR white byte: {}", out[0]);
+        assert!(
+            out[0][0] > 30 && out[0][0] < 255,
+            "SDR white byte: {}",
+            out[0][0]
+        );
     }
 
     #[test]
-    #[allow(deprecated)] // scalar fallback path, deprecation expected.
     fn hlg_to_linear_srgb_at_reference_white() {
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
         // HLG 75% = reference white
-        let hlg = [0.75_f32, 0.75, 0.75];
-        let mut out = [0.0_f32; 3];
-        tonemap_hlg_to_linear_srgb(&hlg, &mut out, &tm, 1000.0, 3);
-        for c in out {
+        let hlg = [[0.75_f32, 0.75, 0.75]];
+        let mut out = [[0.0_f32; 3]];
+        tonemap_hlg_row_simd(&hlg, &mut out, &tm, 1000.0);
+        for c in out[0] {
             assert!(c.is_finite() && c > 0.0, "HLG ref white: {c}");
         }
     }
 
     #[test]
-    #[allow(deprecated)] // scalar fallback path, deprecation expected.
     fn rgba_alpha_preserved() {
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
-        let pq = [0.5_f32, 0.5, 0.5, 0.42];
-        let mut out = [0.0_f32; 4];
-        tonemap_pq_to_linear_srgb(&pq, &mut out, &tm, 4);
-        assert!((out[3] - 0.42).abs() < 1e-6);
-    }
-
-    #[test]
-    fn luma_preserving_config_produces_valid_output() {
-        let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
-        let cfg = PipelineConfig {
-            tone_map_space: ToneMapSpace::LumaPreserving {
-                luma: crate::LUMA_BT709,
-            },
-            ..PipelineConfig::default()
-        };
-        // Bright saturated PQ red
-        let pq = [0.7_f32, 0.3, 0.2];
-        let mut out = [0.0_f32; 3];
-        tonemap_pq_to_linear_srgb_config(&pq, &mut out, &tm, 3, &cfg);
-        for (i, &v) in out.iter().enumerate() {
-            assert!(
-                v.is_finite() && (0.0..=1.01).contains(&v),
-                "luma-preserving cfg: ch {i} = {v}"
-            );
-        }
-        // Channel ordering should be preserved (R > G > B since input R > G > B)
-        assert!(
-            out[0] >= out[1] && out[1] >= out[2],
-            "luma-preserving should preserve channel ordering: {out:?}"
-        );
-    }
-
-    #[test]
-    fn luma_preserving_less_oog_than_rgb() {
-        let tm = crate::ToneMapCurve::Reinhard;
-        let pq_green = [0.2_f32, 0.7, 0.1];
-
-        let cfg_rgb = PipelineConfig {
-            tone_map_space: ToneMapSpace::Rgb,
-            ..PipelineConfig::default()
-        };
-        let mut out_rgb = [0.0_f32; 3];
-        tonemap_pq_to_linear_srgb_config(&pq_green, &mut out_rgb, &tm, 3, &cfg_rgb);
-
-        let cfg_luma = PipelineConfig {
-            tone_map_space: ToneMapSpace::LumaPreserving {
-                luma: crate::LUMA_BT709,
-            },
-            ..PipelineConfig::default()
-        };
-        let mut out_luma = [0.0_f32; 3];
-        tonemap_pq_to_linear_srgb_config(&pq_green, &mut out_luma, &tm, 3, &cfg_luma);
-
-        for &v in out_rgb.iter().chain(out_luma.iter()) {
-            assert!(v.is_finite());
-        }
-    }
-
-    #[test]
-    #[allow(deprecated)] // scalar fallback path, deprecation expected.
-    fn pipeline_config_default_matches_simple_function() {
-        let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
-        let pq = [0.5_f32, 0.4, 0.3];
-
-        let mut out_simple = [0.0_f32; 3];
-        tonemap_pq_to_linear_srgb(&pq, &mut out_simple, &tm, 3);
-
-        let mut out_config = [0.0_f32; 3];
-        tonemap_pq_to_linear_srgb_config(&pq, &mut out_config, &tm, 3, &PipelineConfig::default());
-
-        for i in 0..3 {
-            assert!(
-                (out_simple[i] - out_config[i]).abs() < 1e-7,
-                "default config should match simple fn: ch {i}: {} vs {}",
-                out_simple[i],
-                out_config[i]
-            );
-        }
+        let pq = [[0.5_f32, 0.5, 0.5, 0.42]];
+        let mut out = [[0.0_f32; 4]];
+        tonemap_pq_rgba_row_simd(&pq, &mut out, &tm);
+        assert!((out[0][3] - 0.42).abs() < 1e-6);
     }
 
     #[test]
     fn soft_clip_pipeline_output_in_range() {
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
-        let cfg = PipelineConfig {
-            tone_map_space: ToneMapSpace::Rgb,
-            ..PipelineConfig::default()
-        };
-        let pq = [0.6_f32, 0.6, 0.6];
-        let mut out = [0.0_f32; 3];
-        tonemap_pq_to_linear_srgb_config(&pq, &mut out, &tm, 3, &cfg);
-        for (i, &v) in out.iter().enumerate() {
+        let pq = [[0.6_f32, 0.6, 0.6]];
+        let mut out = [[0.0_f32; 3]];
+        tonemap_pq_row_simd(&pq, &mut out, &tm);
+        for (i, &v) in out[0].iter().enumerate() {
             assert!(
                 (0.0..=1.0).contains(&v),
                 "soft clip: ch {i} = {v} out of [0,1]"

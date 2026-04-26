@@ -13,36 +13,6 @@
 //! through the standard D65 white point.
 
 // ============================================================================
-// Gamut mapping configuration types
-// ============================================================================
-
-/// Which color space the tone curve is applied in.
-///
-/// This is the single biggest lever for output quality. Per-channel RGB
-/// tone mapping desaturates aggressively and produces more out-of-gamut
-/// colors. Luma-preserving mode applies the curve to luminance only and
-/// scales all channels by the same ratio, preserving chromaticity.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-#[non_exhaustive]
-#[allow(dead_code)] // LumaPreserving used in pipeline tests
-pub(crate) enum ToneMapSpace {
-    /// Apply the tone curve independently to each RGB channel.
-    /// Fast but reduces saturation, especially on bright saturated colors.
-    /// Produces more out-of-gamut values after gamut conversion.
-    #[default]
-    Rgb,
-    /// Apply the tone curve to BT.709 luminance, then scale all channels
-    /// by `tonemap(luma) / luma`. Preserves chromaticity; requires gamut
-    /// clip only for the widest-gamut colors.
-    LumaPreserving {
-        /// Luminance coefficients. Use [`LUMA_BT709`](crate::LUMA_BT709) for
-        /// BT.709/sRGB content, [`LUMA_BT2020`](crate::LUMA_BT2020) for
-        /// BT.2020.
-        luma: [f32; 3],
-    },
-}
-
-// ============================================================================
 // Gamut conversion matrices
 // ============================================================================
 
@@ -111,33 +81,6 @@ pub fn apply_matrix_row(m: &[[f32; 3]; 3], row: &mut [f32], channels: usize) {
         chunk[1] = out[1];
         chunk[2] = out[2];
     }
-}
-
-// ============================================================================
-// Luma-preserving tone map wrapper
-// ============================================================================
-
-/// Apply a tone curve in luma-preserving mode: compute luminance, tone-map
-/// the luminance value, scale all channels by the same ratio.
-///
-/// This preserves chromaticity (hue + saturation direction) and produces
-/// far fewer out-of-gamut values than per-channel RGB tone mapping.
-#[inline]
-pub(crate) fn tonemap_luma_preserving(
-    rgb: [f32; 3],
-    luma_coeffs: [f32; 3],
-    tm: &dyn crate::ToneMap,
-) -> [f32; 3] {
-    let l = rgb[0] * luma_coeffs[0] + rgb[1] * luma_coeffs[1] + rgb[2] * luma_coeffs[2];
-    if l <= 0.0 {
-        return [0.0, 0.0, 0.0];
-    }
-    // Apply the tone curve to a neutral triple, extract the mapped luminance.
-    let mapped = tm.map_rgb([l, l, l]);
-    let l_mapped =
-        mapped[0] * luma_coeffs[0] + mapped[1] * luma_coeffs[1] + mapped[2] * luma_coeffs[2];
-    let scale = if l_mapped > 0.0 { l_mapped / l } else { 0.0 };
-    [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale]
 }
 
 // ============================================================================

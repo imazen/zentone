@@ -311,12 +311,83 @@ fn hlg_ootf_approx_row_matches_reference() {
 // PR3 — fused pipeline kernels: parity vs scalar pipeline + sRGB8 quantization.
 // ============================================================================
 
-#[allow(deprecated)] // scalar fallback path used as the parity reference.
-use zentone::pipeline::{
-    tonemap_hlg_row_simd, tonemap_hlg_to_linear_srgb, tonemap_pq_row_simd,
-    tonemap_pq_to_linear_srgb, tonemap_pq_to_srgb8, tonemap_pq_to_srgb8_row_simd,
-};
+use zentone::pipeline::{tonemap_hlg_row_simd, tonemap_pq_row_simd, tonemap_pq_to_srgb8_row_simd};
 use zentone::{Bt2408Tonemapper, ToneMapCurve};
+
+/// Per-pixel scalar reference for the PQ → linear sRGB pipeline. Mirrors the
+/// stage sequence inside [`tonemap_pq_row_simd`] but applies every step one
+/// pixel at a time using the public per-pixel APIs (`tm.map_rgb`, the
+/// transfer function on a single sample, `apply_matrix`, `soft_clip`).
+fn pq_to_linear_srgb_scalar_ref(
+    pq_row: &[[f32; 3]],
+    out: &mut [[f32; 3]],
+    tm: &dyn zentone::ToneMap,
+) {
+    for (src, dst) in pq_row.iter().zip(out.iter_mut()) {
+        let linear_2020 = [
+            linear_srgb::tf::pq_to_linear(src[0]),
+            linear_srgb::tf::pq_to_linear(src[1]),
+            linear_srgb::tf::pq_to_linear(src[2]),
+        ];
+        let tonemapped = tm.map_rgb(linear_2020);
+        let bt709 = apply_matrix(&BT2020_TO_BT709, tonemapped);
+        let clipped = if is_out_of_gamut(bt709) {
+            soft_clip(bt709)
+        } else {
+            bt709
+        };
+        *dst = clipped;
+    }
+}
+
+/// Per-pixel scalar reference for the HLG → linear sRGB pipeline.
+fn hlg_to_linear_srgb_scalar_ref(
+    hlg_row: &[[f32; 3]],
+    out: &mut [[f32; 3]],
+    tm: &dyn zentone::ToneMap,
+    display_peak_nits: f32,
+) {
+    let gamma = hlg_system_gamma(display_peak_nits);
+    for (src, dst) in hlg_row.iter().zip(out.iter_mut()) {
+        let scene = [
+            linear_srgb::tf::hlg_to_linear(src[0]),
+            linear_srgb::tf::hlg_to_linear(src[1]),
+            linear_srgb::tf::hlg_to_linear(src[2]),
+        ];
+        let display = hlg_ootf(scene, gamma);
+        let tonemapped = tm.map_rgb(display);
+        let bt709 = apply_matrix(&BT2020_TO_BT709, tonemapped);
+        let clipped = if is_out_of_gamut(bt709) {
+            soft_clip(bt709)
+        } else {
+            bt709
+        };
+        *dst = clipped;
+    }
+}
+
+/// Per-pixel scalar reference for the PQ → sRGB-encoded `u8` pipeline.
+fn pq_to_srgb8_scalar_ref(pq_row: &[[f32; 3]], out: &mut [[u8; 3]], tm: &dyn zentone::ToneMap) {
+    for (src, dst) in pq_row.iter().zip(out.iter_mut()) {
+        let linear_2020 = [
+            linear_srgb::tf::pq_to_linear(src[0]),
+            linear_srgb::tf::pq_to_linear(src[1]),
+            linear_srgb::tf::pq_to_linear(src[2]),
+        ];
+        let tonemapped = tm.map_rgb(linear_2020);
+        let bt709 = apply_matrix(&BT2020_TO_BT709, tonemapped);
+        let clipped = if is_out_of_gamut(bt709) {
+            soft_clip(bt709)
+        } else {
+            bt709
+        };
+        for c in 0..3 {
+            let v = clipped[c].clamp(0.0, 1.0);
+            let e = linear_srgb::tf::linear_to_srgb(v);
+            dst[c] = (e * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+        }
+    }
+}
 
 /// Random-but-deterministic strip generator for the pipeline parity tests.
 /// Produces values spanning HDR magnitudes (`0` to ~`10×` SDR) with mixed
@@ -354,10 +425,10 @@ fn synth_pipeline_strip(n: usize, seed: u64) -> Vec<[f32; 3]> {
     out
 }
 
-/// PQ → linear sRGB SIMD fused pipeline must match the scalar reference
-/// to within FMA tolerance.
+/// PQ → linear sRGB SIMD fused pipeline must match the per-pixel scalar
+/// reference (built from `tm.map_rgb` + transfer functions + `apply_matrix`
+/// + `soft_clip`) to within FMA tolerance.
 #[test]
-#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn tonemap_pq_row_simd_matches_scalar() {
     let curves: Vec<Box<dyn zentone::ToneMap>> = vec![
         Box::new(Bt2408Tonemapper::new(4000.0, 1000.0)),
@@ -372,19 +443,18 @@ fn tonemap_pq_row_simd_matches_scalar() {
         for &n in &lengths {
             let strip = synth_pipeline_strip(n, n as u64 * 31 + 1);
 
-            // Scalar reference: flatten, tonemap, unflatten.
-            let flat: Vec<f32> = strip.iter().flat_map(|p| p.iter().copied()).collect();
-            let mut out_scalar = vec![0.0_f32; flat.len()];
-            tonemap_pq_to_linear_srgb(&flat, &mut out_scalar, tm.as_ref(), 3);
+            // Per-pixel scalar reference.
+            let mut out_scalar = vec![[0.0_f32; 3]; n];
+            pq_to_linear_srgb_scalar_ref(&strip, &mut out_scalar, tm.as_ref());
 
-            // SIMD: pass strip in.
+            // SIMD strip form.
             let mut out_simd = vec![[0.0_f32; 3]; n];
             tonemap_pq_row_simd(&strip, &mut out_simd, tm.as_ref());
 
-            for (i, px) in out_simd.iter().enumerate() {
+            for (i, (px_simd, px_ref)) in out_simd.iter().zip(out_scalar.iter()).enumerate() {
                 for c in 0..3 {
-                    let s = out_scalar[i * 3 + c];
-                    let v = px[c];
+                    let s = px_ref[c];
+                    let v = px_simd[c];
                     let err = (s - v).abs();
                     max_err = max_err.max(err);
                     // PQ EOTF/OETF go through `pow_midp` (~3 ULP × ~3 chained
@@ -395,7 +465,6 @@ fn tonemap_pq_row_simd_matches_scalar() {
                     // ULP stack-up across the full PQ→tonemap→sRGB pipeline.
                     let mag = s.abs().max(v.abs()).max(1.0);
                     let tol = 2e-5 * mag;
-                    let _ = flat.len();
                     assert!(
                         err < tol,
                         "tonemap_pq_row_simd[{i},{c}] in={:?}: simd={v} ref={s} err={err:.3e} tol={tol:.3e}",
@@ -409,9 +478,9 @@ fn tonemap_pq_row_simd_matches_scalar() {
     println!("tonemap_pq_row_simd: {cases} comparisons, max_err={max_err:.3e}");
 }
 
-/// HLG → linear sRGB SIMD fused pipeline must match the scalar reference.
+/// HLG → linear sRGB SIMD fused pipeline must match the per-pixel scalar
+/// reference.
 #[test]
-#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn tonemap_hlg_row_simd_matches_scalar() {
     let curves: Vec<Box<dyn zentone::ToneMap>> = vec![
         Box::new(Bt2408Tonemapper::new(4000.0, 1000.0)),
@@ -428,17 +497,16 @@ fn tonemap_hlg_row_simd_matches_scalar() {
                 let strip = synth_pipeline_strip(n, n as u64 * 17 + peak as u64);
                 // HLG signal is in [0, 1] for the standard EOTF; the strip
                 // generator already keeps inputs in that range.
-                let flat: Vec<f32> = strip.iter().flat_map(|p| p.iter().copied()).collect();
-                let mut out_scalar = vec![0.0_f32; flat.len()];
-                tonemap_hlg_to_linear_srgb(&flat, &mut out_scalar, tm.as_ref(), peak, 3);
+                let mut out_scalar = vec![[0.0_f32; 3]; n];
+                hlg_to_linear_srgb_scalar_ref(&strip, &mut out_scalar, tm.as_ref(), peak);
 
                 let mut out_simd = vec![[0.0_f32; 3]; n];
                 tonemap_hlg_row_simd(&strip, &mut out_simd, tm.as_ref(), peak);
 
-                for (i, px) in out_simd.iter().enumerate() {
+                for (i, (px_simd, px_ref)) in out_simd.iter().zip(out_scalar.iter()).enumerate() {
                     for c in 0..3 {
-                        let s = out_scalar[i * 3 + c];
-                        let v = px[c];
+                        let s = px_ref[c];
+                        let v = px_simd[c];
                         let err = (s - v).abs();
                         max_err = max_err.max(err);
                         // HLG approx pow_midp + system gamma adds a tiny bit
@@ -446,7 +514,6 @@ fn tonemap_hlg_row_simd_matches_scalar() {
                         // enough to catch a wrong matrix or tone curve).
                         let mag = s.abs().max(v.abs()).max(1.0);
                         let tol = 1e-4 * mag;
-                        let _ = flat.len();
                         assert!(
                             err < tol,
                             "tonemap_hlg_row_simd[{i},{c}] peak={peak} in={:?}: simd={v} ref={s} err={err:.3e} tol={tol:.3e}",
@@ -461,9 +528,9 @@ fn tonemap_hlg_row_simd_matches_scalar() {
     println!("tonemap_hlg_row_simd: {cases} comparisons, max_err={max_err:.3e}");
 }
 
-/// PQ → sRGB u8 SIMD fused pipeline must match scalar within ±1 LSB.
+/// PQ → sRGB u8 SIMD fused pipeline must match the per-pixel scalar
+/// reference within ±1 LSB.
 #[test]
-#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn tonemap_pq_to_srgb8_row_simd_matches_scalar() {
     let curves: Vec<Box<dyn zentone::ToneMap>> = vec![
         Box::new(Bt2408Tonemapper::new(4000.0, 1000.0)),
@@ -478,17 +545,16 @@ fn tonemap_pq_to_srgb8_row_simd_matches_scalar() {
     for tm in curves.iter() {
         for &n in &lengths {
             let strip = synth_pipeline_strip(n, n as u64 * 7 + 99);
-            let flat: Vec<f32> = strip.iter().flat_map(|p| p.iter().copied()).collect();
-            let mut out_scalar = vec![0u8; flat.len()];
-            tonemap_pq_to_srgb8(&flat, &mut out_scalar, tm.as_ref(), 3);
+            let mut out_scalar = vec![[0u8; 3]; n];
+            pq_to_srgb8_scalar_ref(&strip, &mut out_scalar, tm.as_ref());
 
             let mut out_simd = vec![[0u8; 3]; n];
             tonemap_pq_to_srgb8_row_simd(&strip, &mut out_simd, tm.as_ref());
 
-            for (i, px) in out_simd.iter().enumerate() {
+            for (px_simd, px_ref) in out_simd.iter().zip(out_scalar.iter()) {
                 for c in 0..3 {
-                    let s = out_scalar[i * 3 + c] as i32;
-                    let v = px[c] as i32;
+                    let s = px_ref[c] as i32;
+                    let v = px_simd[c] as i32;
                     let diff = (s - v).abs();
                     max_diff = max_diff.max(diff);
                     if diff > 1 {

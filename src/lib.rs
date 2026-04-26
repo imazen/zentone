@@ -42,10 +42,9 @@
 //!   the DNG `ProfileToneCurve`. APIs may change without semver bumps until
 //!   stabilized.
 //!
-//! The scalar `pipeline::tonemap_pq_to_linear_srgb` /
-//! `tonemap_pq_to_srgb8` / `tonemap_hlg_to_linear_srgb` (`&[f32]` +
-//! `channels: u8`) are deprecated in favor of the strip-form siblings; see
-//! `CHANGELOG.md` for migration notes.
+//! As of 0.2.0, the pipeline ships SIMD strip-form APIs only — the old
+//! `&[f32]` + `channels: u8` forms are not present. See `CHANGELOG.md`
+//! for the removal record.
 //!
 //! # What's in the box
 //!
@@ -142,12 +141,11 @@
 //! - [`sdr_hdr`] — reference-white scaling (100 ↔ 203 nits), OOTF gamma
 //!   adjustments per BT.2408 §5.1.
 //! - [`pipeline`] — fused linearization + tone map + gamut conversion +
-//!   soft clip. The SIMD strip-form entry points
+//!   soft clip via SIMD strip-form entry points
 //!   [`tonemap_pq_row_simd`](pipeline::tonemap_pq_row_simd) /
 //!   [`tonemap_pq_to_srgb8_row_simd`](pipeline::tonemap_pq_to_srgb8_row_simd) /
-//!   [`tonemap_hlg_row_simd`](pipeline::tonemap_hlg_row_simd) are the hot
-//!   path; their `&[f32]` + `channels: u8` siblings (`tonemap_pq_to_linear_srgb`
-//!   etc.) are `#[deprecated]` and scalar-only.
+//!   [`tonemap_hlg_row_simd`](pipeline::tonemap_hlg_row_simd) (plus RGBA
+//!   variants).
 //!
 //! # Experimental (`experimental` feature)
 //!

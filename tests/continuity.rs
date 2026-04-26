@@ -481,9 +481,8 @@ fn per_channel_sweep_monotonic() {
 // ============================================================================
 
 #[test]
-#[allow(deprecated)] // scalar fallback path, deprecation expected.
 fn pq_pipeline_no_luminance_spikes() {
-    use zentone::pipeline::tonemap_pq_to_linear_srgb;
+    use zentone::pipeline::tonemap_pq_row_simd;
 
     let tonemappers: Vec<(&str, Box<dyn ToneMap>)> = vec![
         ("Bt2408", Box::new(Bt2408Tonemapper::new(4000.0, 1000.0))),
@@ -496,22 +495,20 @@ fn pq_pipeline_no_luminance_spikes() {
 
     for (name, tm) in &tonemappers {
         // PQ neutral ramp
-        let mut pq_row = Vec::with_capacity(n * 3);
+        let mut pq_row: Vec<[f32; 3]> = Vec::with_capacity(n);
         for i in 0..n {
             let nits = 4000.0 * (i as f32 / n as f32);
             let pq = linear_srgb::tf::linear_to_pq(nits / 10000.0);
-            pq_row.push(pq);
-            pq_row.push(pq);
-            pq_row.push(pq);
+            pq_row.push([pq, pq, pq]);
         }
 
-        let mut out = vec![0.0_f32; pq_row.len()];
-        tonemap_pq_to_linear_srgb(&pq_row, &mut out, tm.as_ref(), 3);
+        let mut out = vec![[0.0_f32; 3]; n];
+        tonemap_pq_row_simd(&pq_row, &mut out, tm.as_ref());
 
         for i in 1..n - 1 {
-            let prev = lum([out[(i - 1) * 3], out[(i - 1) * 3 + 1], out[(i - 1) * 3 + 2]]);
-            let cur = lum([out[i * 3], out[i * 3 + 1], out[i * 3 + 2]]);
-            let next = lum([out[(i + 1) * 3], out[(i + 1) * 3 + 1], out[(i + 1) * 3 + 2]]);
+            let prev = lum(out[i - 1]);
+            let cur = lum(out[i]);
+            let next = lum(out[i + 1]);
 
             let spike = cur - prev.max(next);
             if spike > 0.005 {

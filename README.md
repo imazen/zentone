@@ -14,9 +14,9 @@ HDR to SDR tone mapping in safe Rust. Classical curves, ITU-R BT.2408/BT.2446 st
 > reorganize. Pin minor versions and read `CHANGELOG.md` before
 > upgrading.
 
-> **v0.2 introduces SIMD strip-form APIs** — see `pipeline::*_row_simd`
-> and `ToneMap::map_strip_simd`. The old `&[f32]` + `channels: u8`
-> pipeline functions are deprecated; see `CHANGELOG.md` for migration.
+> **0.2.0 ships SIMD strip-form APIs only** — the old `&[f32]` +
+> `channels: u8` pipeline forms are not present. See `pipeline::*_row_simd`
+> and `ToneMap::map_strip_simd`; `CHANGELOG.md` records the removed names.
 
 ## Quick start
 
