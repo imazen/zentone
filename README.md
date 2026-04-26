@@ -1,188 +1,123 @@
 # zentone ![CI](https://img.shields.io/github/actions/workflow/status/imazen/zentone/ci.yml?style=flat-square&label=CI) ![crates.io](https://img.shields.io/crates/v/zentone?style=flat-square) ![lib.rs](https://img.shields.io/crates/v/zentone?style=flat-square&label=lib.rs&color=blue) ![docs.rs](https://img.shields.io/docsrs/zentone?style=flat-square) ![MSRV](https://img.shields.io/crates/msrv/zentone?style=flat-square) ![license](https://img.shields.io/crates/l/zentone?style=flat-square)
 
-HDR to SDR tone mapping in safe Rust. Classical curves, ITU-R BT.2408/BT.2446 standards, darktable filmic spline, and experimental adaptive/streaming tonemappers.
+HDR to SDR tone mapping curves in safe Rust. Classical curves (Reinhard, Hable, Narkowicz, ACES, AgX), ITU-R BT.2408 / BT.2446 EETFs, the darktable/Blender filmic spline, and an ISO 21496-1 / Apple Ultra HDR gain-map splitter.
 
-`no_std + alloc`. `#![forbid(unsafe_code)]`. Zero allocation in hot paths. SIMD-accelerated on x86-64 (AVX2+FMA) with scalar fallback everywhere else.
+zentone is a **curve library**, not a color pipeline. It expects linear-light f32 input and returns linear-light f32 output. Transfer-function decode/encode (PQ, HLG, sRGB), primary conversion, and ICC handling live elsewhere — `linear-srgb` for the math, `zenpixels-convert` for format negotiation. The `pipeline` module composes a few of those pieces into fused PQ/HLG → sRGB strip kernels for the common case. There's no codec dependency.
 
-> **⚠️ Under active development as of April 2026.** Both `zentone` and
-> its downstream consumer [`ultrahdr-core`](https://github.com/imazen/ultrahdr)
-> are being actively shaped; public APIs are especially prone to change
-> through the next few releases. Anything under `experimental` is
-> explicitly unstable (see `[features]` in `Cargo.toml`); the stable
-> surface (tone curves, BT.2408/BT.2446, filmic spline, pipeline
-> helpers) follows semver but minor bumps may still rename or
-> reorganize. Pin minor versions and read `CHANGELOG.md` before
-> upgrading.
+> **Active development as of April 2026.** Public APIs may rename or reorganize through the next few minor releases; anything under the `experimental` feature is explicitly unstable and may change without semver bumps. Pin minor versions and read `CHANGELOG.md` before upgrading. This is the first publish to crates.io — the in-development `&[f32]` + `channels: u8` pipeline forms were removed before release in favor of the SIMD strip-form APIs (`&[[f32; 3]]` / `&[[f32; 4]]`).
 
-> **0.1.0 ships SIMD strip-form APIs only** — earlier `&[f32]` +
-> `channels: u8` pipeline forms (kept around in pre-publish development)
-> were removed before this first crates.io release. See
-> `pipeline::*_row_simd` and `ToneMap::map_strip_simd`.
+## Getting started
 
-## Quick start
+A per-pixel curve, no setup:
 
 ```rust
-use zentone::{ToneMap, ToneMapCurve, AgxLook};
+use zentone::{AgxLook, ToneMap, ToneMapCurve};
 
-// Stateless — pick a curve, call map_row on interleaved f32 pixels.
-let mut row = vec![2.5_f32, 1.8, 0.4, 0.8, 2.0, 0.1];
-ToneMapCurve::Narkowicz.map_row(&mut row, 3); // channels: 3=RGB, 4=RGBA (alpha preserved)
-
-// Per-pixel is also available.
-let out = ToneMapCurve::Agx(AgxLook::Default).map_rgb([2.5, 1.8, 0.4]);
+let sdr = ToneMapCurve::Agx(AgxLook::Default).map_rgb([2.5, 1.8, 0.4]);
 ```
 
-Stateful tonemappers construct once and apply to many rows:
+A stateful, display-aware curve constructed once and applied to many rows:
 
 ```rust
 use zentone::{Bt2408Tonemapper, ToneMap};
 
 let tm = Bt2408Tonemapper::new(4000.0, 1000.0); // content peak, display peak (nits)
 let mut row = vec![0.3_f32, 0.5, 0.2, 0.7, 0.1, 0.9];
-tm.map_row(&mut row, 3);
+tm.map_row(&mut row, 3); // 3 = RGB, 4 = RGBA (alpha preserved)
 ```
 
-Copy path for separate source and destination buffers:
+Fused SIMD strip pipeline — PQ EOTF → tone map → BT.2020→BT.709 → soft clip → sRGB OETF:
 
 ```rust
-use zentone::{ToneMap, ToneMapCurve};
+use zentone::{Bt2408Tonemapper, TonemapScratch, pipeline::tonemap_pq_to_srgb8_row_simd};
 
-let src = [2.5_f32, 1.8, 0.4, 0.8, 2.0, 0.1];
-let mut dst = [0.0_f32; 6];
-ToneMapCurve::HableFilmic.map_into(&src, &mut dst, 3);
+let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
+let mut scratch = TonemapScratch::new();          // amortizes per-thread; default 4096-px chunk
+let pq = vec![[0.58_f32, 0.58, 0.58]; 1024];      // PQ-encoded BT.2020 RGB
+let mut srgb_out = vec![[0u8; 3]; 1024];
+tonemap_pq_to_srgb8_row_simd(&mut scratch, &pq, &mut srgb_out, &tm);
 ```
 
-Fused SIMD pipeline (PQ → tone-map → BT.709 → soft-clip → sRGB), the hot
-path for any non-trivial workload:
+`TonemapScratch` owns the per-chunk intermediates, caps working-set memory at `chunk_size` pixels regardless of strip length, and makes the pipelines allocation-free per call. One scratch per worker thread or video stream.
+
+ISO 21496-1 / Ultra HDR gain-map splitter — round-trippable HDR ↔ (SDR, log2 gain):
 
 ```rust
-use zentone::{Bt2408Tonemapper, pipeline::tonemap_pq_to_srgb8_row_simd};
+use zentone::{HableFilmic, LumaGainMapSplitter, SplitConfig, SplitStats};
 
-// PQ-encoded BT.2020 RGB strip, 4000 cd/m² master.
-let pq = vec![[0.58_f32, 0.58, 0.58]; 1024];
-let curve = Bt2408Tonemapper::new(4000.0, 1000.0);
-let mut srgb = vec![[0u8; 3]; 1024];
-tonemap_pq_to_srgb8_row_simd(&pq, &mut srgb, &curve);
+let splitter = LumaGainMapSplitter::new(HableFilmic::new(), SplitConfig::default());
+let hdr = vec![0.5_f32, 1.2, 0.3]; // one interleaved RGB pixel, linear light
+let mut sdr_out = vec![0.0_f32; 3];
+let mut gain_out = vec![0.0_f32; 1];
+let mut stats = SplitStats::default();
+splitter.split_row(&hdr, &mut sdr_out, &mut gain_out, 3, &mut stats);
 ```
 
-## Tonemappers
+The splitter emits raw f32 log2 gain; u8 quantization and gamma encoding are the encoder's job. See the `gainmap` module docs for the full contract.
 
-### Classical curves (`ToneMapCurve`)
+## API tiers
 
-Stateless enum with unified `ToneMap` dispatch. Luma-carrying variants bake coefficients at construction time.
+- **Hot path — strip / row SIMD.** `pipeline::tonemap_pq_*_row_simd`, `pipeline::tonemap_hlg_*_row_simd`, `gamut::apply_matrix_row_simd`, `gamut::soft_clip_row_simd`, `hlg::hlg_ootf_row_simd`, and the `ToneMap::map_strip_simd` trait method (with SIMD overrides on `Bt2408Tonemapper`, `Bt2446A/B/C`, and `CompiledFilmicSpline`). Use these for any non-trivial workload.
+- **Per-pixel reference.** `ToneMap::map_rgb`, the named-curve scalar functions in `curves` (`reinhard_simple`, `bt2390_tonemap`, `narkowicz_aces`, …), `gamut::apply_matrix`, `gamut::soft_clip`. Suitable for one-off use, doctests, and cross-checks against external implementations. Don't put these in inner loops.
+- **Stateful tonemappers.** `Bt2408Tonemapper`, `Bt2446A`, `Bt2446B`, `Bt2446C`, `CompiledFilmicSpline`. Constructed once with `(content_peak_nits, display_peak_nits)` (or a `FilmicSplineConfig`); apply via the `ToneMap` trait.
+- **Gain map splitter.** `LumaGainMapSplitter`, `LumaToneMap`, `SplitConfig`, `SplitStats`, plus the curve adapters `Bt2408Yrgb`, `ExtendedReinhardLuma`, `HableFilmic`, and the `LumaFn` closure wrapper.
+- **Experimental.** `experimental::AdaptiveTonemapper` (LUT fitter from an HDR/SDR pair), `experimental::StreamingTonemapper` (single-pass spatially-local tonemap), `experimental::ProfileToneCurve` (DNG camera-profile tone curve), `experimental::detect::detect_standard`. Feature-gated, semver-unstable.
 
-| Variant | Algorithm | Notes |
-|---------|-----------|-------|
-| `Reinhard` | `x / (1 + x)` per channel | Simplest; tends toward gray at high input |
-| `ExtendedReinhard` | Luminance-preserving with white point | `l_max` controls highlight rolloff |
-| `ReinhardJodie` | Per-channel + luminance blend | Better color retention than simple Reinhard |
-| `TunedReinhard` | Display-aware with content/display peak | Derived from nit values with 203-nit reference white |
-| `Narkowicz` | ACES-inspired rational polynomial | Fast S-curve; good default for games/realtime |
-| `HableFilmic` | John Hable (GDC 2010) | Exposure bias 2.0, white point 11.2 |
-| `AcesAp1` | ACES AP1 RRT+ODT (Narkowicz fit) | Cross-channel matrix; slight negative at near-black |
-| `Agx(look)` | Blender AgX with log2 encoding | Default, Punchy (1.4x sat), Golden (warm) |
-| `Bt2390` | ITU-R BT.2390 Hermite EETF | Scene-linear in, scene-linear out; needs peak params |
-| `Clamp` | `min(x, 1.0)` | Baseline for comparison |
+## Curves
 
-### ITU-R standards
+| Family | Members |
+|---|---|
+| Stateless `ToneMapCurve` | `Reinhard`, `ExtendedReinhard`, `ReinhardJodie`, `TunedReinhard`, `Narkowicz`, `HableFilmic`, `AcesAp1`, `Agx(AgxLook::{Default, Punchy, Golden})`, `Bt2390`, `Clamp` |
+| ITU broadcast standards | `Bt2408Tonemapper` (BT.2408 Annex 5 PQ-domain Hermite, YRGB or MaxRGB), `Bt2446A` / `Bt2446B` / `Bt2446C` (BT.2446 Methods A, B, C) |
+| Filmic spline | `CompiledFilmicSpline` + `FilmicSplineConfig` (darktable/Blender rational spline with toe/linear/shoulder regions and per-pixel highlight desaturation) |
+| Luma curves for the splitter | `Bt2408Yrgb`, `ExtendedReinhardLuma`, `HableFilmic` (also re-exported as a stateless `ToneMapCurve` variant), and any `Bt2446{A,B,C}` / `CompiledFilmicSpline` (they implement `LumaToneMap` directly) |
 
-| Type | Standard | Description |
-|------|----------|-------------|
-| `Bt2408Tonemapper` | BT.2408 Annex 5 | PQ-domain Hermite spline EETF with YRGB or MaxRGB application space |
-| `Bt2446A` | BT.2446 Method A | Perceptual linearization with psychophysically-verified knee |
-| `Bt2446B` | BT.2446 Method B | Broadcast-oriented; 291 cd/m² ceiling |
-| `Bt2446C` | BT.2446 Method C | Parametric piecewise with exact algebraic inverse |
-
-### Filmic spline
-
-`CompiledFilmicSpline` implements the darktable/Blender-style filmic pipeline: rational spline with configurable latitude, contrast, balance, saturation, and output power. Validated against darktable `filmicrgb.c` V3 (0 eval error, 1 ULP in RGB).
-
-### Experimental (`experimental` feature)
-
-| Type | Description |
-|------|-------------|
-| `AdaptiveTonemapper` | Fits a luminance or per-channel LUT from an HDR/SDR reference pair |
-| `StreamingTonemapper` | Spatially-local, single-pass, bounded-memory pull API |
-| `ProfileToneCurve` | DNG camera-profile tone curve with per-channel and luminance-preserving views |
-| `detect_standard()` | Identifies which standard curve was applied to a fitted LUT |
-
-Lightly tested; API may change without semver bumps until stabilized.
+Curves that need RGB→Y weights take them at construction. Use `LUMA_BT709`, `LUMA_BT2020`, or `LUMA_P3` from the crate root, picking the constant that matches the input primaries.
 
 ## Utility modules
 
 | Module | Contents |
-|--------|----------|
-| `gamut` | 6 gamut conversion matrices (BT.709, BT.2020, Display P3), hue-preserving `soft_clip`, `apply_matrix_clip` |
-| `hlg` | HLG system gamma, OOTF, inverse OOTF, `hlg_to_display` (raw HLG OETF/EOTF in `linear-srgb`) |
-| `sdr_hdr` | Reference-white scaling (100↔203 nits), OOTF gamma adjustment |
-| `pipeline` | One-call PQ→linear-sRGB and HLG→linear-sRGB with pluggable `&dyn ToneMap` |
+|---|---|
+| `gamut` | Six gamut conversion matrices (BT.709 ↔ BT.2020 ↔ Display P3), hue-preserving `soft_clip`, SIMD strip forms |
+| `hlg` | HLG system gamma, OOTF and inverse OOTF (spec-correct and libultrahdr-compat variants), SIMD strip forms |
+| `sdr_hdr` | Reference-white scaling (100 ↔ 203 nits), OOTF gamma adjustments per BT.2408 §5.1 |
+| `pipeline` | Fused PQ/HLG → tone-map → BT.709 → soft-clip strip kernels, with optional sRGB-u8 output |
+| `gainmap` | `LumaGainMapSplitter`, `LumaToneMap`, `SplitConfig`, `SplitStats`, plus adapters and PQ/HLG row helpers |
 
-## Performance
+## Architecture
 
-Single-threaded, 3840-pixel RGB row, AMD Ryzen 9 7950X. No `-C target-cpu=native`; runtime SIMD dispatch via `archmage::incant!`. Full results in `benchmarks/`.
+SIMD dispatch goes through [`archmage`](https://docs.rs/archmage) and [`magetypes`](https://docs.rs/magetypes). The `#[archmage::magetypes(...)]` macro generates per-tier kernels (AVX-512 → AVX2 → SSE4.2 → NEON → WASM-SIMD → scalar) from a single source body and dispatches at runtime via CPU capability tokens. Coverage varies per kernel — the simpler curves cover all six tiers; transcendental-using kernels (AgX log2/pow, BT.2390 Hermite) ship V3+NEON+WASM128+scalar.
 
-| Curve | map_row (linear f32) | Method |
-|-------|---------------------|--------|
-| Reinhard | 0.8 µs | AVX2+FMA f32x8 |
-| Narkowicz | 1.1 µs | AVX2+FMA rational polynomial |
-| HableFilmic | 1.4 µs | AVX2+FMA rational polynomial |
-| TunedReinhard | 2.6 µs | SOA 8-pixel luma dot product |
-| ExtendedReinhard | 3.0 µs | SOA 8-pixel luma |
-| ReinhardJodie | 3.2 µs | SOA 8-pixel luma + blend |
-| AcesAp1 | 3.8 µs | Per-pixel under `#[arcane]` (cross-channel matrix) |
-| Agx(Default) | 10.2 µs | SOA 8-pixel: vectorized `log2_midp` + polynomial + matrices |
-| Agx(Punchy) | 12.5 µs | SOA 8-pixel: saturation blend (pow skipped) |
-| Agx(Golden) | 21.4 µs | SOA 8-pixel: `pow_midp(0.8)` + saturation blend |
+`#![forbid(unsafe_code)]`. `no_std + alloc` is the default-supported configuration; `std` is opt-in for ergonomics in downstream consumers. Tested on `thumbv7em-none-eabihf` for `no_std` integrity.
 
-For a **full 8K frame** (7680x4320 = 33.2 Mpx), Reinhard takes 26 ms, AgX Default takes 93 ms; see `benchmarks/` for full results.
+## Features
 
-### Comparison with gainforge
+- `std` (default) — passes through to `linear-srgb`, `archmage`, and `magetypes`.
+- `avx512` (default) — gates the AVX-512 (`v4`) magetypes tier in `archmage` and `magetypes`. Disable to fall back to AVX2 as the top tier.
+- `experimental` — opt-in. Adds `AdaptiveTonemapper`, `StreamingTonemapper`, `ProfileToneCurve`, and `detect_standard`. Light test coverage; APIs may change without semver bumps until stabilized.
 
-Full sRGB→tonemap→sRGB pipeline (including gamma decode/encode), 3840 pixels:
+## Compatibility
 
-| Curve | gainforge 0.4.1 | zentone | Speedup |
-|-------|----------------|---------|---------|
-| Reinhard | 13.0 µs | 11.4 µs | 1.1x |
-| Hable | 16.1 µs | 11.8 µs | 1.4x |
-| ACES | 17.9 µs | 14.0 µs | 1.3x |
-| AgX Default | 117.4 µs | 20.9 µs | 5.6x |
-
-Gainforge uses LUT-based gamma; zentone uses SIMD batch `srgb_to_linear_slice`/`linear_to_srgb_slice` from `linear-srgb`. Both measured on the same hardware with `cargo bench`, no target-cpu flags. Benchmark code in `benches/tonemap_bench.rs`.
+- **MSRV:** Rust 1.89, 2024 edition.
+- **CI:** Linux x86_64, Windows ARM64 (`windows-11-arm`), macOS Intel + Apple Silicon, i686-unknown-linux-gnu (via `cross`), `wasm32-wasip1` (unit tests under wasmtime), `wasm32-unknown-unknown` (build check), `thumbv7em-none-eabihf` (no_std build check).
 
 ## Reference parity
 
-Every curve that claims a standard name has been numerically validated against its reference implementation. Golden CSV files from standalone C++ extractions are committed under `reference-checks/golden/`.
-
-| Curve | Reference | Max error | Test |
-|-------|-----------|-----------|------|
-| Reinhard | libultrahdr `ReinhardMap` | 0 (exact) | `reference_parity.rs` |
-| Bt2408 | libplacebo `bt2390()` PQ domain | 4.5e-5 relative | `reference_parity.rs` |
-| BT.2390 | libplacebo scene-linear | 0 (exact) | `reference_parity.rs` |
-| FilmicSpline | darktable `filmicrgb.c` V3 | 0 eval, 1 ULP RGB | `reference_parity.rs` |
-| Reinhard / Hable / Narkowicz | gainforge formula extraction | 1e-6 to 1e-7 | `exhaustive_properties.rs` |
-| ACES AP1 | gainforge matrix extraction | 1e-5 on 2744-pixel grid | `exhaustive_properties.rs` |
-| AgX contrast | gainforge / Blender polynomial | Coefficient-identical | `cross_reference.rs` |
-| PQ OETF/EOTF | ST.2084 formula (f64 reference) | < 1e-5 | `transfer_functions.rs` |
-| HLG OETF/EOTF | BT.2100 formula (f64 reference) | < 1e-5 | `transfer_functions.rs` |
-
-Property tests in `exhaustive_properties.rs` verify monotonicity, finite output, SDR-in→SDR-out, alpha preservation, and channel-count consistency across a 14x14x14 = 2744-pixel grid for all 17 tonemapper configurations.
+Curves that claim a standard name are validated against their reference implementation. Golden CSVs from standalone C++ extractions live under `reference-checks/golden/`; property tests in `tests/exhaustive_properties.rs` verify monotonicity, finite output, alpha preservation, and channel-count consistency across a 14×14×14 grid for all stateless curve configurations.
 
 ## Limitations
 
-zentone operates on linear-light f32 pixel data. It does not handle:
+- **No transfer-function support beyond what the pipelines need.** sRGB / PQ / HLG decode and encode live in [`linear-srgb`](https://lib.rs/crates/linear-srgb). zentone's `pipeline` module composes them for the PQ→sRGB and HLG→sRGB cases; for other combinations, do the linearization yourself and feed linear-light f32 in.
+- **No perceptual gamut mapping.** The pipeline applies a hue-preserving `soft_clip` after the BT.2020→BT.709 matrix, which preserves channel ratios for out-of-gamut highlights. Hellwig 2022 JMh / ACES 2.0 perceptual compression is not implemented ([#14](https://github.com/imazen/zentone/issues/14)).
+- **Gain map encode/decode container handling.** zentone produces and consumes raw f32 log2 gain; ISO 21496-1 / Ultra HDR container math (MPF, XMP, gamma encoding, u8 quantization) lives in [`ultrahdr-core`](https://lib.rs/crates/ultrahdr-core).
+- **No pixel-format conversion.** Inputs are `&mut [f32]` or packed `&[[f32; 3]]` / `&[[f32; 4]]`. For u8/u16/planar buffers, convert first via `zenpixels-convert` or your own pipeline.
 
-- **Gamma decode/encode.** Use [`linear-srgb`](https://lib.rs/crates/linear-srgb) for sRGB, or `zentone::pipeline` for one-call PQ/HLG→sRGB conversion.
-- **Perceptual gamut mapping.** The pipeline uses hue-preserving `soft_clip` after the BT.2020→BT.709 matrix, which preserves channel ratios for out-of-gamut highlights. This is interim — perceptual gamut compression in Hellwig 2022 JMh (ACES 2.0) is planned ([#14](https://github.com/imazen/zentone/issues/14)).
-- **Gain map application.** Gain map math (ISO 21496-1 / Ultra HDR) lives in [`ultrahdr-core`](https://lib.rs/crates/ultrahdr-core), not here.
-- **Pixel format conversion.** zentone expects `&mut [f32]`; for u8/u16/planar buffers, convert first via `zenpixels-convert` or your own pipeline.
-- **NEON/WASM SIMD.** Current SIMD kernels target x86-64 AVX2+FMA only. NEON and WASM128 dispatch exists but falls through to scalar. Real NEON/WASM kernels are planned.
+## Links
 
-The experimental API (`AdaptiveTonemapper`, `StreamingTonemapper`, `ProfileToneCurve`) has lighter test coverage and may change without semver bumps.
-
-## Prior art
-
-[gainforge](https://github.com/awxkee/gainforge) (Radzivon Bartoshyk, BSD-3-Clause) covers similar classical-curve territory with multi-bit-depth entry points and a moxcms-based color pipeline. Both crates implement tone curves from the same public specifications. zentone adds BT.2408/BT.2446 EETF standards, AVX2 SIMD kernels, adaptive/streaming primitives, and a golden-file validation suite against C++ reference extractions.
+- Documentation: <https://docs.rs/zentone>
+- Changelog: [`CHANGELOG.md`](CHANGELOG.md)
+- Repository: <https://github.com/imazen/zentone>
 
 ## License
 
-AGPL-3.0-only OR LicenseRef-Imazen-Commercial. See `LICENSE-AGPL3` and `LICENSE-COMMERCIAL`.
+`AGPL-3.0-only OR LicenseRef-Imazen-Commercial`. Use under AGPL-3.0 (see [`LICENSE-AGPL3`](LICENSE-AGPL3)) or a commercial license from Imazen (see [`LICENSE-COMMERCIAL`](LICENSE-COMMERCIAL)).
