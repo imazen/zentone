@@ -188,14 +188,15 @@ pub fn soft_clip(rgb: [f32; 3]) -> [f32; 3] {
             // r >= b > g
             clip_sorted(&mut r, &mut b, &mut g);
         } else {
-            // r >= g == b — degenerate sort key. clip_sorted treats this as
-            // hi == lo and maps every channel to min(hi, 1.0); we replicate
-            // that here so all three channels clamp uniformly. Forgetting `b`
-            // would leave it over-range on equal-channel HDR greys.
-            let new_hi = r.min(1.0);
-            r = new_hi;
-            g = new_hi;
-            b = new_hi;
+            // r >= g == b. Treat as r = hi, g = mid, b = lo (with mid == lo).
+            // clip_sorted handles `mid - lo == 0` correctly: the mid lane
+            // moves to `new_lo + (new_hi - new_lo) * 0 = new_lo`, so
+            // g and b end at min(lo, 1.0) and r ends at min(r, 1.0). This
+            // matches the SIMD `soft_clip_tier` formula for the same input.
+            // The earlier path mapped all three channels to `min(r, 1)` —
+            // wrong for HDR-saturated primaries like `[2.5, 0, 0]` (which
+            // should clip to `[1, 0, 0]`, not `[1, 1, 1]`). Fixed here.
+            clip_sorted(&mut r, &mut g, &mut b);
         }
     } else if r >= b {
         // g > r >= b

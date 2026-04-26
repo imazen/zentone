@@ -68,6 +68,26 @@ pub trait ToneMap {
             _ => panic!("channels must be 3 or 4, got {channels}"),
         }
     }
+
+    /// Apply this tone map to a strip of pixels in place.
+    ///
+    /// The default implementation calls [`map_rgb`](Self::map_rgb) per pixel.
+    /// Concrete tonemap types can override this with a SIMD kernel for speed —
+    /// the fused pipeline kernels in [`crate::pipeline`] (the `_row_simd`
+    /// variants) call this method instead of `map_rgb` so the dispatch
+    /// indirection is amortized across a whole strip rather than paid per
+    /// pixel.
+    ///
+    /// Overriding is purely a performance opt-in: callers see the same
+    /// results either way. The provided default keeps every existing
+    /// `impl ToneMap` working unchanged, and the method stays object-safe
+    /// for `&dyn ToneMap` use.
+    #[inline]
+    fn map_strip_simd(&self, strip: &mut [[f32; 3]]) {
+        for px in strip.iter_mut() {
+            *px = self.map_rgb(*px);
+        }
+    }
 }
 
 /// Const-generic in-place row tonemapper. Called by [`ToneMap::map_row`].
