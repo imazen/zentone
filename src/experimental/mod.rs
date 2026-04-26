@@ -19,7 +19,8 @@ mod streaming;
 pub use adaptive::{AdaptiveTonemapper, FitConfig, FitStats};
 pub use gain_map::{
     Bt2408Yrgb, ExtendedReinhardLuma, LumaFn, LumaGainMapSplitter, LumaToneMap, SplitConfig,
-    SplitStats, hlg_to_normalized_linear_row, normalized_linear_to_hlg_row,
+    SplitStats, hlg_to_normalized_linear_row, hlg_to_normalized_linear_row_with_mode,
+    normalized_linear_to_hlg_row, normalized_linear_to_hlg_row_with_mode,
     normalized_linear_to_pq_row, pq_to_normalized_linear_row,
 };
 pub use profile::{ProfileLuminance, ProfilePerChannel, ProfileToneCurve};

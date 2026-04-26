@@ -245,6 +245,18 @@ pub struct SplitConfig {
     /// point; BT.2446-C uses up to `0.33` (but `0.33` is degenerate —
     /// collapses to grayscale).
     pub pre_desaturate: f32,
+    /// HLG OOTF formula used when linearizing HLG inputs.
+    ///
+    /// Default: [`crate::pipeline::HlgOotfMode::Exact`] — spec-correct,
+    /// luminance-preserving.
+    ///
+    /// Set to [`crate::pipeline::HlgOotfMode::LibultrahdrCompat`] for bit-parity with
+    /// libultrahdr's encode path, which uses per-channel `pow(c, γ)`. Only
+    /// affects [`LumaGainMapSplitter::split_hlg_row`] /
+    /// [`LumaGainMapSplitter::apply_hlg_row`] (and the public
+    /// [`crate::experimental::hlg_to_normalized_linear_row_with_mode`]
+    /// helper); PQ paths are unaffected.
+    pub hlg_ootf_mode: crate::pipeline::HlgOotfMode,
 }
 
 impl Default for SplitConfig {
@@ -256,6 +268,7 @@ impl Default for SplitConfig {
             min_log2: -4.0,
             max_log2: 6.0,
             pre_desaturate: 0.0,
+            hlg_ootf_mode: crate::pipeline::HlgOotfMode::Exact,
         }
     }
 }
@@ -506,7 +519,13 @@ impl<T: LumaToneMap> LumaGainMapSplitter<T> {
     ) {
         let mut linear = vec![0.0_f32; hlg.len()];
         linear.copy_from_slice(hlg);
-        hlg_to_normalized_linear_row(&mut linear, channels, display_peak_nits, content_peak_nits);
+        hlg_to_normalized_linear_row_with_mode(
+            &mut linear,
+            channels,
+            display_peak_nits,
+            content_peak_nits,
+            self.cfg.hlg_ootf_mode,
+        );
         self.split_row(&linear, sdr_linear, gain, channels, stats);
     }
 
@@ -522,7 +541,13 @@ impl<T: LumaToneMap> LumaGainMapSplitter<T> {
         content_peak_nits: f32,
     ) {
         self.apply_row(sdr_linear, gain, hlg_out, channels);
-        normalized_linear_to_hlg_row(hlg_out, channels, display_peak_nits, content_peak_nits);
+        normalized_linear_to_hlg_row_with_mode(
+            hlg_out,
+            channels,
+            display_peak_nits,
+            content_peak_nits,
+            self.cfg.hlg_ootf_mode,
+        );
     }
 
     /// Decode a linear-light SDR row + log2 gain row back to PQ-encoded HDR.
@@ -603,6 +628,27 @@ pub fn hlg_to_normalized_linear_row(
     display_peak_nits: f32,
     content_peak_nits: f32,
 ) {
+    hlg_to_normalized_linear_row_with_mode(
+        in_out,
+        channels,
+        display_peak_nits,
+        content_peak_nits,
+        crate::pipeline::HlgOotfMode::Exact,
+    );
+}
+
+/// Like [`hlg_to_normalized_linear_row`] but lets the caller choose the
+/// HLG OOTF formula.
+///
+/// Use [`HlgOotfMode::LibultrahdrCompat`](crate::pipeline::HlgOotfMode::LibultrahdrCompat)
+/// to bit-match libultrahdr's encode path (per-channel `pow(c, γ)`).
+pub fn hlg_to_normalized_linear_row_with_mode(
+    in_out: &mut [f32],
+    channels: u8,
+    display_peak_nits: f32,
+    content_peak_nits: f32,
+    mode: crate::pipeline::HlgOotfMode,
+) {
     assert!(channels == 3 || channels == 4, "channels must be 3 or 4");
     assert!(
         content_peak_nits > 0.0,
@@ -619,7 +665,12 @@ pub fn hlg_to_normalized_linear_row(
             linear_srgb::tf::hlg_to_linear(px[1]),
             linear_srgb::tf::hlg_to_linear(px[2]),
         ];
-        let display = crate::hlg::hlg_ootf(scene, gamma);
+        let display = match mode {
+            crate::pipeline::HlgOotfMode::Exact => crate::hlg::hlg_ootf(scene, gamma),
+            crate::pipeline::HlgOotfMode::LibultrahdrCompat => {
+                crate::hlg::hlg_ootf_approx(scene, gamma)
+            }
+        };
         px[0] = display[0] * scale;
         px[1] = display[1] * scale;
         px[2] = display[2] * scale;
@@ -635,6 +686,24 @@ pub fn normalized_linear_to_hlg_row(
     display_peak_nits: f32,
     content_peak_nits: f32,
 ) {
+    normalized_linear_to_hlg_row_with_mode(
+        in_out,
+        channels,
+        display_peak_nits,
+        content_peak_nits,
+        crate::pipeline::HlgOotfMode::Exact,
+    );
+}
+
+/// Like [`normalized_linear_to_hlg_row`] but lets the caller choose the
+/// inverse OOTF formula. Must match the mode used on the forward path.
+pub fn normalized_linear_to_hlg_row_with_mode(
+    in_out: &mut [f32],
+    channels: u8,
+    display_peak_nits: f32,
+    content_peak_nits: f32,
+    mode: crate::pipeline::HlgOotfMode,
+) {
     assert!(channels == 3 || channels == 4, "channels must be 3 or 4");
     assert!(
         content_peak_nits > 0.0,
@@ -647,7 +716,12 @@ pub fn normalized_linear_to_hlg_row(
         // Undo display normalization.
         let display = [px[0] * inv_scale, px[1] * inv_scale, px[2] * inv_scale];
         // Inverse OOTF → scene-linear.
-        let scene = crate::hlg::hlg_inverse_ootf(display, gamma);
+        let scene = match mode {
+            crate::pipeline::HlgOotfMode::Exact => crate::hlg::hlg_inverse_ootf(display, gamma),
+            crate::pipeline::HlgOotfMode::LibultrahdrCompat => {
+                crate::hlg::hlg_inverse_ootf_approx(display, gamma)
+            }
+        };
         // Scene-linear → HLG wire via OETF.
         px[0] = linear_srgb::tf::linear_to_hlg(scene[0]);
         px[1] = linear_srgb::tf::linear_to_hlg(scene[1]);

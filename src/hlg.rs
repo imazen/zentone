@@ -72,6 +72,28 @@ pub fn hlg_inverse_ootf(rgb: [f32; 3], gamma: f32) -> [f32; 3] {
     [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale]
 }
 
+/// Per-channel HLG OOTF approximation: `[pow(r, γ), pow(g, γ), pow(b, γ)]`.
+///
+/// **Not chromaticity-preserving.** Use only when bit-matching libultrahdr's
+/// encode output (`hlgOotfApprox` in `gainmapmath.cpp`); the exact OOTF is
+/// [`hlg_ootf`] and is the spec-correct default.
+pub fn hlg_ootf_approx(rgb: [f32; 3], gamma: f32) -> [f32; 3] {
+    [
+        powf(rgb[0], gamma),
+        powf(rgb[1], gamma),
+        powf(rgb[2], gamma),
+    ]
+}
+
+/// Per-channel inverse of [`hlg_ootf_approx`].
+///
+/// **Not chromaticity-preserving.** Use only for libultrahdr-compat round-trips;
+/// the spec-correct inverse is [`hlg_inverse_ootf`].
+pub fn hlg_inverse_ootf_approx(rgb: [f32; 3], gamma: f32) -> [f32; 3] {
+    let inv = 1.0 / gamma;
+    [powf(rgb[0], inv), powf(rgb[1], inv), powf(rgb[2], inv)]
+}
+
 /// Full HLG EOTF with display adaptation: HLG signal → display-linear.
 ///
 /// Composes: HLG inverse OETF (from `linear-srgb`) → OOTF → result.
@@ -152,6 +174,53 @@ mod tests {
                 rgb[i]
             );
         }
+    }
+
+    #[test]
+    fn ootf_approx_roundtrip() {
+        // Per-channel approx round-trips exactly (no luminance coupling).
+        for &gamma in &[1.0_f32, 1.033, 1.2, 1.453, 1.5] {
+            for &rgb in &[[0.3_f32, 0.6, 0.1], [0.001, 0.5, 0.999], [0.18, 0.18, 0.18]] {
+                let display = hlg_ootf_approx(rgb, gamma);
+                let back = hlg_inverse_ootf_approx(display, gamma);
+                for i in 0..3 {
+                    assert!(
+                        (back[i] - rgb[i]).abs() < 5e-6,
+                        "approx OOTF roundtrip[{i}] gamma={gamma} rgb={rgb:?}: \
+                         {:.6} vs {:.6}",
+                        back[i],
+                        rgb[i]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ootf_approx_diverges_from_exact_on_saturated_color() {
+        // The whole point of having both: per-channel approx bends chromaticity
+        // for non-grey RGB, but agrees with the exact OOTF on greys.
+        let gamma = 1.2;
+        let grey = [0.5_f32, 0.5, 0.5];
+        let exact_grey = hlg_ootf(grey, gamma);
+        let approx_grey = hlg_ootf_approx(grey, gamma);
+        for i in 0..3 {
+            assert!(
+                (exact_grey[i] - approx_grey[i]).abs() < 1e-5,
+                "exact and approx must agree on greys: {exact_grey:?} vs {approx_grey:?}"
+            );
+        }
+
+        let red = [0.9_f32, 0.1, 0.1];
+        let exact_red = hlg_ootf(red, gamma);
+        let approx_red = hlg_ootf_approx(red, gamma);
+        let max_diff = (0..3)
+            .map(|i| (exact_red[i] - approx_red[i]).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_diff > 1e-3,
+            "exact and approx should differ on saturated red: {exact_red:?} vs {approx_red:?}"
+        );
     }
 
     #[test]

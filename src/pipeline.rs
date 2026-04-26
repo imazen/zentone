@@ -34,6 +34,23 @@ use crate::gamut::{
     tonemap_luma_preserving,
 };
 
+/// Selects which HLG OOTF formula the HLG-input pipelines apply.
+///
+/// `Exact` (default) follows ITU-R BT.2100-2 Table 5 — luminance-preserving,
+/// matches the spec.
+///
+/// `LibultrahdrCompat` mirrors libultrahdr's `hlgOotfApprox`: per-channel
+/// `pow(c, γ)`. Bends chromaticity in saturated highlights but matches
+/// libultrahdr's encoder output bit-for-bit at the OOTF stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HlgOotfMode {
+    /// Spec-correct, luminance-preserving HLG OOTF (default).
+    #[default]
+    Exact,
+    /// Per-channel `pow(c, γ)` approximation — for bit-parity with libultrahdr.
+    LibultrahdrCompat,
+}
+
 /// Pipeline configuration for HDR→SDR conversion (internal).
 ///
 /// Controls which color space the tone curve is applied in.
@@ -48,12 +65,15 @@ use crate::gamut::{
 pub(crate) struct PipelineConfig {
     /// Color space for tone curve application.
     pub tone_map_space: ToneMapSpace,
+    /// HLG OOTF formula for HLG-input pipelines.
+    pub hlg_ootf_mode: HlgOotfMode,
 }
 
 impl Default for PipelineConfig {
     fn default() -> Self {
         Self {
             tone_map_space: ToneMapSpace::Rgb,
+            hlg_ootf_mode: HlgOotfMode::Exact,
         }
     }
 }
@@ -201,7 +221,10 @@ pub(crate) fn tonemap_hlg_to_linear_srgb_config(
             linear_srgb::tf::hlg_to_linear(src[2]),
         ];
 
-        let display = crate::hlg::hlg_ootf(scene, gamma);
+        let display = match cfg.hlg_ootf_mode {
+            HlgOotfMode::Exact => crate::hlg::hlg_ootf(scene, gamma),
+            HlgOotfMode::LibultrahdrCompat => crate::hlg::hlg_ootf_approx(scene, gamma),
+        };
         let tonemapped = apply_tonemap(display, tm, cfg.tone_map_space);
         let bt709 = {
             let rgb = apply_matrix(&BT2020_TO_BT709, tonemapped);
@@ -283,6 +306,7 @@ mod tests {
             tone_map_space: ToneMapSpace::LumaPreserving {
                 luma: crate::LUMA_BT709,
             },
+            ..PipelineConfig::default()
         };
         // Bright saturated PQ red
         let pq = [0.7_f32, 0.3, 0.2];
@@ -308,6 +332,7 @@ mod tests {
 
         let cfg_rgb = PipelineConfig {
             tone_map_space: ToneMapSpace::Rgb,
+            ..PipelineConfig::default()
         };
         let mut out_rgb = [0.0_f32; 3];
         tonemap_pq_to_linear_srgb_config(&pq_green, &mut out_rgb, &tm, 3, &cfg_rgb);
@@ -316,6 +341,7 @@ mod tests {
             tone_map_space: ToneMapSpace::LumaPreserving {
                 luma: crate::LUMA_BT709,
             },
+            ..PipelineConfig::default()
         };
         let mut out_luma = [0.0_f32; 3];
         tonemap_pq_to_linear_srgb_config(&pq_green, &mut out_luma, &tm, 3, &cfg_luma);
@@ -351,6 +377,7 @@ mod tests {
         let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
         let cfg = PipelineConfig {
             tone_map_space: ToneMapSpace::Rgb,
+            ..PipelineConfig::default()
         };
         let pq = [0.6_f32, 0.6, 0.6];
         let mut out = [0.0_f32; 3];

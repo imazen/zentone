@@ -27,7 +27,7 @@ use zentone::gamut::{
     BT709_TO_BT2020, BT709_TO_P3, BT2020_TO_BT709, BT2020_TO_P3, P3_TO_BT709, P3_TO_BT2020,
     apply_matrix,
 };
-use zentone::hlg::{hlg_inverse_ootf, hlg_ootf};
+use zentone::hlg::{hlg_inverse_ootf, hlg_inverse_ootf_approx, hlg_ootf, hlg_ootf_approx};
 use zentone::{
     Bt2408Tonemapper, CompiledFilmicSpline, FilmicSplineConfig, LUMA_BT709, LUMA_BT2020, LUMA_P3,
     ToneMap,
@@ -664,6 +664,8 @@ fn hlg_ootf_matches_libultrahdr() {
         let actual = match dir {
             "ootf" => hlg_ootf(rgb_in, gamma),
             "inverse_ootf" => hlg_inverse_ootf(rgb_in, gamma),
+            // Approx rows are checked by `hlg_ootf_approx_matches_libultrahdr`.
+            "ootf_approx" | "inverse_ootf_approx" => continue,
             other => panic!("unknown dir tag: {other}"),
         };
 
@@ -693,4 +695,71 @@ fn hlg_ootf_matches_libultrahdr() {
     }
     assert!(checked > 100, "too few HLG OOTF rows: {checked}");
     println!("hlg_ootf: checked {checked} rows, max_err={max_err:.6e}");
+}
+
+/// Parity test for `hlg_ootf_approx` / `hlg_inverse_ootf_approx` against
+/// libultrahdr's `hlgOotfApprox` / `hlgInverseOotfApprox` (gainmapmath.cpp:299/309).
+///
+/// The approx variants are pure per-channel `pow(c, γ)` with no luminance
+/// dependency, so there's no precision-divergence issue — they should agree
+/// to within float `pow` rounding (well below 5e-4 × output).
+#[test]
+fn hlg_ootf_approx_matches_libultrahdr() {
+    let csv = read_csv("libultrahdr_hlg_ootf.csv");
+
+    let mut checked = 0;
+    let mut max_err: f32 = 0.0;
+
+    for cols in parse_rows(&csv, "dir,gamma,r_in,g_in,b_in,r_out,g_out,b_out") {
+        if cols.len() != 8 {
+            continue;
+        }
+        let dir = cols[0];
+        // Skip the chromaticity-preserving rows; those are covered by
+        // `hlg_ootf_matches_libultrahdr`.
+        if dir != "ootf_approx" && dir != "inverse_ootf_approx" {
+            continue;
+        }
+        let gamma: f32 = cols[1].parse().unwrap();
+        let rgb_in = [
+            cols[2].parse::<f32>().unwrap(),
+            cols[3].parse::<f32>().unwrap(),
+            cols[4].parse::<f32>().unwrap(),
+        ];
+        let expected = [
+            cols[5].parse::<f32>().unwrap(),
+            cols[6].parse::<f32>().unwrap(),
+            cols[7].parse::<f32>().unwrap(),
+        ];
+
+        let actual = match dir {
+            "ootf_approx" => hlg_ootf_approx(rgb_in, gamma),
+            "inverse_ootf_approx" => hlg_inverse_ootf_approx(rgb_in, gamma),
+            _ => unreachable!(),
+        };
+
+        // Per-channel pow has no luminance term, so the only divergence is
+        // libm vs libstdc++ pow rounding. Use the same scaled tolerance as
+        // the exact OOTF test (5e-4 × max output magnitude) for parity.
+        let mag = expected
+            .iter()
+            .fold(0.0_f32, |a, &x| a.max(x.abs()))
+            .max(1.0);
+        let tol = 5e-4 * mag;
+
+        for i in 0..3 {
+            let err = (actual[i] - expected[i]).abs();
+            max_err = max_err.max(err);
+            assert!(
+                err < tol,
+                "{dir} gamma={gamma} mismatch at {rgb_in:?}[{i}]: zentone={}, \
+                 libultrahdr={}, err={err}, tol={tol}",
+                actual[i],
+                expected[i]
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked > 100, "too few HLG OOTF approx rows: {checked}");
+    println!("hlg_ootf_approx: checked {checked} rows, max_err={max_err:.6e}");
 }

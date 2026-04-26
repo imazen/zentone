@@ -13,11 +13,18 @@
 // caller-supplied `LuminanceFn` — for the BT.2100 path that's
 // `bt2100Luminance` (kBt2100R/G/B = 0.2627 / 0.677998 / 0.059302).
 //
+// libultrahdr's encode path also uses `hlgOotfApprox` (gainmapmath.cpp:299),
+// a per-channel `pow(c, gamma)` that bends chromaticity in saturated highlights
+// but is faster. zentone exposes the matching pair as
+// `hlg::hlg_ootf_approx` / `hlg::hlg_inverse_ootf_approx` for libultrahdr-compat
+// encode parity.
+//
 // zentone's `hlg_ootf(rgb, gamma)` accepts the gamma directly (so we can
 // also exercise `hlg_system_gamma(display_peak_nits)` values like 1.2 for
 // 1000 nits, 1.453 for 4000 nits) and uses LR/LG/LB = 0.2627/0.6780/0.0593
 // internally. The luminance precision difference (~1e-4 absolute) is the
-// only documented divergence; the OOTF itself is bit-identical math.
+// only documented divergence; the OOTF itself is bit-identical math. The
+// approx variant has no luminance dependency and is bit-exact.
 
 #include <array>
 #include <cmath>
@@ -48,14 +55,25 @@ static Color hlgInverseOotf(Color e, float (*luminance)(Color), float gamma) {
     return {e.r * scale, e.g * scale, e.b * scale};
 }
 
+// Per-channel approximation used by libultrahdr's encode path
+// (gainmapmath.cpp:299). Bends chromaticity but is faster — no luminance.
+static Color hlgOotfApprox(Color e, float gamma) {
+    return {std::pow(e.r, gamma), std::pow(e.g, gamma), std::pow(e.b, gamma)};
+}
+
+static Color hlgInverseOotfApprox(Color e, float gamma) {
+    float inv = 1.0f / gamma;
+    return {std::pow(e.r, inv), std::pow(e.g, inv), std::pow(e.b, inv)};
+}
+
 // --------------------------------- harness ---------------------------------
 
 int main() {
     std::puts("# libultrahdr HLG OOTF / inverse OOTF (BT.2100 luminance)");
     std::puts("# columns: dir, gamma, r_in, g_in, b_in, r_out, g_out, b_out");
-    std::puts("# dir values: ootf, inverse_ootf");
+    std::puts("# dir values: ootf, inverse_ootf, ootf_approx, inverse_ootf_approx");
     std::puts("# gamma values cover hlg_system_gamma over typical display peaks");
-    std::puts("# reference: lib/src/gainmapmath.cpp:294/304 @ libultrahdr commit 8cbc983");
+    std::puts("# reference: lib/src/gainmapmath.cpp:294/304/299/309 @ libultrahdr commit 8cbc983");
     std::puts("dir,gamma,r_in,g_in,b_in,r_out,g_out,b_out");
 
     // gamma values: 1.0 (identity OOTF), 1.2 (BT.2100 reference, 1000 nits),
@@ -72,6 +90,8 @@ int main() {
     auto run = [&](float gamma, Color in) {
         Color fwd = hlgOotf(in, bt2100Luminance, gamma);
         Color inv = hlgInverseOotf(in, bt2100Luminance, gamma);
+        Color fwd_approx = hlgOotfApprox(in, gamma);
+        Color inv_approx = hlgInverseOotfApprox(in, gamma);
         std::printf("ootf,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g\n",
                     (double)gamma,
                     (double)in.r, (double)in.g, (double)in.b,
@@ -80,6 +100,14 @@ int main() {
                     (double)gamma,
                     (double)in.r, (double)in.g, (double)in.b,
                     (double)inv.r, (double)inv.g, (double)inv.b);
+        std::printf("ootf_approx,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g\n",
+                    (double)gamma,
+                    (double)in.r, (double)in.g, (double)in.b,
+                    (double)fwd_approx.r, (double)fwd_approx.g, (double)fwd_approx.b);
+        std::printf("inverse_ootf_approx,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g\n",
+                    (double)gamma,
+                    (double)in.r, (double)in.g, (double)in.b,
+                    (double)inv_approx.r, (double)inv_approx.g, (double)inv_approx.b);
     };
 
     // Greys
