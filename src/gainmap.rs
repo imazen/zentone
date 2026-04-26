@@ -65,7 +65,7 @@ use linear_srgb::tf::{linear_to_pq, pq_to_linear};
 ///   `hdr_peak_nits`; for [`ExtendedReinhardLuma`] it's `l_max`. Always
 ///   non-negative.
 /// - **Output**: linear-light SDR luminance. Most implementors stay in
-///   `[0, 1]`; some (e.g. [`Bt2446C`](crate::Bt2446C) past its inflection
+///   `[0, 1]`; some (e.g. [`Bt2446C`] past its inflection
 ///   point) may slightly exceed. The [`LumaGainMapSplitter`] clamps before
 ///   computing gain.
 /// - **Strictly monotonic** on the operating range. The splitter relies on
@@ -187,6 +187,47 @@ impl LumaToneMap for ExtendedReinhardLuma {
     }
 }
 
+/// John Hable's filmic curve from GDC 2010 ("Uncharted 2"). Identical math
+/// to libultrahdr's reference implementation and the original GDC 2010 paper.
+///
+/// Parameter-free, monotonic on `[0, ∞)`, gentle shoulder, no luminance
+/// calibration required. A reasonable zero-config default for HDR encoding
+/// when no scene metadata (PQ peak, HLG peak) is available to pick a more
+/// principled curve like [`Bt2408Yrgb`] or [`Bt2446C`].
+///
+/// Output is clamped to `[0, 1]`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HableFilmic;
+
+impl HableFilmic {
+    /// Construct a new instance. Equivalent to `HableFilmic::default()`.
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+#[inline(always)]
+const fn hable_partial(x: f32) -> f32 {
+    const A: f32 = 0.15;
+    const B: f32 = 0.50;
+    const C: f32 = 0.10;
+    const D: f32 = 0.20;
+    const E: f32 = 0.02;
+    const F: f32 = 0.30;
+    ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F
+}
+
+impl LumaToneMap for HableFilmic {
+    #[inline]
+    fn map_luma(&self, y: f32) -> f32 {
+        const EXPOSURE_BIAS: f32 = 2.0;
+        const W: f32 = 11.2;
+        const W_SCALE: f32 = 1.0 / hable_partial(W);
+        let y = y.max(0.0);
+        (hable_partial(y * EXPOSURE_BIAS) * W_SCALE).min(1.0)
+    }
+}
+
 /// [`CompiledFilmicSpline`] as a luma curve.
 ///
 /// Grayscale-invariant: for `[y,y,y]` input, `ratios = [1,1,1]` so the
@@ -254,7 +295,7 @@ pub struct SplitConfig {
     /// libultrahdr's encode path, which uses per-channel `pow(c, γ)`. Only
     /// affects [`LumaGainMapSplitter::split_hlg_row`] /
     /// [`LumaGainMapSplitter::apply_hlg_row`] (and the public
-    /// [`crate::experimental::hlg_to_normalized_linear_row_with_mode`]
+    /// [`crate::gainmap::hlg_to_normalized_linear_row_with_mode`]
     /// helper); PQ paths are unaffected.
     pub hlg_ootf_mode: crate::pipeline::HlgOotfMode,
 }
@@ -574,7 +615,7 @@ impl<T: LumaToneMap> LumaGainMapSplitter<T> {
 /// channel 3 is passed through unchanged.
 ///
 /// `content_peak_nits` is the source content peak (e.g. 1000 for an
-/// HDR10 1000-nit master). Curves like [`Bt2446A`](crate::Bt2446A)
+/// HDR10 1000-nit master). Curves like [`Bt2446A`]
 /// expect `1.0` to mean their constructor's `hdr_peak_nits`.
 pub fn pq_to_normalized_linear_row(in_out: &mut [f32], channels: u8, content_peak_nits: f32) {
     assert!(channels == 3 || channels == 4, "channels must be 3 or 4");
@@ -798,6 +839,44 @@ mod tests {
     fn filmic_spline_well_behaved() {
         let c = CompiledFilmicSpline::new(&FilmicSplineConfig::default());
         assert_luma_curve_well_behaved(&c, 10.0, "CompiledFilmicSpline");
+    }
+
+    #[test]
+    fn hable_filmic_well_behaved() {
+        let c = HableFilmic::new();
+        assert_luma_curve_well_behaved(&c, 10.0, "HableFilmic");
+    }
+
+    #[test]
+    fn hable_filmic_clamps_high_input() {
+        let c = HableFilmic::new();
+        // Above the W=11.2 normalization point, Hable saturates to ~1.0.
+        let s = c.map_luma(100.0);
+        assert!((0.0..=1.0).contains(&s), "HableFilmic out of range: {s}");
+        assert!(s > 0.95, "HableFilmic expected near 1.0 at high input: {s}");
+    }
+
+    #[test]
+    fn round_trip_hable_filmic_grayscale_exact() {
+        let split = LumaGainMapSplitter::new(
+            HableFilmic::new(),
+            SplitConfig {
+                luma_weights: LUMA_BT709,
+                max_log2: 10.0,
+                ..Default::default()
+            },
+        );
+        let hdr = synth_grayscale_hdr_row(16, 3, 4.0);
+        let mut sdr = vec![0.0; hdr.len()];
+        let mut gain = vec![0.0; hdr.len() / 3];
+        let mut rec = vec![0.0; hdr.len()];
+        let mut stats = SplitStats::default();
+        split.split_row(&hdr, &mut sdr, &mut gain, 3, &mut stats);
+        split.apply_row(&sdr, &gain, &mut rec, 3);
+        assert_eq!(stats.clipped_sdr_pixels, 0, "grayscale should never clip");
+        for (a, b) in hdr.iter().zip(&rec) {
+            assert!((a - b).abs() < 1e-4, "round-trip drift: {a} vs {b}");
+        }
     }
 
     /// Build a grayscale HDR row in `[0, max]`. Grayscale is the exact

@@ -6,22 +6,16 @@
 //! - [`AdaptiveTonemapper`] — fits a LUT from an HDR/SDR pair.
 //! - [`StreamingTonemapper`] — single-pass spatially-local with lookahead.
 //! - [`ProfileToneCurve`] — DNG camera profile tone curve.
-//! - [`LumaGainMapSplitter`] — round-trippable HDR ↔ (SDR, log2 gain map),
-//!   using the ISO 21496-1 / Ultra HDR decode form. Wire-compatible with
-//!   `zencodec::GainMapParams`.
+//!
+//! The ISO 21496-1 / Apple Ultra HDR gain-map splitter previously hosted
+//! here has graduated to the stable [`crate::gainmap`] module — no
+//! `experimental` feature gate required.
 
 mod adaptive;
 pub mod detect;
-mod gain_map;
 mod profile;
 mod streaming;
 
 pub use adaptive::{AdaptiveTonemapper, FitConfig, FitStats};
-pub use gain_map::{
-    Bt2408Yrgb, ExtendedReinhardLuma, LumaFn, LumaGainMapSplitter, LumaToneMap, SplitConfig,
-    SplitStats, hlg_to_normalized_linear_row, hlg_to_normalized_linear_row_with_mode,
-    normalized_linear_to_hlg_row, normalized_linear_to_hlg_row_with_mode,
-    normalized_linear_to_pq_row, pq_to_normalized_linear_row,
-};
 pub use profile::{ProfileLuminance, ProfilePerChannel, ProfileToneCurve};
 pub use streaming::{StreamingTonemapConfig, StreamingTonemapper};

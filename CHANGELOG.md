@@ -33,6 +33,12 @@ adheres to semver.
 - `TonemapScratch` (re-exported from crate root) — reusable scratch buffers
   + chunk-size policy for the SIMD pipelines. Default chunk size 4096
   pixels (~48 KiB working set, fits L2). `with_chunk_size(...)` for tuning.
+- `gainmap` module: stable home for `LumaToneMap`, `LumaGainMapSplitter`,
+  `SplitConfig`, `SplitStats`, `LumaFn`, `Bt2408Yrgb`, `ExtendedReinhardLuma`,
+  and a built-in `HableFilmic` curve. Graduates from `experimental::gain_map`,
+  no longer requires the `experimental` feature.
+- `HableFilmic` — the GDC-2010 Uncharted 2 filmic curve. Useful zero-config
+  default for HDR encoding without external content metadata.
 - `simd::*` curve kernels migrated to `#[archmage::magetypes(...)]`. Lower
   LOC, broader arch coverage (V4/V3/NEON/WASM128/scalar where supported,
   V3+NEON+WASM128+scalar for transcendental-using curves) (26e9c56).
@@ -76,6 +82,10 @@ adheres to semver.
 
 ### Changed
 
+- `LumaToneMap` and the splitter API moved from `zentone::experimental::gain_map::*`
+  to `zentone::*` (re-exported from the new `gainmap` module). The
+  `experimental::gain_map::*` paths are removed; users on `experimental`
+  feature gating should update their imports.
 - `ToneMap` trait now exposes `map_strip_simd` as a provided method.
   Default behavior is preserved (per-pixel loop over `map_rgb`); existing
   implementors do not need to override it (7ae5c05).

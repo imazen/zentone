@@ -37,7 +37,6 @@ pub(crate) fn expf(x: f32) -> f32 {
     libm::expf(x)
 }
 
-#[cfg(feature = "experimental")]
 #[inline]
 pub(crate) fn exp2f(x: f32) -> f32 {
     libm::exp2f(x)

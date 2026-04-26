@@ -36,8 +36,10 @@ std = ["linear-srgb/std", "archmage/std", "magetypes/std"]
 # AVX-512 tier for x86-64-v4 — gates the v4 magetypes path through to
 # archmage/magetypes via their `avx512` features.
 avx512 = ["archmage/avx512", "magetypes/avx512"]
-# Experimental APIs: AdaptiveTonemapper, StreamingTonemapper, ProfileToneCurve.
-# Light test coverage; API and output may change without semver bumps until stabilized.
+# Experimental APIs: AdaptiveTonemapper, StreamingTonemapper, ProfileToneCurve,
+# detect::*. Light test coverage; API and output may change without semver bumps
+# until stabilized. (The ISO 21496-1 / Apple Ultra HDR gain-map splitter formerly
+# gated here graduated to the always-available `gainmap` module.)
 experimental = []
 
 [dependencies]

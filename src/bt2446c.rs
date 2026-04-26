@@ -35,8 +35,9 @@ use crate::ToneMap;
 /// Pick when you need an **invertible** tone curve — the algebraic inverse
 /// is exact (modulo optional crosstalk), so HDR → SDR → HDR round-trips
 /// with no quantization error. This makes Method C the natural target for
-/// gain-map workflows (`experimental::LumaGainMapSplitter`) and for curve
-/// detection (`experimental::detect::detect_standard`). Default parameters
+/// gain-map workflows ([`LumaGainMapSplitter`](crate::LumaGainMapSplitter))
+/// and for curve detection (`experimental::detect::detect_standard`).
+/// Default parameters
 /// are tuned for skin-tone preservation per BT.2408 Annex 4.
 ///
 /// Reference: ITU-R BT.2446-1 §6 (03/2021).

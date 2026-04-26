@@ -36,10 +36,8 @@
 //!   implementations. Calls inside an inner loop should usually go through
 //!   the row form instead.
 //! - **Experimental.** Behind the `experimental` feature, semver-unstable.
-//!   Covers [`experimental::LumaToneMap`](experimental/trait.LumaToneMap.html)
-//!   and the gain-map splitter for ISO 21496-1 / Apple Ultra HDR,
-//!   `Bt2408Yrgb`, the streaming tonemapper, the adaptive LUT fitter, and
-//!   the DNG `ProfileToneCurve`. APIs may change without semver bumps until
+//!   Covers the streaming tonemapper, the adaptive LUT fitter, and the DNG
+//!   `ProfileToneCurve`. APIs may change without semver bumps until
 //!   stabilized.
 //!
 //! As of 0.2.0, the pipeline ships SIMD strip-form APIs only — the old
@@ -65,9 +63,13 @@
 //!   darktable / Blender-style rational spline with toe / linear / shoulder
 //!   regions and per-pixel highlight desaturation. Heavy parameter surface
 //!   for calibrated workflows.
+//! - **Gain map splitter** ([`gainmap`]) — round-trippable HDR ↔ (SDR, log2
+//!   gain) splitter for ISO 21496-1 / Apple Ultra HDR encoders, plus
+//!   companion [`LumaToneMap`] curve impls (`Bt2408Yrgb`,
+//!   `ExtendedReinhardLuma`, [`HableFilmic`]) and PQ/HLG row helpers.
 //! - **Experimental** (behind the `experimental` feature) — adaptive LUT
-//!   fitting, single-pass streaming tonemap with local adaptation, gain-map
-//!   splitter for ISO 21496-1 / Apple Ultra HDR, DNG ProfileToneCurve.
+//!   fitting, single-pass streaming tonemap with local adaptation, DNG
+//!   ProfileToneCurve.
 //!
 //! # Quick start
 //!
@@ -119,7 +121,7 @@
 //! | Live HLG → SDR, conservative on clipped highlights | [`Bt2446B`] |
 //! | HDR → SDR with **mathematical inverse** (round-trip / detection) | [`Bt2446C`] |
 //! | Calibrated photo workflow with toe / shoulder control | [`CompiledFilmicSpline`] |
-//! | ISO 21496-1 / Ultra HDR gain map encoder | `experimental::LumaGainMapSplitter` |
+//! | ISO 21496-1 / Ultra HDR gain map encoder | [`LumaGainMapSplitter`] |
 //! | Re-derive a curve from an HDR/SDR reference pair | `experimental::AdaptiveTonemapper` |
 //!
 //! Curves that need RGB→Y weights take them at construction time via
@@ -127,12 +129,35 @@
 //! matches the input primaries — passing BT.709 weights for BT.2020 input
 //! over-desaturates greens.
 //!
-//! # Auxiliary trait
+//! # Tone mapping vs gain map splitting
 //!
-//! [`experimental::LumaToneMap`](experimental/trait.LumaToneMap.html) is the
-//! scalar Y → Y' interface used by the gain-map splitter. Distinct from
-//! [`ToneMap`] because per-channel and matrix-based curves don't have a
-//! coherent "luma-only" interpretation.
+//! Two adjacent but distinct contracts live in this crate.
+//!
+//! - **Tone mapping** ([`ToneMap`] trait, [`pipeline`] strip kernels):
+//!   one-way, lossy. Takes linear-light HDR RGB and returns linear-light
+//!   SDR RGB. Information above SDR peak is compressed and not
+//!   recoverable. Used to render HDR content on SDR displays. See
+//!   [`pipeline::tonemap_pq_row_simd`], [`pipeline::tonemap_hlg_row_simd`],
+//!   [`ToneMap::map_strip_simd`].
+//! - **Gain map splitting** ([`LumaToneMap`] trait,
+//!   [`LumaGainMapSplitter`] in [`gainmap`]): two-way, reversible. Takes
+//!   linear-light HDR RGB and returns `(SDR RGB, log2 gain)` per pixel
+//!   per the ISO 21496-1 / Adobe Gain Map / Apple Ultra HDR contract.
+//!   Apply the gain map back to the SDR base to recover the HDR within
+//!   float precision (modulo SDR clipping; tracked in
+//!   [`SplitStats::clipped_sdr_pixels`]).
+//!
+//! Most curves implement both traits — `Bt2408Yrgb`, `Bt2446A/B/C`,
+//! `ExtendedReinhardLuma`, [`CompiledFilmicSpline`], and [`HableFilmic`]
+//! all derive [`LumaToneMap`] from their luma response. The splitter's
+//! [`LumaToneMap`] is luma-only because chromaticity preservation
+//! requires applying a scalar curve to luma and then rescaling the RGB
+//! triple — per-channel and matrix-based [`ToneMap`] curves do not have a
+//! coherent luma-only interpretation, so they are intentionally not
+//! adapted.
+//!
+//! See [`src/gainmap.rs`](gainmap) for the splitter; see
+//! [`src/pipeline.rs`](pipeline) for the tone-map row kernels.
 //!
 //! # Utility modules
 //!
@@ -155,8 +180,6 @@
 //! - `experimental::AdaptiveTonemapper` — fits a LUT from an HDR/SDR pair.
 //! - `experimental::StreamingTonemapper` — single-pass spatially-local
 //!   tonemap with bounded-memory pull API.
-//! - `experimental::LumaGainMapSplitter` — round-trippable HDR ↔ (SDR, log2 gain)
-//!   for ISO 21496-1 / Apple Ultra HDR gain-map encoders.
 //! - `experimental::ProfileToneCurve` — DNG camera-profile tone curve;
 //!   per-channel or luminance-preserving views via [`ToneMap`].
 //! - `experimental::detect::detect_standard` — identifies which standard
@@ -180,6 +203,7 @@ mod bt2446c;
 pub mod curves;
 mod error;
 mod filmic_spline;
+pub mod gainmap;
 pub mod gamut;
 pub mod hlg;
 mod math;
@@ -199,6 +223,10 @@ pub use bt2446c::Bt2446C;
 pub use curves::{AgxLook, ToneMapCurve};
 pub use error::{Error, Result};
 pub use filmic_spline::{CompiledFilmicSpline, FilmicSplineConfig};
+pub use gainmap::{
+    Bt2408Yrgb, ExtendedReinhardLuma, HableFilmic, LumaFn, LumaGainMapSplitter, LumaToneMap,
+    SplitConfig, SplitStats,
+};
 pub use scratch::TonemapScratch;
 pub use tone_map::ToneMap;
 
