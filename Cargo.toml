@@ -43,7 +43,7 @@ avx512 = ["archmage/avx512", "magetypes/avx512"]
 experimental = []
 
 [dependencies]
-linear-srgb = { version = "0.6.8", default-features = false, features = ["transfer"] }
+linear-srgb = { version = "0.6.12", default-features = false, features = ["transfer"] }
 libm = { version = "0.2", default-features = false }
 archmage = { version = "0.9.22", default-features = false, features = ["macros"] }
 magetypes = { version = "0.9.22", default-features = false }
