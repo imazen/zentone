@@ -11,10 +11,7 @@ adheres to semver.
 <!-- Breaking changes that will ship together in the next major (or minor for 0.x) release.
      Add items here as you discover them. Do NOT ship these piecemeal — batch them. -->
 
-- `pipeline::tonemap_*_row_simd` (all 6) now take `&mut TonemapScratch` as
-  the first argument. Construct one per worker thread / stream and pass it
-  on every call — eliminates per-call `Vec` allocations and caps the
-  working-set memory by `chunk_size` regardless of input strip length.
+## [0.2.0] - 2026-04-26
 
 ### Changed
 
