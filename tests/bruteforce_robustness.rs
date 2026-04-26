@@ -269,9 +269,11 @@ fn bit_sweep_no_nan_or_inf() {
 
 #[test]
 fn pipeline_pq_edge_cases_no_nan() {
+    use zentone::TonemapScratch;
     use zentone::pipeline::tonemap_pq_row_simd;
 
     let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
+    let mut scratch = TonemapScratch::new();
 
     // PQ values outside [0,1], negative, zero, near-1
     let edge_pq: [f32; 15] = [
@@ -280,7 +282,7 @@ fn pipeline_pq_edge_cases_no_nan() {
 
     let src: Vec<[f32; 3]> = edge_pq.iter().map(|&v| [v, v, v]).collect();
     let mut out = vec![[0.0_f32; 3]; src.len()];
-    tonemap_pq_row_simd(&src, &mut out, &tm);
+    tonemap_pq_row_simd(&mut scratch, &src, &mut out, &tm);
 
     let mut failures = Vec::new();
     for (i, px) in out.iter().enumerate() {

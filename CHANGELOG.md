@@ -11,10 +11,28 @@ adheres to semver.
 <!-- Breaking changes that will ship together in the next major (or minor for 0.x) release.
      Add items here as you discover them. Do NOT ship these piecemeal — batch them. -->
 
-(none currently queued)
+- `pipeline::tonemap_*_row_simd` (all 6) now take `&mut TonemapScratch` as
+  the first argument. Construct one per worker thread / stream and pass it
+  on every call — eliminates per-call `Vec` allocations and caps the
+  working-set memory by `chunk_size` regardless of input strip length.
+
+### Changed
+
+- Pipeline functions (`tonemap_pq_row_simd`, `tonemap_pq_rgba_row_simd`,
+  `tonemap_hlg_row_simd`, `tonemap_hlg_rgba_row_simd`,
+  `tonemap_pq_to_srgb8_row_simd`, `tonemap_pq_to_srgb8_rgba_row_simd`) take
+  `&mut TonemapScratch` as the first argument and internally chunk the
+  input by `scratch.chunk_size()`. Caps working-set memory regardless of
+  input strip length and eliminates the remaining per-call `Vec`
+  allocations in the RGBA + sRGB8 paths. Verified by
+  `pipeline_memory_bounded_by_chunk_size` and
+  `pipeline_chunk_size_invariance` in `tests/simd_parity.rs`.
 
 ### Added
 
+- `TonemapScratch` (re-exported from crate root) — reusable scratch buffers
+  + chunk-size policy for the SIMD pipelines. Default chunk size 4096
+  pixels (~48 KiB working set, fits L2). `with_chunk_size(...)` for tuning.
 - `simd::*` curve kernels migrated to `#[archmage::magetypes(...)]`. Lower
   LOC, broader arch coverage (V4/V3/NEON/WASM128/scalar where supported,
   V3+NEON+WASM128+scalar for transcendental-using curves) (26e9c56).

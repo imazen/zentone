@@ -482,6 +482,7 @@ fn per_channel_sweep_monotonic() {
 
 #[test]
 fn pq_pipeline_no_luminance_spikes() {
+    use zentone::TonemapScratch;
     use zentone::pipeline::tonemap_pq_row_simd;
 
     let tonemappers: Vec<(&str, Box<dyn ToneMap>)> = vec![
@@ -492,6 +493,7 @@ fn pq_pipeline_no_luminance_spikes() {
 
     let n = 10_000;
     let mut failures = Vec::new();
+    let mut scratch = TonemapScratch::new();
 
     for (name, tm) in &tonemappers {
         // PQ neutral ramp
@@ -503,7 +505,7 @@ fn pq_pipeline_no_luminance_spikes() {
         }
 
         let mut out = vec![[0.0_f32; 3]; n];
-        tonemap_pq_row_simd(&pq_row, &mut out, tm.as_ref());
+        tonemap_pq_row_simd(&mut scratch, &pq_row, &mut out, tm.as_ref());
 
         for i in 1..n - 1 {
             let prev = lum(out[i - 1]);

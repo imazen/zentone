@@ -1,0 +1,27 @@
+# zentone scalar-vs-SIMD bench — 2026-04-26 (TonemapScratch + chunking)
+# parent commit (jj @-): 2207005d (main: perf(pipeline): drop unconditional Vec mask, use soft_clip_row_simd directly)
+# this change: feat(pipeline)!: TonemapScratch + internal chunking
+# command: cargo bench --bench pipeline_bench --features experimental -- --format=csv
+# zenbench format: --format=csv (then post-processed to scalar_ns/simd_ns/speedup pairs)
+# uname: Linux lilith 6.6.87.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun  5 18:30:46 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
+# hardware: AMD Ryzen 9 7950X (water-cooled), 128 GB RAM
+# rustc: rustc 1.95.0 (59807616e 2026-04-14)
+#
+# delta vs zentone_simd_2026-04-26_no-mask-alloc.csv (this is the post-mask-alloc baseline):
+#   bt2408 @ 1024:        12877.2 → 12404.6 ns  (-3.7%)
+#   bt2408 @ 4096:        51895.9 → 50473.7 ns  (-2.7%)
+#   bt2446a @ 256:         2159.6 → 2188.6 ns   (+1.3%, within noise)
+#   bt2446a @ 1024:        8583.3 → 8568.7 ns   (-0.2%)
+#   bt2446b @ 1024:        3463.2 → 3635.9 ns   (+5.0%, within bench noise)
+#   bt2446c @ 1024:        3703.4 → 3691.1 ns   (-0.3%)
+#   filmic @ 1024:         5313.7 → 5358.1 ns   (+0.8%, within noise)
+#   pq_to_srgb8 @ 1024:   13413.1 → 13674.0 ns  (+1.9%, within noise)
+#   apply_matrix @ 1024:    423.4 → 419.1 ns    (-1.0%)
+#   soft_clip @ 1024:       679.1 → 710.0 ns    (+4.6%, within noise)
+#
+# Scratch + chunking is allocation-amortized: at the dominant 1024-pixel width
+# the deltas are within noise. The previous behaviour (per-call Vec) is now a
+# one-time grow on the first call, then zero allocation thereafter. Chunking
+# also caps working-set memory regardless of input length — verified by
+# pipeline_memory_bounded_by_chunk_size in tests/simd_parity.rs (chunk=64
+# stayed at 64-pixel capacity processing a 10000-pixel strip).

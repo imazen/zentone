@@ -78,11 +78,12 @@ fn pipeline_tonemappers() -> Vec<(&'static str, Box<dyn ToneMap>)> {
 
 #[test]
 fn pq_to_linear_srgb_all_outputs_in_gamut() {
+    let mut scratch = TonemapScratch::new();
     for (name, tm) in pipeline_tonemappers() {
         // Neutral ramp
         let ramp = pq_neutral_ramp(64, 4000.0);
         let mut out = vec![[0.0_f32; 3]; ramp.len()];
-        tonemap_pq_row_simd(&ramp, &mut out, tm.as_ref());
+        tonemap_pq_row_simd(&mut scratch, &ramp, &mut out, tm.as_ref());
 
         for (i, px) in out.iter().enumerate() {
             for (ch, &v) in px.iter().enumerate() {
@@ -96,7 +97,7 @@ fn pq_to_linear_srgb_all_outputs_in_gamut() {
         // Saturated BT.2020 primaries at 1000 nits
         let sat = pq_saturated_bt2020(1000.0);
         let mut out = vec![[0.0_f32; 3]; sat.len()];
-        tonemap_pq_row_simd(&sat, &mut out, tm.as_ref());
+        tonemap_pq_row_simd(&mut scratch, &sat, &mut out, tm.as_ref());
 
         for (i, px) in out.iter().enumerate() {
             for (ch, &v) in px.iter().enumerate() {
@@ -115,10 +116,11 @@ fn pq_to_linear_srgb_all_outputs_in_gamut() {
 
 #[test]
 fn pq_to_srgb8_all_bytes_valid() {
+    let mut scratch = TonemapScratch::new();
     for (name, tm) in pipeline_tonemappers() {
         let ramp = pq_neutral_ramp(64, 4000.0);
         let mut out = vec![[0u8; 3]; ramp.len()];
-        tonemap_pq_to_srgb8_row_simd(&ramp, &mut out, tm.as_ref());
+        tonemap_pq_to_srgb8_row_simd(&mut scratch, &ramp, &mut out, tm.as_ref());
 
         // Black should map near 0.
         assert!(
@@ -137,7 +139,7 @@ fn pq_to_srgb8_all_bytes_valid() {
         // Saturated primaries — must not panic or produce garbage
         let sat = pq_saturated_bt2020(2000.0);
         let mut out = vec![[0u8; 3]; sat.len()];
-        tonemap_pq_to_srgb8_row_simd(&sat, &mut out, tm.as_ref());
+        tonemap_pq_to_srgb8_row_simd(&mut scratch, &sat, &mut out, tm.as_ref());
         // Just verify it ran without panic; values are in [0, 255] by type.
     }
 }
@@ -148,6 +150,7 @@ fn pq_to_srgb8_all_bytes_valid() {
 
 #[test]
 fn hlg_to_linear_srgb_all_outputs_in_gamut() {
+    let mut scratch = TonemapScratch::new();
     for (name, tm) in pipeline_tonemappers() {
         // HLG ramp: 0.0 to 1.0 in HLG signal space
         let mut hlg_row: Vec<[f32; 3]> = Vec::with_capacity(32);
@@ -157,7 +160,7 @@ fn hlg_to_linear_srgb_all_outputs_in_gamut() {
         }
 
         let mut out = vec![[0.0_f32; 3]; hlg_row.len()];
-        tonemap_hlg_row_simd(&hlg_row, &mut out, tm.as_ref(), 1000.0);
+        tonemap_hlg_row_simd(&mut scratch, &hlg_row, &mut out, tm.as_ref(), 1000.0);
 
         for (i, px) in out.iter().enumerate() {
             for (ch, &v) in px.iter().enumerate() {
@@ -177,7 +180,7 @@ fn hlg_to_linear_srgb_all_outputs_in_gamut() {
             [0.0, 1.0, 1.0],     // C
         ];
         let mut out = vec![[0.0_f32; 3]; sat.len()];
-        tonemap_hlg_row_simd(&sat, &mut out, tm.as_ref(), 1000.0);
+        tonemap_hlg_row_simd(&mut scratch, &sat, &mut out, tm.as_ref(), 1000.0);
 
         for (i, px) in out.iter().enumerate() {
             for (ch, &v) in px.iter().enumerate() {
@@ -196,6 +199,7 @@ fn hlg_to_linear_srgb_all_outputs_in_gamut() {
 
 #[test]
 fn pq_neutral_gray_stays_neutral() {
+    let mut scratch = TonemapScratch::new();
     for (name, tm) in pipeline_tonemappers() {
         // AgX's inset/outset matrices create some per-channel divergence
         // at low luminance. Allow a wider threshold for AgX.
@@ -203,7 +207,7 @@ fn pq_neutral_gray_stays_neutral() {
 
         let ramp = pq_neutral_ramp(16, 2000.0);
         let mut out = vec![[0.0_f32; 3]; ramp.len()];
-        tonemap_pq_row_simd(&ramp, &mut out, tm.as_ref());
+        tonemap_pq_row_simd(&mut scratch, &ramp, &mut out, tm.as_ref());
 
         for (i, px) in out.iter().enumerate() {
             let max_ch = px[0].max(px[1]).max(px[2]);
@@ -235,6 +239,7 @@ fn pq_neutral_gray_stays_neutral() {
 #[test]
 fn pq_saturated_preserves_channel_ordering() {
     let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
+    let mut scratch = TonemapScratch::new();
 
     // BT.2020 "warm red" at 500 nits: R >> G > B
     let pq_r = nits_to_pq(500.0);
@@ -242,7 +247,7 @@ fn pq_saturated_preserves_channel_ordering() {
     let pq_b = nits_to_pq(20.0);
     let src = [[pq_r, pq_g, pq_b]];
     let mut out = [[0.0_f32; 3]];
-    tonemap_pq_row_simd(&src, &mut out, &tm);
+    tonemap_pq_row_simd(&mut scratch, &src, &mut out, &tm);
 
     assert!(
         out[0][0] >= out[0][1] && out[0][1] >= out[0][2],
@@ -253,7 +258,7 @@ fn pq_saturated_preserves_channel_ordering() {
     // BT.2020 "teal" at 500 nits: G > B > R
     let src = [[nits_to_pq(30.0), nits_to_pq(400.0), nits_to_pq(300.0)]];
     let mut out = [[0.0_f32; 3]];
-    tonemap_pq_row_simd(&src, &mut out, &tm);
+    tonemap_pq_row_simd(&mut scratch, &src, &mut out, &tm);
 
     assert!(
         out[0][1] >= out[0][2] && out[0][2] >= out[0][0],
@@ -269,12 +274,13 @@ fn pq_saturated_preserves_channel_ordering() {
 #[test]
 fn all_pipelines_preserve_alpha() {
     let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
+    let mut scratch = TonemapScratch::new();
     let alpha = 0.42_f32;
 
     // PQ → linear sRGB (f32 RGBA)
     let pq = [[0.5_f32, 0.5, 0.5, alpha]];
     let mut out_f32 = [[0.0_f32; 4]];
-    tonemap_pq_rgba_row_simd(&pq, &mut out_f32, &tm);
+    tonemap_pq_rgba_row_simd(&mut scratch, &pq, &mut out_f32, &tm);
     assert!(
         (out_f32[0][3] - alpha).abs() < 1e-6,
         "PQ→linear alpha: {} != {alpha}",
@@ -283,7 +289,7 @@ fn all_pipelines_preserve_alpha() {
 
     // PQ → sRGB u8 (RGBA)
     let mut out_u8 = [[0u8; 4]];
-    tonemap_pq_to_srgb8_rgba_row_simd(&pq, &mut out_u8, &tm);
+    tonemap_pq_to_srgb8_rgba_row_simd(&mut scratch, &pq, &mut out_u8, &tm);
     let expected_alpha_u8 = (alpha * 255.0 + 0.5) as u8;
     assert_eq!(
         out_u8[0][3], expected_alpha_u8,
@@ -294,7 +300,7 @@ fn all_pipelines_preserve_alpha() {
     // HLG → linear sRGB (RGBA)
     let hlg = [[0.75_f32, 0.75, 0.75, alpha]];
     let mut out_f32 = [[0.0_f32; 4]];
-    tonemap_hlg_rgba_row_simd(&hlg, &mut out_f32, &tm, 1000.0);
+    tonemap_hlg_rgba_row_simd(&mut scratch, &hlg, &mut out_f32, &tm, 1000.0);
     assert!(
         (out_f32[0][3] - alpha).abs() < 1e-6,
         "HLG→linear alpha: {} != {alpha}",
@@ -309,13 +315,14 @@ fn all_pipelines_preserve_alpha() {
 #[test]
 fn pq_linear_and_srgb8_pipelines_agree() {
     let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
+    let mut scratch = TonemapScratch::new();
     let ramp = pq_neutral_ramp(32, 4000.0);
 
     let mut linear = vec![[0.0_f32; 3]; ramp.len()];
-    tonemap_pq_row_simd(&ramp, &mut linear, &tm);
+    tonemap_pq_row_simd(&mut scratch, &ramp, &mut linear, &tm);
 
     let mut u8_out = vec![[0u8; 3]; ramp.len()];
-    tonemap_pq_to_srgb8_row_simd(&ramp, &mut u8_out, &tm);
+    tonemap_pq_to_srgb8_row_simd(&mut scratch, &ramp, &mut u8_out, &tm);
 
     // Convert the linear output manually to u8 and compare.
     for (i, (lin_px, u8_px)) in linear.iter().zip(u8_out.iter()).enumerate() {
@@ -340,10 +347,11 @@ fn pq_linear_and_srgb8_pipelines_agree() {
 
 #[test]
 fn pq_pipeline_monotonic_on_neutral_ramp() {
+    let mut scratch = TonemapScratch::new();
     for (name, tm) in pipeline_tonemappers() {
         let ramp = pq_neutral_ramp(128, 4000.0);
         let mut out = vec![[0.0_f32; 3]; ramp.len()];
-        tonemap_pq_row_simd(&ramp, &mut out, tm.as_ref());
+        tonemap_pq_row_simd(&mut scratch, &ramp, &mut out, tm.as_ref());
 
         // Luminance (all channels equal for neutral) should be monotonic.
         let mut prev_lum = -1.0_f32;
@@ -365,6 +373,7 @@ fn pq_pipeline_monotonic_on_neutral_ramp() {
 #[test]
 fn pq_wide_gamut_grid_all_in_range() {
     let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
+    let mut scratch = TonemapScratch::new();
 
     // 8 intensity levels × 3 channels = 512 test pixels
     let levels: [f32; 8] = [0.0, 50.0, 200.0, 500.0, 1000.0, 2000.0, 4000.0, 10000.0];
@@ -378,7 +387,7 @@ fn pq_wide_gamut_grid_all_in_range() {
     }
 
     let mut out = vec![[0.0_f32; 3]; src.len()];
-    tonemap_pq_row_simd(&src, &mut out, &tm);
+    tonemap_pq_row_simd(&mut scratch, &src, &mut out, &tm);
 
     let mut violations = 0;
     for (i, px) in out.iter().enumerate() {

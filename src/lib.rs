@@ -99,13 +99,14 @@
 //! (the canonical hot-path shape):
 //!
 //! ```
-//! use zentone::{Bt2446C, pipeline::tonemap_pq_row_simd};
+//! use zentone::{Bt2446C, TonemapScratch, pipeline::tonemap_pq_row_simd};
 //!
 //! // 1024 PQ-encoded BT.2020 RGB pixels — 0.58 ≈ HDR Reference White.
 //! let pq = vec![[0.58_f32, 0.58, 0.58]; 1024];
 //! let mut out = vec![[0.0_f32; 3]; 1024];
 //! let curve = Bt2446C::new(1000.0, 203.0);
-//! tonemap_pq_row_simd(&pq, &mut out, &curve);
+//! let mut scratch = TonemapScratch::new();
+//! tonemap_pq_row_simd(&mut scratch, &pq, &mut out, &curve);
 //! ```
 //!
 //! # Choosing a curve
@@ -183,6 +184,7 @@ pub mod gamut;
 pub mod hlg;
 mod math;
 pub mod pipeline;
+mod scratch;
 pub mod sdr_hdr;
 mod simd;
 mod tone_map;
@@ -197,6 +199,7 @@ pub use bt2446c::Bt2446C;
 pub use curves::{AgxLook, ToneMapCurve};
 pub use error::{Error, Result};
 pub use filmic_spline::{CompiledFilmicSpline, FilmicSplineConfig};
+pub use scratch::TonemapScratch;
 pub use tone_map::ToneMap;
 
 /// BT.709 / sRGB luminance coefficients `[0.2126, 0.7152, 0.0722]`.

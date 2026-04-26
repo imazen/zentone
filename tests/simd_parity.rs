@@ -312,7 +312,7 @@ fn hlg_ootf_approx_row_matches_reference() {
 // ============================================================================
 
 use zentone::pipeline::{tonemap_hlg_row_simd, tonemap_pq_row_simd, tonemap_pq_to_srgb8_row_simd};
-use zentone::{Bt2408Tonemapper, ToneMapCurve};
+use zentone::{Bt2408Tonemapper, ToneMapCurve, TonemapScratch};
 
 /// Per-pixel scalar reference for the PQ → linear sRGB pipeline. Mirrors the
 /// stage sequence inside [`tonemap_pq_row_simd`] but applies every step one
@@ -438,6 +438,7 @@ fn tonemap_pq_row_simd_matches_scalar() {
     let lengths = [1usize, 7, 8, 16, 17, 64, 1024];
     let mut max_err: f32 = 0.0;
     let mut cases = 0;
+    let mut scratch = TonemapScratch::new();
 
     for tm in curves.iter() {
         for &n in &lengths {
@@ -449,7 +450,7 @@ fn tonemap_pq_row_simd_matches_scalar() {
 
             // SIMD strip form.
             let mut out_simd = vec![[0.0_f32; 3]; n];
-            tonemap_pq_row_simd(&strip, &mut out_simd, tm.as_ref());
+            tonemap_pq_row_simd(&mut scratch, &strip, &mut out_simd, tm.as_ref());
 
             for (i, (px_simd, px_ref)) in out_simd.iter().zip(out_scalar.iter()).enumerate() {
                 for c in 0..3 {
@@ -490,6 +491,7 @@ fn tonemap_hlg_row_simd_matches_scalar() {
     let display_peaks = [400.0_f32, 1000.0, 4000.0];
     let mut max_err: f32 = 0.0;
     let mut cases = 0;
+    let mut scratch = TonemapScratch::new();
 
     for tm in curves.iter() {
         for &peak in &display_peaks {
@@ -501,7 +503,7 @@ fn tonemap_hlg_row_simd_matches_scalar() {
                 hlg_to_linear_srgb_scalar_ref(&strip, &mut out_scalar, tm.as_ref(), peak);
 
                 let mut out_simd = vec![[0.0_f32; 3]; n];
-                tonemap_hlg_row_simd(&strip, &mut out_simd, tm.as_ref(), peak);
+                tonemap_hlg_row_simd(&mut scratch, &strip, &mut out_simd, tm.as_ref(), peak);
 
                 for (i, (px_simd, px_ref)) in out_simd.iter().zip(out_scalar.iter()).enumerate() {
                     for c in 0..3 {
@@ -541,6 +543,7 @@ fn tonemap_pq_to_srgb8_row_simd_matches_scalar() {
     let mut max_diff: i32 = 0;
     let mut cases = 0;
     let mut over_one = 0;
+    let mut scratch = TonemapScratch::new();
 
     for tm in curves.iter() {
         for &n in &lengths {
@@ -549,7 +552,7 @@ fn tonemap_pq_to_srgb8_row_simd_matches_scalar() {
             pq_to_srgb8_scalar_ref(&strip, &mut out_scalar, tm.as_ref());
 
             let mut out_simd = vec![[0u8; 3]; n];
-            tonemap_pq_to_srgb8_row_simd(&strip, &mut out_simd, tm.as_ref());
+            tonemap_pq_to_srgb8_row_simd(&mut scratch, &strip, &mut out_simd, tm.as_ref());
 
             for (px_simd, px_ref) in out_simd.iter().zip(out_scalar.iter()) {
                 for c in 0..3 {
@@ -799,4 +802,127 @@ fn tone_map_default_map_strip_simd_matches_per_pixel_loop() {
             );
         }
     }
+}
+
+// ============================================================================
+// Chunk-size invariance: the internal `chunked_in_out` loop must not introduce
+// edge effects between chunks. Every zentone pipeline is per-pixel pure (no
+// neighbor dependencies), so splitting a strip into different chunk sizes
+// must produce equivalent output.
+//
+// This is **not** bit-identity: each SIMD stage (`map_strip_simd`,
+// `pq_to_linear_slice`, `apply_matrix_row_simd`, `soft_clip_row_simd`) has a
+// SIMD body + scalar tail with slightly different FMA ordering, so changing
+// where chunk boundaries land moves the body/tail boundary and can flip a
+// few ULP. The guarantee is "agreement to within FMA tolerance" — which is
+// what would be required if a stage *did* read a neighbor.
+// ============================================================================
+
+/// For any strip length L and any chunk size C in {8, 64, 4096, 8192},
+/// `tonemap_pq_row_simd(scratch, ...)` must produce output within FMA
+/// tolerance regardless of C. If a stage ever needed neighboring pixels,
+/// the per-chunk view would silently produce wrong output at chunk
+/// boundaries — this test pins that.
+#[test]
+fn pipeline_chunk_size_invariance() {
+    let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
+    // A long-ish strip that crosses many chunk boundaries even at C=4096.
+    let lengths = [1_usize, 7, 8, 9, 64, 257, 1024, 10_000];
+    let chunk_sizes = [8_usize, 64, 4096, 8192];
+    // Per-stage FMA-ordering tolerance. Same magnitude as
+    // `tonemap_pq_row_simd_matches_scalar` (2e-5 × magnitude).
+    const TOL: f32 = 2e-5;
+
+    let mut max_err = 0_f32;
+    let mut total_cases = 0_u64;
+
+    for &n in &lengths {
+        let strip = synth_pipeline_strip(n, n as u64 * 991 + 7);
+
+        // Reference: single huge chunk.
+        let mut s_ref = TonemapScratch::with_chunk_size(8192);
+        let mut out_ref = vec![[0.0_f32; 3]; n];
+        tonemap_pq_row_simd(&mut s_ref, &strip, &mut out_ref, &tm);
+
+        for &c in &chunk_sizes {
+            let mut s_alt = TonemapScratch::with_chunk_size(c);
+            let mut out_alt = vec![[0.0_f32; 3]; n];
+            tonemap_pq_row_simd(&mut s_alt, &strip, &mut out_alt, &tm);
+
+            for (i, (a, b)) in out_ref.iter().zip(out_alt.iter()).enumerate() {
+                for ch in 0..3 {
+                    let err = (a[ch] - b[ch]).abs();
+                    max_err = max_err.max(err);
+                    let mag = a[ch].abs().max(b[ch].abs()).max(1.0);
+                    let tol = TOL * mag;
+                    assert!(
+                        err < tol,
+                        "chunk-size divergence at len={n}, chunk={c}, pixel {i} ch {ch}: \
+                         ref={} alt={} err={err:.3e} tol={tol:.3e}",
+                        a[ch],
+                        b[ch]
+                    );
+                    total_cases += 1;
+                }
+            }
+        }
+    }
+    println!(
+        "pipeline_chunk_size_invariance: {total_cases} comparisons across {} lengths × {} chunk sizes, \
+         max_err={max_err:.3e}",
+        lengths.len(),
+        chunk_sizes.len(),
+    );
+}
+
+/// Working-set memory must stay bounded by the chunk size, regardless of input
+/// strip length. Construct a `TonemapScratch::with_chunk_size(64)`, process a
+/// 10000-pixel strip, and assert the internal `Vec`s never grew past
+/// `chunk_size` capacity.
+#[test]
+fn pipeline_memory_bounded_by_chunk_size() {
+    use zentone::pipeline::{
+        tonemap_pq_rgba_row_simd, tonemap_pq_to_srgb8_rgba_row_simd, tonemap_pq_to_srgb8_row_simd,
+    };
+
+    let tm = Bt2408Tonemapper::new(4000.0, 1000.0);
+    let chunk = 64_usize;
+    let mut scratch = TonemapScratch::with_chunk_size(chunk);
+
+    // 10000 pixels — well beyond the chunk cap.
+    let n = 10_000;
+    let strip3 = synth_pipeline_strip(n, 13);
+    let strip4: Vec<[f32; 4]> = strip3.iter().map(|p| [p[0], p[1], p[2], 0.5]).collect();
+
+    let mut out3 = vec![[0.0_f32; 3]; n];
+    tonemap_pq_row_simd(&mut scratch, &strip3, &mut out3, &tm);
+
+    let mut out_u8_3 = vec![[0u8; 3]; n];
+    tonemap_pq_to_srgb8_row_simd(&mut scratch, &strip3, &mut out_u8_3, &tm);
+
+    let mut out4 = vec![[0.0_f32; 4]; n];
+    tonemap_pq_rgba_row_simd(&mut scratch, &strip4, &mut out4, &tm);
+
+    let mut out_u8_4 = vec![[0u8; 4]; n];
+    tonemap_pq_to_srgb8_rgba_row_simd(&mut scratch, &strip4, &mut out_u8_4, &tm);
+
+    // The Vec buffers may grow to ~chunk capacity; allow a small slack
+    // (Vec's growth strategy is amortized doubling, but resize-to-N doesn't
+    // overshoot beyond N for the first growth).
+    assert!(
+        scratch.linear_rgb_capacity() <= chunk * 2,
+        "linear_rgb capacity {} exceeded 2× chunk size {chunk}",
+        scratch.linear_rgb_capacity()
+    );
+    assert!(
+        scratch.u8_rgb_capacity() <= chunk * 2,
+        "u8_rgb capacity {} exceeded 2× chunk size {chunk}",
+        scratch.u8_rgb_capacity()
+    );
+    println!(
+        "pipeline_memory_bounded_by_chunk_size: chunk={chunk}, len={n}, \
+         linear_rgb_cap={}, u8_rgb_cap={}",
+        scratch.linear_rgb_capacity(),
+        scratch.u8_rgb_capacity()
+    );
 }

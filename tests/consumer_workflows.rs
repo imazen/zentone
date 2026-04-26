@@ -293,6 +293,7 @@ fn custom_pipeline_gamut_convert_and_soft_clip() {
 
 #[test]
 fn pq_pipeline_all_tonemappers_in_range() {
+    use zentone::TonemapScratch;
     use zentone::pipeline::tonemap_pq_row_simd;
 
     // 16 neutral PQ gray ramp pixels
@@ -303,9 +304,10 @@ fn pq_pipeline_all_tonemappers_in_range() {
         pq_row.push([pq, pq, pq]);
     }
 
+    let mut scratch = TonemapScratch::new();
     for (name, tm) in all_configs() {
         let mut out = vec![[0.0_f32; 3]; pq_row.len()];
-        tonemap_pq_row_simd(&pq_row, &mut out, tm.as_ref());
+        tonemap_pq_row_simd(&mut scratch, &pq_row, &mut out, tm.as_ref());
 
         for (i, px) in out.iter().enumerate() {
             for (ch, &v) in px.iter().enumerate() {

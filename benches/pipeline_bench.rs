@@ -26,7 +26,7 @@ use zentone::hlg::{
 use zentone::pipeline::{tonemap_pq_row_simd, tonemap_pq_to_srgb8_row_simd};
 use zentone::{
     AgxLook, Bt2408Tonemapper, Bt2446A, Bt2446B, Bt2446C, CompiledFilmicSpline, ToneMap,
-    ToneMapCurve,
+    ToneMapCurve, TonemapScratch,
 };
 
 // ---------------------------------------------------------------------------
@@ -129,18 +129,30 @@ where
     let pq_b = pq_a.clone();
     let scalar = ScalarFallback(mk());
     let mut out_a = vec![[0.0_f32; 3]; width];
+    let mut scratch_a = TonemapScratch::new();
     g.bench(format!("{name}_w{width}_scalar"), move |b| {
         b.iter(|| {
-            tonemap_pq_row_simd(black_box(&pq_a), black_box(&mut out_a), &scalar);
+            tonemap_pq_row_simd(
+                &mut scratch_a,
+                black_box(&pq_a),
+                black_box(&mut out_a),
+                &scalar,
+            );
             black_box(&out_a);
         });
     });
 
     let curve = mk();
     let mut out_b = vec![[0.0_f32; 3]; width];
+    let mut scratch_b = TonemapScratch::new();
     g.bench(format!("{name}_w{width}_simd"), move |b| {
         b.iter(|| {
-            tonemap_pq_row_simd(black_box(&pq_b), black_box(&mut out_b), &curve);
+            tonemap_pq_row_simd(
+                &mut scratch_b,
+                black_box(&pq_b),
+                black_box(&mut out_b),
+                &curve,
+            );
             black_box(&out_b);
         });
     });
@@ -201,18 +213,30 @@ fn bench_e2e_pq_to_srgb8(suite: &mut Suite) {
 
         let pq_a = pq.clone();
         let mut out_a = vec![[0u8; 3]; w];
+        let mut scratch_a = TonemapScratch::new();
         g.bench("pq_to_srgb8_w1024_scalar", move |b| {
             b.iter(|| {
-                tonemap_pq_to_srgb8_row_simd(black_box(&pq_a), black_box(&mut out_a), &scalar);
+                tonemap_pq_to_srgb8_row_simd(
+                    &mut scratch_a,
+                    black_box(&pq_a),
+                    black_box(&mut out_a),
+                    &scalar,
+                );
                 black_box(&out_a);
             });
         });
 
         let pq_b = pq;
         let mut out_b = vec![[0u8; 3]; w];
+        let mut scratch_b = TonemapScratch::new();
         g.bench("pq_to_srgb8_w1024_simd", move |b| {
             b.iter(|| {
-                tonemap_pq_to_srgb8_row_simd(black_box(&pq_b), black_box(&mut out_b), &curve);
+                tonemap_pq_to_srgb8_row_simd(
+                    &mut scratch_b,
+                    black_box(&pq_b),
+                    black_box(&mut out_b),
+                    &curve,
+                );
                 black_box(&out_b);
             });
         });
