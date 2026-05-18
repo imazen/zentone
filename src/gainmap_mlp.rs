@@ -118,23 +118,32 @@ impl<'a> GainMapMlpDecoder<'a> {
     /// `width` and `height` must be ≥ 1; the constructor panics
     /// otherwise (decoder construction is a build-time invariant
     /// rather than a per-call check).
-    pub fn new(
-        model: &'a Model,
-        width: u32,
-        height: u32,
-        cfg: GainMapMlpConfig,
-    ) -> Result<Self> {
+    pub fn new(model: &'a Model, width: u32, height: u32, cfg: GainMapMlpConfig) -> Result<Self> {
         if width == 0 || height == 0 {
-            return Err(Error::gainmap_mlp(
-                "width and height must be >= 1",
-            ));
+            return Err(Error::gainmap_mlp("width and height must be >= 1"));
         }
         validate_bake_shape(model)?;
+        // Normalise coordinates to **[0, 1] inclusive** to match the
+        // trainer convention `idx / (n - 1)`. A 1-pixel axis collapses
+        // to the constant 0 (no division). This must match the trainer
+        // exactly — the sinusoidal frequency schedule is calibrated
+        // against this coordinate space and high-frequency terms are
+        // wildly sensitive to a single-pixel offset.
+        let inv_width = if width > 1 {
+            1.0 / ((width - 1) as f32)
+        } else {
+            0.0
+        };
+        let inv_height = if height > 1 {
+            1.0 / ((height - 1) as f32)
+        } else {
+            0.0
+        };
         Ok(Self {
             predictor: Predictor::new(model),
             cfg,
-            inv_width: 1.0 / (width.max(1) as f32),
-            inv_height: 1.0 / (height.max(1) as f32),
+            inv_width,
+            inv_height,
             raw_input: [0.0; 5],
         })
     }
@@ -147,12 +156,7 @@ impl<'a> GainMapMlpDecoder<'a> {
     /// `y_norm = 0.0` and the bottom row sees `y_norm = 1.0`. For a
     /// 1-row image the normaliser degenerates to `0.0` — fine because
     /// the MLP only sees one y value during training.
-    pub fn apply_row(
-        &mut self,
-        y_pixel: u32,
-        sdr_row: &[f32],
-        hdr_row: &mut [f32],
-    ) -> Result<()> {
+    pub fn apply_row(&mut self, y_pixel: u32, sdr_row: &[f32], hdr_row: &mut [f32]) -> Result<()> {
         if sdr_row.len() != hdr_row.len() {
             return Err(Error::gainmap_mlp(
                 "sdr_row and hdr_row must be the same length",
@@ -164,11 +168,7 @@ impl<'a> GainMapMlpDecoder<'a> {
             ));
         }
         let width = sdr_row.len() / 3;
-        let y_norm = if self.inv_height < 1.0 {
-            (y_pixel as f32) * self.inv_height
-        } else {
-            0.0
-        };
+        let y_norm = (y_pixel as f32) * self.inv_height;
         let eps = self.cfg.epsilon;
         for px in 0..width {
             let x_norm = (px as f32) * self.inv_width;
