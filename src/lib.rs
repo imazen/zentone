@@ -204,6 +204,8 @@ pub mod curves;
 mod error;
 mod filmic_spline;
 pub mod gainmap;
+#[cfg(feature = "gainmap-mlp")]
+pub mod gainmap_mlp;
 pub mod gamut;
 pub mod hlg;
 mod math;
@@ -227,6 +229,8 @@ pub use gainmap::{
     Bt2408Yrgb, ExtendedReinhardLuma, HableFilmic, LumaFn, LumaGainMapSplitter, LumaToneMap,
     SplitConfig, SplitStats,
 };
+#[cfg(feature = "gainmap-mlp")]
+pub use gainmap_mlp::{DEFAULT_EPSILON, GainMapMlpConfig, GainMapMlpDecoder};
 pub use scratch::TonemapScratch;
 pub use tone_map::ToneMap;
 

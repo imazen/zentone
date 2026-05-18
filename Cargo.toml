@@ -41,18 +41,30 @@ avx512 = ["archmage/avx512", "magetypes/avx512"]
 # until stabilized. (The ISO 21496-1 / Apple Ultra HDR gain-map splitter formerly
 # gated here graduated to the always-available `gainmap` module.)
 experimental = []
+# Gain-MLP (Canham et al. 2025) per-pixel HDR reconstruction. Pulls
+# in zenpredict for ZNPR v3 bake loading + MLP forward; otherwise zero
+# zentone API surface depends on zenpredict.
+gainmap-mlp = ["dep:zenpredict"]
 
 [dependencies]
 linear-srgb = { version = "0.6.12", default-features = false, features = ["transfer"] }
 libm = { version = "0.2", default-features = false }
 archmage = { version = "0.9.22", default-features = false, features = ["macros"] }
 magetypes = { version = "0.9.22", default-features = false }
+# Optional — feature-gated; supports no_std default. Path dep for now;
+# flips to a published version once zenanalyze#77
+# (FeatureTransform::Sinusoidal) lands on main and ships a release.
+zenpredict = { path = "../zenanalyze--featuretransform-sinusoidal/zenpredict", default-features = false, optional = true }
 
 [dev-dependencies]
 gainforge = "0.4.1"
 moxcms = "0.8.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 zensim = "0.2.6"
+# Used by Gain-MLP integration tests to bake synthetic ZNPR v3 models
+# directly (avoids needing a real trained bake on disk for unit-style
+# testing). Path-dep to keep all the sinusoidal-branch code coherent.
+zenpredict-bake = { path = "../zenanalyze--featuretransform-sinusoidal/zenpredict-bake", default-features = false }
 
 # Native-only: benchmark dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

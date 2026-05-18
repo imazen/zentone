@@ -1,5 +1,8 @@
 //! Error type.
 
+#[cfg(feature = "gainmap-mlp")]
+extern crate alloc;
+
 use core::fmt;
 
 /// Result alias for zentone.
@@ -9,6 +12,18 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
+    /// Gain-MLP decoder rejected the supplied bake or call. The
+    /// `&'static str` is a short identifier (e.g.
+    /// `"Gain-MLP bake must have n_outputs = 3"`) — the full
+    /// rationale lives in `gainmap_mlp.rs`'s docstrings.
+    GainMapMlp(&'static str),
+    /// Underlying zenpredict failure during Gain-MLP forward pass.
+    /// Carries the `Debug` representation of the original
+    /// [`zenpredict::PredictError`] so the wrapper stays
+    /// `Clone + PartialEq + Eq` without depending on the upstream
+    /// type's derives.
+    #[cfg(feature = "gainmap-mlp")]
+    GainMapMlpPredict(alloc::string::String),
     /// Input buffer is too small for the declared dimensions and channel count.
     BufferTooSmall {
         /// Required length in elements.
@@ -75,7 +90,28 @@ impl fmt::Display for Error {
                 write!(f, "streaming ring buffer full — pull a row before pushing")
             }
             Error::InvalidConfig(msg) => write!(f, "invalid config: {msg}"),
+            Error::GainMapMlp(msg) => write!(f, "gain-mlp: {msg}"),
+            #[cfg(feature = "gainmap-mlp")]
+            Error::GainMapMlpPredict(msg) => write!(f, "gain-mlp predict: {msg}"),
         }
+    }
+}
+
+impl Error {
+    /// Gain-MLP runtime error with a short static identifier.
+    pub(crate) const fn gainmap_mlp(msg: &'static str) -> Self {
+        Self::GainMapMlp(msg)
+    }
+
+    /// Wrap a `zenpredict::PredictError` for the Gain-MLP path.
+    /// Goes through `Debug` so the error type stays
+    /// `Clone + PartialEq + Eq` without depending on upstream derives.
+    #[cfg(feature = "gainmap-mlp")]
+    pub(crate) fn gainmap_mlp_predict(e: zenpredict::PredictError) -> Self {
+        use core::fmt::Write;
+        let mut buf = alloc::string::String::with_capacity(64);
+        let _ = write!(&mut buf, "{e:?}");
+        Self::GainMapMlpPredict(buf)
     }
 }
 
