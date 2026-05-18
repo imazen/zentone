@@ -65,6 +65,11 @@ zensim = "0.2.6"
 # directly (avoids needing a real trained bake on disk for unit-style
 # testing). Path-dep to keep all the sinusoidal-branch code coherent.
 zenpredict-bake = { path = "../zenanalyze--featuretransform-sinusoidal/zenpredict-bake", default-features = false }
+# Cross-crate `'zmlp'` transport test: bake → AVIF muxer → AVIF parser
+# → decoder produces byte-identical output. Path-deps until
+# zenavif-serialize#2 and zenavif-parse#6 land + ship a release.
+zenavif-serialize = { path = "../zenavif-serialize--gainmlp" }
+zenavif-parse = { path = "../zenavif-parse--zmlp-extractor" }
 
 # Native-only: benchmark dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
