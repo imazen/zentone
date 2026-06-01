@@ -17,12 +17,14 @@ exclude = [
     ".claude/",
     ".github/",
     ".workongoing",
+    ".gitignore",
     "Cross.toml",
     "justfile",
     "fuzz/",
     "reference-checks/",
     "benchmarks/",
     "GAIN-MAP-ARCHITECTURE.md",
+    "tests/",
 ]
 
 [lints.rust]

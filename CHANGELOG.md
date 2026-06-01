@@ -11,6 +11,10 @@ adheres to semver.
 <!-- Breaking changes that will ship together in the next major (or minor for 0.x) release.
      Add items here as you discover them. Do NOT ship these piecemeal — batch them. -->
 
+### Changed
+
+- Exclude `tests/` and `.gitignore` from the published crate package to reduce crate download size (~234 KB saved); `benches/` retained due to explicit `[[bench]]` targets in Cargo.toml.
+
 ## [0.1.0] - 2026-04-26
 
 First publish to crates.io.
