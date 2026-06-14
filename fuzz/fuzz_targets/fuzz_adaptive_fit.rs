@@ -38,10 +38,11 @@ fuzz_target!(|data: &[u8]| {
     let hdr = &floats[..half];
     let sdr = &floats[half..half * 2];
 
-    let cfg = FitConfig {
-        max_samples: 1000, // keep fit cheap
-        ..Default::default()
-    };
+    // `FitConfig` is `#[non_exhaustive]`, so it cannot be built with a struct
+    // literal (even with `..Default::default()`) from outside the crate. Start
+    // from `Default` and mutate the fields we want.
+    let mut cfg = FitConfig::default();
+    cfg.max_samples = 1000; // keep fit cheap
 
     match mode {
         0 => {

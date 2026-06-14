@@ -19,11 +19,12 @@ fuzz_target!(|data: &[u8]| {
     let cell_size = (data[3] as u32 % 16).max(1);
     let lookahead = (data[4] as u32 % 32).max(1);
 
-    let cfg = StreamingTonemapConfig {
-        cell_size,
-        lookahead_rows: lookahead,
-        ..Default::default()
-    };
+    // `StreamingTonemapConfig` is `#[non_exhaustive]`, so it cannot be built
+    // with a struct literal (even with `..Default::default()`) from outside the
+    // crate. Start from `Default` and mutate the fields we want.
+    let mut cfg = StreamingTonemapConfig::default();
+    cfg.cell_size = cell_size;
+    cfg.lookahead_rows = lookahead;
 
     let mut tm = match StreamingTonemapper::new(width, height, channels, cfg) {
         Ok(t) => t,

@@ -22,18 +22,19 @@ fuzz_target!(|data: &[u8]| {
         v
     };
 
-    let cfg = FilmicSplineConfig {
-        output_power: f(0).clamp(0.1, 10.0),
-        latitude: f(1).clamp(0.0, 100.0),
-        white_point_source: f(2).clamp(0.5, 10.0),
-        black_point_source: f(3).clamp(-15.0, -0.5),
-        contrast: f(4).clamp(0.1, 5.0),
-        black_point_target: f(5).clamp(0.0, 10.0),
-        grey_point_target: f(6).clamp(1.0, 50.0),
-        white_point_target: f(7).clamp(50.0, 100.0),
-        balance: f(8).clamp(-50.0, 50.0),
-        saturation: f(9).clamp(0.0, 100.0),
-    };
+    // `FilmicSplineConfig` is `#[non_exhaustive]`, so it cannot be built with a
+    // struct literal from outside the crate. Start from `Default` and mutate.
+    let mut cfg = FilmicSplineConfig::default();
+    cfg.output_power = f(0).clamp(0.1, 10.0);
+    cfg.latitude = f(1).clamp(0.0, 100.0);
+    cfg.white_point_source = f(2).clamp(0.5, 10.0);
+    cfg.black_point_source = f(3).clamp(-15.0, -0.5);
+    cfg.contrast = f(4).clamp(0.1, 5.0);
+    cfg.black_point_target = f(5).clamp(0.0, 10.0);
+    cfg.grey_point_target = f(6).clamp(1.0, 50.0);
+    cfg.white_point_target = f(7).clamp(50.0, 100.0);
+    cfg.balance = f(8).clamp(-50.0, 50.0);
+    cfg.saturation = f(9).clamp(0.0, 100.0);
 
     let spline = CompiledFilmicSpline::new(&cfg);
 
