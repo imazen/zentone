@@ -33,6 +33,8 @@ let mut row = vec![0.3_f32, 0.5, 0.2, 0.7, 0.1, 0.9];
 tm.map_row(&mut row, 3); // 3 = RGB, 4 = RGBA (alpha preserved)
 ```
 
+`map_row` rewrites interleaved **linear-light** f32 in place to linear SDR. `channels` is a `u8` that must be 3 or 4 (any other value panics), and the row length must be a multiple of it. Output is mostly `[0, 1]`, though some unclamped curves slightly exceed it — the sRGB OETF and 8-bit quantization live in [`linear-srgb`](https://lib.rs/crates/linear-srgb), or use the fused `pipeline` kernels below for direct sRGB-`u8` output.
+
 Fused SIMD strip pipeline — PQ EOTF → tone map → BT.2020→BT.709 → soft clip → sRGB OETF:
 
 ```rust
@@ -90,6 +92,8 @@ Curves that need RGB→Y weights take them at construction. Use `LUMA_BT709`, `L
 | `sdr_hdr` | Reference-white scaling (100 ↔ 203 nits), OOTF gamma adjustments per BT.2408 §5.1 |
 | `pipeline` | Fused PQ/HLG → tone-map → BT.709 → soft-clip strip kernels, with optional sRGB-u8 output |
 | `gainmap` | `LumaGainMapSplitter`, `LumaToneMap`, `SplitConfig`, `SplitStats`, plus adapters and PQ/HLG row helpers |
+
+The six `gamut` matrices are public consts in the `gamut` module — `gamut::BT2020_TO_BT709`, `BT709_TO_BT2020`, `P3_TO_BT709`, `BT709_TO_P3`, `BT2020_TO_P3`, `P3_TO_BT2020` — applied with `gamut::apply_matrix` (one `[f32; 3]`), `gamut::apply_matrix_row` (interleaved, `channels: usize`), or `gamut::apply_matrix_row_simd` / `apply_matrix_row_simd_rgba` (a `&mut [[f32; 3]]` / `&mut [[f32; 4]]` strip). The common HDR step is `BT2020_TO_BT709`.
 
 ## Architecture
 
