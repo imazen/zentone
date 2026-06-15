@@ -15,6 +15,10 @@ adheres to semver.
 
 - Exclude `tests/` and `.gitignore` from the published crate package to reduce crate download size (~234 KB saved); `benches/` retained due to explicit `[[bench]]` targets in Cargo.toml.
 
+### Fixed
+
+- Tone-map curves no longer emit non-finite (`NaN`/`±Inf`) output for finite input, and the scalar `map_rgb` now agrees with the SIMD `map_row` on extreme/negative inputs (found by the fuzz farm, zentone#21). `ExtendedReinhard` overflowed `l_in·(1 + l_in/l_max²)` to `+Inf` for large luminance (reassociated to keep intermediates finite); `ExtendedReinhard`/`ReinhardJodie`/`TunedReinhard` now clamp channels to non-negative linear light in both scalar and SIMD paths (the SIMD row path already clamped, so the two diverged on negatives). Regression: `tone_map::tests::all_curves_finite_and_parity_on_extreme_inputs` + `fuzz/regression/fuzz_curves_extreme_reinhard_zentone21`.
+
 ## [0.1.0] - 2026-04-26
 
 First publish to crates.io.

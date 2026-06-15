@@ -37,11 +37,24 @@ pub fn reinhard_extended(l_in: f32, l_max: f32) -> f32 {
         return 0.0;
     }
     let l_max_sq = l_max * l_max;
-    l_in * (1.0 + l_in / l_max_sq) / (1.0 + l_in)
+    // Reassociated from `l_in * (1 + l_in/l_max_sq) / (1 + l_in)` to keep every
+    // intermediate finite for large finite `l_in`. The original numerator
+    // `l_in * (1 + l_in/l_max_sq)` grows like l_in² and overflows f32 to +Inf
+    // around l_in ≳ 1e19, which then propagates as ±Inf through the caller's
+    // `rgb * scale` (the NaN/Inf-output fuzz failure, zentone#21). This form
+    // factors out `l_in/(1 + l_in)` (bounded ≤ 1) first, so the product only
+    // reaches ~l_in/l_max_sq — finite for all finite l_in. Algebraically
+    // identical; differs only by ≤1 ULP in the normal range.
+    (l_in / (1.0 + l_in)) * (1.0 + l_in / l_max_sq)
 }
 
 /// Reinhard-Jodie tone mapping (per-channel and luminance-based blend).
 pub fn reinhard_jodie(rgb: [f32; 3], luma_coeffs: [f32; 3]) -> [f32; 3] {
+    // Clamp to non-negative linear light and clamp the result to [0, 1],
+    // matching the SIMD row path (`simd::reinhard_jodie_3_tier`, which does
+    // `.max(zero)` on inputs and `.min(one).max(zero)` on output). Without this
+    // the scalar and SIMD paths diverged on negative input (zentone#21 sweep).
+    let rgb = [rgb[0].max(0.0), rgb[1].max(0.0), rgb[2].max(0.0)];
     let luma = rgb[0] * luma_coeffs[0] + rgb[1] * luma_coeffs[1] + rgb[2] * luma_coeffs[2];
     if luma <= 0.0 {
         return [0.0, 0.0, 0.0];
@@ -50,7 +63,10 @@ pub fn reinhard_jodie(rgb: [f32; 3], luma_coeffs: [f32; 3]) -> [f32; 3] {
     let mut out = [0.0f32; 3];
     for i in 0..3 {
         let tv = rgb[i] / (1.0 + rgb[i]);
-        out[i] = ((1.0 - tv) * (rgb[i] * luma_scale) + tv * tv).min(1.0);
+        // Inputs are clamped non-negative above, so the expression is finite;
+        // `clamp` is equivalent to `.min(1.0).max(0.0)` here (no NaN to differ
+        // on) and matches the SIMD path's [0, 1] output range.
+        out[i] = ((1.0 - tv) * (rgb[i] * luma_scale) + tv * tv).clamp(0.0, 1.0);
     }
     out
 }
@@ -382,15 +398,27 @@ impl ToneMap for ToneMapCurve {
                 reinhard_simple(rgb[2]).min(1.0),
             ],
             ToneMapCurve::ExtendedReinhard { l_max, luma } => {
-                let l = rgb[0] * luma[0] + rgb[1] * luma[1] + rgb[2] * luma[2];
+                // Clamp to non-negative linear light first, matching the SIMD row
+                // path (`simd::ext_reinhard_3_tier`, which does `.max(zero)` per
+                // channel). Negative scene-linear input is unphysical; without
+                // this the scalar `map_rgb` and the SIMD `map_row` diverged on
+                // negative channels — and within one SIMD row the main loop
+                // (clamped) and the scalar remainder (unclamped) disagreed.
+                // A large negative channel times the scale also produced -Inf
+                // (fuzz #21). reinhard_extended is now overflow-safe, so with
+                // non-negative inputs the output is finite and in [0, 1].
+                let r = rgb[0].max(0.0);
+                let g = rgb[1].max(0.0);
+                let b = rgb[2].max(0.0);
+                let l = r * luma[0] + g * luma[1] + b * luma[2];
                 if l <= 0.0 {
                     return [0.0, 0.0, 0.0];
                 }
                 let scale = reinhard_extended(l, l_max) / l;
                 [
-                    (rgb[0] * scale).min(1.0),
-                    (rgb[1] * scale).min(1.0),
-                    (rgb[2] * scale).min(1.0),
+                    (r * scale).min(1.0),
+                    (g * scale).min(1.0),
+                    (b * scale).min(1.0),
                 ]
             }
             ToneMapCurve::ReinhardJodie { luma } => reinhard_jodie(rgb, luma),
@@ -399,15 +427,25 @@ impl ToneMap for ToneMapCurve {
                 display_max_nits,
                 luma,
             } => {
-                let l = rgb[0] * luma[0] + rgb[1] * luma[1] + rgb[2] * luma[2];
+                // Clamp to non-negative linear light first, consistent with the
+                // other Reinhard variants and required for scalar/SIMD parity.
+                // The pre-fix SIMD kernel fed raw channels into the rational
+                // `(1 + w_a·l)/(1 + w_b·l)`; a negative luminance `l` made both
+                // terms negative and the ratio produced garbage (≈ -1.3e36),
+                // while scalar guarded `l <= 0` → black. Clamping per channel
+                // makes `l ≥ 0`, so both paths agree.
+                let r = rgb[0].max(0.0);
+                let g = rgb[1].max(0.0);
+                let b = rgb[2].max(0.0);
+                let l = r * luma[0] + g * luma[1] + b * luma[2];
                 if l <= 0.0 {
                     return [0.0, 0.0, 0.0];
                 }
                 let scale = tuned_reinhard(l, content_max_nits, display_max_nits);
                 [
-                    (rgb[0] * scale).min(1.0),
-                    (rgb[1] * scale).min(1.0),
-                    (rgb[2] * scale).min(1.0),
+                    (r * scale).min(1.0),
+                    (g * scale).min(1.0),
+                    (b * scale).min(1.0),
                 ]
             }
             ToneMapCurve::Narkowicz => [

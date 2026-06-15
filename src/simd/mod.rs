@@ -578,9 +578,13 @@ fn tuned_reinhard_3_tier(
             ga[i] = chunk[i * 3 + 1];
             ba[i] = chunk[i * 3 + 2];
         }
-        let r = f32x8::load(token, &ra);
-        let g = f32x8::load(token, &ga);
-        let b = f32x8::load(token, &ba);
+        // Clamp to non-negative linear light, matching the scalar `map_rgb`
+        // path. A negative luminance otherwise made `(1 + w_a·l)/(1 + w_b·l)`
+        // return garbage instead of black (scalar/SIMD divergence, zentone#21
+        // sweep).
+        let r = f32x8::load(token, &ra).max(zero);
+        let g = f32x8::load(token, &ga).max(zero);
+        let b = f32x8::load(token, &ba).max(zero);
         let l = r * lr + g * lg + b * lb;
         let scale = ((one + w_a * l) / (one + w_b * l)).max(zero);
         let ro = (r * scale).min(one).to_array();
@@ -633,9 +637,13 @@ fn tuned_reinhard_4_tier(
             ga[i] = chunk[i * 4 + 1];
             ba[i] = chunk[i * 4 + 2];
         }
-        let r = f32x8::load(token, &ra);
-        let g = f32x8::load(token, &ga);
-        let b = f32x8::load(token, &ba);
+        // Clamp to non-negative linear light, matching the scalar `map_rgb`
+        // path. A negative luminance otherwise made `(1 + w_a·l)/(1 + w_b·l)`
+        // return garbage instead of black (scalar/SIMD divergence, zentone#21
+        // sweep).
+        let r = f32x8::load(token, &ra).max(zero);
+        let g = f32x8::load(token, &ga).max(zero);
+        let b = f32x8::load(token, &ba).max(zero);
         let l = r * lr + g * lg + b * lb;
         let scale = ((one + w_a * l) / (one + w_b * l)).max(zero);
         let ro = (r * scale).min(one).to_array();

@@ -319,4 +319,101 @@ mod tests {
         let mut dst = [0.0_f32; 12];
         ToneMapCurve::Reinhard.map_into(&src, &mut dst, 5);
     }
+
+    /// Every `ToneMapCurve` variant must produce **finite** output for any
+    /// finite input — including extreme magnitudes and negatives — and the
+    /// scalar `map_rgb` must agree with the SIMD `map_row` on those inputs.
+    ///
+    /// Regression for the `ExtendedReinhard` fuzz finding (zentone#21): a large
+    /// finite luminance overflowed the `l_in * (1 + l_in/l_max²)` numerator to
+    /// +Inf, and a large *negative* channel then mapped to -Inf. The pre-fix
+    /// SIMD row path clamped negatives (`.max(zero)`) while the scalar path did
+    /// not, so the two diverged on exactly these inputs (and the existing parity
+    /// test only covered the well-behaved `[0, 4]` range).
+    #[test]
+    fn all_curves_finite_and_parity_on_extreme_inputs() {
+        let all = [
+            ToneMapCurve::Reinhard,
+            ToneMapCurve::ExtendedReinhard {
+                l_max: 4.0,
+                luma: LUMA_BT709,
+            },
+            ToneMapCurve::ReinhardJodie { luma: LUMA_BT709 },
+            ToneMapCurve::TunedReinhard {
+                content_max_nits: 4000.0,
+                display_max_nits: 250.0,
+                luma: LUMA_BT709,
+            },
+            ToneMapCurve::Narkowicz,
+            ToneMapCurve::HableFilmic,
+            ToneMapCurve::AcesAp1,
+            ToneMapCurve::Bt2390 {
+                source_peak: 4.0,
+                target_peak: 1.0,
+            },
+            ToneMapCurve::Agx(AgxLook::Default),
+            ToneMapCurve::Agx(AgxLook::Punchy),
+            ToneMapCurve::Agx(AgxLook::Golden),
+            ToneMapCurve::Clamp,
+        ];
+        // The actual fuzz repro values (zentone#21) plus assorted extremes.
+        let extremes: [f32; 8] = [
+            -1.786_909_4e28,
+            2.502_786e29,
+            2.976_493e29,
+            f32::MAX,
+            -f32::MAX,
+            1.0e-35, // near-subnormal
+            0.0,
+            -0.0,
+        ];
+        let mut fails: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
+        for curve in all {
+            // map_rgb: finite for every triple drawn from the extremes.
+            for &r in &extremes {
+                for &g in &extremes {
+                    for &b in &extremes {
+                        let out = curve.map_rgb([r, g, b]);
+                        for &v in &out {
+                            if !v.is_finite() {
+                                fails.push(alloc::format!(
+                                    "{curve:?} map_rgb({r:e},{g:e},{b:e}) -> non-finite {v}"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            // Parity: SIMD map_row must match scalar map_rgb on an extreme row,
+            // including the negative/huge values the [0,4] parity test misses.
+            let mut row: alloc::vec::Vec<f32> = alloc::vec::Vec::new();
+            for i in 0..extremes.len() {
+                row.push(extremes[i]);
+                row.push(extremes[(i + 1) % extremes.len()]);
+                row.push(extremes[(i + 2) % extremes.len()]);
+            }
+            let mut via_row = row.clone();
+            curve.map_row(&mut via_row, 3);
+            for (i, chunk) in row.chunks_exact(3).enumerate() {
+                let m = curve.map_rgb([chunk[0], chunk[1], chunk[2]]);
+                for k in 0..3 {
+                    let a = via_row[i * 3 + k];
+                    let b = m[k];
+                    if !(a.is_finite() && b.is_finite())
+                        || (a - b).abs() > 1e-5 * (1.0 + a.abs().max(b.abs()))
+                    {
+                        fails.push(alloc::format!(
+                            "{curve:?} row/scalar diverge at px[{i}]ch[{k}]: row={a:e} scalar={b:e}"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            fails.is_empty(),
+            "{} divergence(s):\n{}",
+            fails.len(),
+            fails.join("\n")
+        );
+    }
 }
