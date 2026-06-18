@@ -771,6 +771,51 @@ pub fn normalized_linear_to_hlg_row_with_mode(
     }
 }
 
+/// Encode a display-linear HDR [`PixelSlice`](zenpixels::PixelSlice)
+/// (`RgbF32`/`RgbaF32`, `1.0 = content_peak_nits`) to an HLG `RGB16`
+/// [`PixelBuffer`](zenpixels::PixelBuffer) in one call — the PixelBuffer-level
+/// companion to [`normalized_linear_to_hlg_row`]. Applies the BT.2100 inverse
+/// OOTF + HLG OETF (the same `Exact` kernel), quantizes to native-endian
+/// `u16` (round-to-nearest, clamped), and drops alpha. Returns `None` for
+/// non-`{Rgb,Rgba}F32`-Linear input.
+///
+/// The output descriptor is `RGB16_SRGB` (a plain 16-bit RGB container — the
+/// HLG transfer is a *signalling* concern the encoder carries via cICP, not a
+/// property of the sample buffer). Gated on the `zenpixels` feature so the
+/// core stays container-agnostic.
+#[cfg(feature = "zenpixels")]
+pub fn normalized_linear_to_hlg_buffer(
+    src: zenpixels::PixelSlice<'_>,
+    display_peak_nits: f32,
+    content_peak_nits: f32,
+) -> Option<zenpixels::PixelBuffer> {
+    use zenpixels::{PixelDescriptor, PixelFormat, TransferFunction};
+    let desc = src.descriptor();
+    let channels: u8 = match desc.pixel_format() {
+        PixelFormat::RgbF32 => 3,
+        PixelFormat::RgbaF32 => 4,
+        _ => return None,
+    };
+    if desc.transfer != TransferFunction::Linear {
+        return None;
+    }
+    let (w, h) = (src.width(), src.rows());
+    let mut buf: alloc::vec::Vec<f32> = src
+        .contiguous_bytes()
+        .chunks_exact(4)
+        .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    normalized_linear_to_hlg_row(&mut buf, channels, display_peak_nits, content_peak_nits);
+    let mut bytes = alloc::vec::Vec::with_capacity(w as usize * h as usize * 6);
+    for px in buf.chunks_exact(channels as usize) {
+        for &c in &px[..3] {
+            let q = (c.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
+            bytes.extend_from_slice(&q.to_ne_bytes());
+        }
+    }
+    zenpixels::PixelBuffer::from_vec(bytes, w, h, PixelDescriptor::RGB16_SRGB).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1244,5 +1289,45 @@ mod tests {
         let mut gain = [0.0_f32; 6];
         let mut stats = SplitStats::default();
         split.split_row(&[0.0_f32; 12], &mut sdr, &mut gain, 2, &mut stats);
+    }
+}
+
+#[cfg(all(test, feature = "zenpixels"))]
+mod hlg_buffer_tests {
+    use super::normalized_linear_to_hlg_buffer;
+    use super::normalized_linear_to_hlg_row;
+    use alloc::vec::Vec;
+    use zenpixels::{PixelBuffer, PixelDescriptor, PixelFormat};
+
+    /// The PixelBuffer encoder is byte-identical to the row kernel + the
+    /// documented quantize (clamp, round-to-nearest, drop alpha → RGB16).
+    #[test]
+    fn buffer_encoder_matches_row_kernel() {
+        let (w, h) = (2u32, 1u32);
+        let px = [0.25f32, 0.25, 0.25, 1.0, 4.0, 4.0, 4.0, 1.0];
+        let bytes: Vec<u8> = px.iter().flat_map(|f| f.to_ne_bytes()).collect();
+        let src = PixelBuffer::from_vec(bytes, w, h, PixelDescriptor::RGBAF32_LINEAR).unwrap();
+
+        let out = normalized_linear_to_hlg_buffer(src.as_slice(), 1000.0, 203.0).unwrap();
+        assert_eq!(out.descriptor().pixel_format(), PixelFormat::Rgb16);
+        assert_eq!((out.as_slice().width(), out.as_slice().rows()), (w, h));
+
+        let mut f = px.to_vec();
+        normalized_linear_to_hlg_row(&mut f, 4, 1000.0, 203.0);
+        let mut want = Vec::new();
+        for p in f.chunks_exact(4) {
+            for &c in &p[..3] {
+                want.extend_from_slice(&((c.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).to_ne_bytes());
+            }
+        }
+        assert_eq!(out.as_slice().contiguous_bytes().as_ref(), want.as_slice());
+    }
+
+    /// Non-`{Rgb,Rgba}F32`-Linear input is rejected.
+    #[test]
+    fn buffer_encoder_rejects_non_linear_f32() {
+        let buf =
+            PixelBuffer::from_vec(alloc::vec![0u8; 12], 2, 2, PixelDescriptor::GRAY8_SRGB).unwrap();
+        assert!(normalized_linear_to_hlg_buffer(buf.as_slice(), 1000.0, 203.0).is_none());
     }
 }

@@ -43,9 +43,14 @@ avx512 = ["archmage/avx512", "magetypes/avx512"]
 # until stabilized. (The ISO 21496-1 / Apple Ultra HDR gain-map splitter formerly
 # gated here graduated to the always-available `gainmap` module.)
 experimental = []
+# Optional zenpixels integration: PixelSlice/PixelBuffer-level entry points
+# (e.g. `gainmap::normalized_linear_to_hlg_buffer`) wrapping the dep-free
+# `&mut [f32]` row kernels. The core stays container-agnostic.
+zenpixels = ["dep:zenpixels"]
 
 [dependencies]
 linear-srgb = { version = "0.6.12", default-features = false, features = ["transfer"] }
+zenpixels = { version = "0.2.14", optional = true, default-features = false }
 libm = { version = "0.2", default-features = false }
 archmage = { version = "0.9.22", default-features = false, features = ["macros"] }
 magetypes = { version = "0.9.22", default-features = false }
