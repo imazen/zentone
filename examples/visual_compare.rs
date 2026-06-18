@@ -1,14 +1,18 @@
 //! Comprehensive visual comparison of all zentone tonemappers.
 //!
-//! Generates multiple synthetic HDR test scenes, applies every tonemapper,
-//! computes zensim scores, saves individual PNGs and a montage.
+//! Generates synthetic HDR test scenes plus a real-image set drawn from the
+//! imazen-26 PQ-encoded PNG-3.0 HDR corpus, applies every tonemapper, computes
+//! zensim scores, saves individual PNGs and a montage. The real-image scene
+//! directories also carry an `00_hdr_native.png` — a copy of the source PNG
+//! 3.0 (cICP=BT.709 primaries + PQ transfer, 16-bit) that the OS renders as
+//! native HDR on a compliant display.
 //!
 //! Run:
 //! ```
 //! cargo run --example visual_compare --features experimental --release
 //! ```
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use zensim::{RgbSlice, Zensim, ZensimProfile};
 use zentone::experimental::{StreamingTonemapConfig, StreamingTonemapper};
@@ -155,6 +159,105 @@ fn scene_room_window() -> Vec<f32> {
 }
 
 // ============================================================================
+// imazen-26 real-image HDR scenes (PQ-encoded 16-bit PNGs, cICP signalled)
+// ============================================================================
+
+/// Per-scene HDR mastering peak (cd/m²). The imazen-26 HDR corpus is mastered
+/// at 1000 nits; the demo tonemappers are configured at 8000 — so we feed the
+/// 1000-nit-bounded linear data normalized so `1.0 ≈ hdr_peak_for_tonemapper`.
+const HDR_REAL_PEAK_NITS: f32 = 1000.0;
+
+/// The four representative imazen-26 scenes we ingest. Hand-picked to cover
+/// distinct DR/colour regimes the tonemap curves should differentiate on:
+/// stained-glass interior (massive intra-frame DR), night-with-highlight,
+/// sunset roll-off, controlled food close-up.
+const IMAZEN26_REAL_SCENES: &[(&str, &str)] = &[
+    (
+        "imazen26_stained_glass",
+        "/mnt/v/output/imazen-26-hdr-2026-06-14/1200-lilith-interiors/1227_interiors_stained-glass-window_casa-batllo-barcelona_zfold7_iso1600-f1p7_20260315-205230_3000x4000.hdr.png",
+    ),
+    (
+        "imazen26_night_castle",
+        "/mnt/v/output/imazen-26-hdr-2026-06-14/1000-lilith-photos-general/1069_general_illuminated-castle-night_cinderella-castle-orange_ip13pro_iso500-f1p5_img-7653_2870x3827.hdr.png",
+    ),
+    (
+        "imazen26_ocean_sunset",
+        "/mnt/v/output/imazen-26-hdr-2026-06-14/1400-lilith-nature/1490_nature_boat-wake-at-sunset_unorganized-borough-alaska_s25u_iso200-f1p7_20250804-211018_3000x4000.hdr.png",
+    ),
+    (
+        "imazen26_sashimi",
+        "/mnt/v/output/imazen-26-hdr-2026-06-14/1600-lilith-food/1639_food_sashimi-on-plate_colorado_s25u_iso200-f1p7_20250425-214145_4000x3000.hdr.png",
+    ),
+];
+
+/// SMPTE ST 2084 PQ inverse-EOTF: PQ-encoded `[0, 1]` → absolute cd/m².
+fn pq_inverse_eotf(pq_signal: f32) -> f32 {
+    const M1: f32 = 2610.0 / 16384.0;
+    const M2: f32 = (2523.0 / 4096.0) * 128.0;
+    const C1: f32 = 3424.0 / 4096.0;
+    const C2: f32 = (2413.0 / 4096.0) * 32.0;
+    const C3: f32 = (2392.0 / 4096.0) * 32.0;
+
+    if pq_signal <= 0.0 {
+        return 0.0;
+    }
+    let xp = pq_signal.powf(1.0 / M2);
+    let num = (xp - C1).max(0.0);
+    let den = (C2 - C3 * xp).max(f32::MIN_POSITIVE);
+    let y = (num / den).powf(1.0 / M1);
+    10_000.0 * y
+}
+
+/// Load one imazen-26 HDR PNG and return its native-resolution path plus a
+/// linear-light, demo-aspect-resized `Vec<f32>` normalized so that
+/// `1.0 = HDR_REAL_PEAK_NITS` (the corpus mastering peak).
+///
+/// Real images go through PQ → cd/m² → divide-by-peak; the tonemappers we
+/// pair them with then see the same `[0, 1]` (+ optional supra-1 specular)
+/// range the synthetic scenes use, so the existing apply_tonemap path is
+/// reused unchanged.
+fn load_imazen26_hdr(path: &Path) -> Option<Vec<f32>> {
+    use image::imageops::{FilterType, resize};
+    use image::{DynamicImage, ImageReader, Rgb};
+
+    let img = ImageReader::open(path).ok()?.decode().ok()?;
+    let rgb16: image::ImageBuffer<Rgb<u16>, Vec<u16>> = match img {
+        DynamicImage::ImageRgb16(b) => b,
+        DynamicImage::ImageRgba16(b) => DynamicImage::ImageRgba16(b).into_rgb16(),
+        DynamicImage::ImageRgb8(b) => DynamicImage::ImageRgb8(b).into_rgb16(),
+        other => other.into_rgb16(),
+    };
+    let resized = resize(&rgb16, WIDTH, HEIGHT, FilterType::Lanczos3);
+
+    let mut out = Vec::with_capacity((WIDTH * HEIGHT * 3) as usize);
+    for px in resized.pixels() {
+        for &c in &px.0 {
+            let pq = (c as f32) / 65535.0;
+            let nits = pq_inverse_eotf(pq);
+            out.push(nits / HDR_REAL_PEAK_NITS);
+        }
+    }
+    Some(out)
+}
+
+/// Return the imazen-26 scene set with each entry's source path attached so
+/// `main()` can copy the native PNG-3.0 HDR alongside the tonemapped panels.
+fn imazen26_scenes() -> Vec<(&'static str, Vec<f32>, PathBuf)> {
+    IMAZEN26_REAL_SCENES
+        .iter()
+        .filter_map(|(name, path_str)| {
+            let path = PathBuf::from(path_str);
+            if !path.exists() {
+                eprintln!("  skip {name} — source missing at {path_str}");
+                return None;
+            }
+            let hdr = load_imazen26_hdr(&path)?;
+            Some((*name, hdr, path))
+        })
+        .collect()
+}
+
+// ============================================================================
 // All tonemappers
 // ============================================================================
 
@@ -255,25 +358,56 @@ fn main() {
     let out_dir = Path::new(OUT_DIR);
     std::fs::create_dir_all(out_dir).unwrap();
 
-    let scenes: Vec<(&str, Vec<f32>)> = vec![
-        ("ramp", scene_ramp()),
-        ("hue_wheel", scene_hue_wheel()),
-        ("natural", scene_natural()),
-        ("room_window", scene_room_window()),
+    // Synthetic scenes: third tuple slot is `None` (no native-HDR source PNG).
+    let mut scenes: Vec<(String, Vec<f32>, Option<PathBuf>)> = vec![
+        ("ramp".into(), scene_ramp(), None),
+        ("hue_wheel".into(), scene_hue_wheel(), None),
+        ("natural".into(), scene_natural(), None),
+        ("room_window".into(), scene_room_window(), None),
     ];
+    // Real-image scenes: drawn from the imazen-26 PQ-encoded PNG-3.0 HDR corpus.
+    // The corresponding source PNG path rides along so each scene dir gets an
+    // `00_hdr_native.png` copy alongside the SDR tonemap variants — that copy
+    // still carries its `cICP=BT.709-primaries + PQ-transfer` chunk, so a modern
+    // OS (Windows 11, macOS 14+) renders it as native HDR on an HDR display.
+    eprintln!("Loading imazen-26 real-image HDR scenes…");
+    scenes.extend(
+        imazen26_scenes()
+            .into_iter()
+            .map(|(n, h, p)| (n.into(), h, Some(p))),
+    );
 
     let zs = Zensim::new(ZensimProfile::latest());
     let tonemappers = all_tonemappers();
 
-    for (scene_name, hdr) in &scenes {
+    for (scene_name, hdr, source_hdr_png) in &scenes {
         let scene_dir = out_dir.join(scene_name);
         std::fs::create_dir_all(&scene_dir).unwrap();
+
+        // Copy the native PNG-3.0 HDR source next to the SDR panels so an
+        // HDR-capable OS can display the actual HDR content (the tonemapped
+        // panels next to it are the SDR comparison views).
+        if let Some(src) = source_hdr_png {
+            let dst = scene_dir.join("00_hdr_native.png");
+            if let Err(e) = std::fs::copy(src, &dst) {
+                eprintln!(
+                    "  warning: could not copy {} → {}: {e}",
+                    src.display(),
+                    dst.display()
+                );
+            }
+        }
 
         // Save clamped reference
         let clamped: Vec<f32> = hdr.iter().map(|v| v.clamp(0.0, 1.0)).collect();
         let clamped_u8 = to_srgb_u8(&clamped);
+        let clamped_filename = if source_hdr_png.is_some() {
+            "00b_clamped.png" // 00_ is reserved for the native-HDR source copy
+        } else {
+            "00_clamped.png"
+        };
         save_png(
-            &scene_dir.join("00_clamped.png"),
+            &scene_dir.join(clamped_filename),
             &clamped_u8,
             WIDTH,
             HEIGHT,
@@ -353,12 +487,14 @@ fn main() {
             HEIGHT,
         );
 
-        // Build montage with ImageMagick if available
+        // Build montage with ImageMagick if available. Skip the native-HDR
+        // source PNG (PQ + cICP) — ImageMagick would tone-shift it into the
+        // SDR montage. The native HDR file stays alongside as `00_hdr_native.png`.
         let montage_files: Vec<String> = std::fs::read_dir(&scene_dir)
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.path().display().to_string())
-            .filter(|p| p.ends_with(".png") && !p.contains("montage"))
+            .filter(|p| p.ends_with(".png") && !p.contains("montage") && !p.contains("hdr_native"))
             .collect::<Vec<_>>();
 
         if !montage_files.is_empty() {
