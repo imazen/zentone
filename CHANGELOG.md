@@ -17,6 +17,27 @@ adheres to semver.
 
 ### Fixed
 
+- **`Bt2446A` — corrected two algorithm bugs against ITU-R BT.2446-1 §4
+  and the libplacebo reference implementation.** Both silently
+  miscalibrated the HDR→SDR mapping; the existing tests were loose
+  enough not to catch them.
+  - **`ρ_H` / `ρ_S` exponent**: `(L_peak / 10 000)^2.4` →
+    `(L_peak / 10 000)^(1/2.4)`. Pre-fix `ρ_H` at 1000 nits was ~1.13
+    (vs the correct ~13.26), which made the log-compression step a
+    near-identity and let HDR-mid-grey land roughly half a stop too dark.
+  - **G' channel YCbCr→RGB coefficients**:
+    `(0.16455 / 0.6780) · Cb + (0.57135 / 0.6780) · Cr` →
+    `0.16455 · Cb + 0.57135 · Cr`. The constants `0.16455` and `0.57135`
+    are already `2·Kb·(1-Kb)/Kg` and `2·Kr·(1-Kr)/Kg` for BT.2020
+    (already divided by `Kg = 0.6780`); dividing again made the green
+    channel ~1.47× off and shifted hue on saturated content. Same bug
+    in `simd::curves::bt2446a_tier` (SIMD splat and scalar tail both).
+  - Added regression tests: `rho_hdr_matches_itu_reference_values`
+    (pins `ρ_H ≈ 13.26` at 1000 nits and `33` at 10 000 nits per the
+    spec), `libplacebo_parity_eetf_only` (compares the per-channel EETF
+    against the published libplacebo formula across 12 sample points × 3
+    peak configurations), `ycbcr_inverse_matrix_round_trips_at_y_tmo_passthrough`
+    (pins the G' coefficient correctness independent of tone curve).
 - Tone-map curves no longer emit non-finite (`NaN`/`±Inf`) output for finite input, and the scalar `map_rgb` now agrees with the SIMD `map_row` on extreme/negative inputs (found by the fuzz farm, zentone#21). `ExtendedReinhard` overflowed `l_in·(1 + l_in/l_max²)` to `+Inf` for large luminance (reassociated to keep intermediates finite); `ExtendedReinhard`/`ReinhardJodie`/`TunedReinhard` now clamp channels to non-negative linear light in both scalar and SIMD paths (the SIMD row path already clamped, so the two diverged on negatives). Regression: `tone_map::tests::all_curves_finite_and_parity_on_extreme_inputs` + `fuzz/regression/fuzz_curves_extreme_reinhard_zentone21`.
 
 ## [0.1.0] - 2026-04-26

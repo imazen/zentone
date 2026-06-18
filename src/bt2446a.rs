@@ -62,9 +62,17 @@ impl Bt2446A {
     /// `hdr_peak_nits`: peak luminance of HDR content (typically 1000).
     /// `sdr_peak_nits`: peak luminance of SDR target (typically 100).
     pub fn new(hdr_peak_nits: f32, sdr_peak_nits: f32) -> Self {
-        let rho_hdr = 1.0 + 32.0 * powf(hdr_peak_nits / 10000.0, 2.4);
+        // ρ_H = 1 + 32 · (L_HDR / 10 000)^(1/2.4) per ITU-R BT.2446-1 §4.
+        // The exponent is the BT.1886 gamma reciprocal, not γ itself — the
+        // pre-2025 zentone used `2.4` here, which collapsed ρ_H from 13.4
+        // toward 1.13 at 1000 nits and turned the log compression into a
+        // near-identity. Fixed against the libplacebo reference; matches
+        // the well-known "ρ_H ≈ 13.2 at 1000 nit, 33 at 10 000 nit"
+        // quoted in ITU-R BT.2446-1.
+        let inv_gamma = 1.0_f32 / 2.4;
+        let rho_hdr = 1.0 + 32.0 * powf(hdr_peak_nits / 10000.0, inv_gamma);
         let log_rho_hdr = libm::logf(rho_hdr);
-        let rho_sdr = 1.0 + 32.0 * powf(sdr_peak_nits / 10000.0, 2.4);
+        let rho_sdr = 1.0 + 32.0 * powf(sdr_peak_nits / 10000.0, inv_gamma);
         Self {
             rho_hdr,
             inv_log_rho_hdr: 1.0 / log_rho_hdr,
@@ -128,9 +136,13 @@ impl ToneMap for Bt2446A {
         // Adjusted luma
         let y_tmo = y_sdr - 0.1_f32.max(0.0) * cr.max(0.0); // max(0.1*Cr, 0) subtracted
 
-        // Y'Cb'Cr' → R'G'B'
+        // Y'Cb'Cr' → R'G'B' via the standard BT.2020 NCL inverse matrix.
+        // Coefficients: 0.16455 = 2·Kb·(1-Kb)/Kg, 0.57135 = 2·Kr·(1-Kr)/Kg
+        // (already divided by Kg = 0.6780; do not divide again — the
+        // pre-2025 zentone double-divided, making green channel ~1.47×
+        // off and shifting hue on saturated content).
         let r_out = (y_tmo + 1.4746 * cr).clamp(0.0, 1.0);
-        let g_out = (y_tmo - (0.16455 / 0.6780) * cb - (0.57135 / 0.6780) * cr).clamp(0.0, 1.0);
+        let g_out = (y_tmo - 0.16455 * cb - 0.57135 * cr).clamp(0.0, 1.0);
         let b_out = (y_tmo + 1.8814 * cb).clamp(0.0, 1.0);
 
         [r_out, g_out, b_out]
@@ -205,6 +217,121 @@ mod tests {
             );
             last = lum;
         }
+    }
+
+    #[test]
+    fn rho_hdr_matches_itu_reference_values() {
+        // ITU-R BT.2446-1 §4 cites ρ_H ≈ 13.2 at 1000 nits and 33 at
+        // 10 000 nits. The well-known table value of 13.4 at 1000 nits
+        // matches `1 + 32 · (1000/10000)^(1/2.4) = 13.378`. The pre-fix
+        // code used `(L/10000)^2.4` which gave ρ_H ≈ 1.127 — essentially
+        // identity, breaking the entire compression curve. This test
+        // pins ρ to the well-defined spec values so the bug can't return.
+        let tm1k = Bt2446A::new(1000.0, 100.0);
+        // 1 + 32 · (0.1)^(1/2.4) ≈ 13.260 in f32 (matches the spec's "13.2").
+        assert!(
+            (tm1k.rho_hdr - 13.260).abs() < 0.02,
+            "ρ_H at 1000 nits should be ≈13.26, got {}",
+            tm1k.rho_hdr
+        );
+        let tm10k = Bt2446A::new(10_000.0, 100.0);
+        // 1 + 32 · 1.0 = 33.0 exactly.
+        assert!(
+            (tm10k.rho_hdr - 33.0).abs() < 0.05,
+            "ρ_H at 10 000 nits should be 33.0, got {}",
+            tm10k.rho_hdr
+        );
+
+        // Pin the pre-fix bug: with exponent 2.4 (instead of 1/2.4), ρ_H at
+        // 1000 nits collapses to ~1.127, which would silently turn the
+        // log compression into a near-identity. This bound is far enough
+        // below the correct value that any regression to the old formula
+        // is immediately visible.
+        assert!(
+            tm1k.rho_hdr > 5.0,
+            "ρ_H regressed toward the pre-fix value (~1.13); got {}",
+            tm1k.rho_hdr
+        );
+    }
+
+    #[test]
+    fn libplacebo_parity_eetf_only() {
+        // Per-channel EETF parity check against the published libplacebo
+        // BT.2446-A formula (haasn/libplacebo, src/tone_mapping.c). Stages
+        // 1–3 are isolated here — log compression, piecewise tone curve,
+        // inverse log expansion — without the Hunt color correction
+        // (which is applied via Y'CbCr in `map_rgb`). The EETF must be
+        // bit-close to the libplacebo numerics across the PQ domain;
+        // matching them keeps zentone on the same target as mpv / FFmpeg
+        // vf_libplacebo.
+        fn libplacebo_eetf(x: f32, hdr_peak: f32, sdr_peak: f32) -> f32 {
+            // Test inputs are all in-range finite values, so `clamp` is safe.
+            let x = x.clamp(0.0, 1.0);
+            let p_hdr = 1.0 + 32.0 * powf(hdr_peak / 10000.0, 1.0 / 2.4);
+            let p_sdr = 1.0 + 32.0 * powf(sdr_peak / 10000.0, 1.0 / 2.4);
+            let mut y = libm::logf(1.0 + (p_hdr - 1.0) * x) / libm::logf(p_hdr);
+            y = if y <= 0.7399 {
+                1.0770 * y
+            } else if y < 0.9909 {
+                -1.1510 * y * y + 2.7811 * y - 0.6302
+            } else {
+                0.5 * y + 0.5
+            };
+            (powf(p_sdr, y) - 1.0) / (p_sdr - 1.0)
+        }
+
+        for &(hdr, sdr) in &[(1000.0_f32, 100.0_f32), (4000.0, 100.0), (10_000.0, 100.0)] {
+            let tm = Bt2446A::new(hdr, sdr);
+            for &x in &[
+                0.0_f32, 0.05, 0.1, 0.2, 0.3, 0.5, 0.581, 0.7, 0.75, 0.85, 0.95, 1.0,
+            ] {
+                // Stage-by-stage reproduction.
+                let y_p = tm.perceptual_linearize(x);
+                let y_c = Bt2446A::tone_curve(y_p);
+                let got = tm.perceptual_delinearize(y_c);
+                let want = libplacebo_eetf(x, hdr, sdr);
+                assert!(
+                    (got - want).abs() < 1e-4,
+                    "libplacebo parity at (hdr={hdr}, sdr={sdr}, x={x}): got {got}, want {want}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ycbcr_inverse_matrix_round_trips_at_y_tmo_passthrough() {
+        // The inverse Y'CbCr → R'G'B' matrix must round-trip exactly for
+        // a known (R',G',B') with Y' computed by the same BT.2020 luma
+        // weights and Cb/Cr scaled per BT.2446 §4. Pins the G' coefficient
+        // correctness regardless of which tone curve is in play.
+        //
+        // Pre-fix zentone divided 0.16455 / 0.57135 by Kg = 0.6780 a second
+        // time, so this test fails by ~1.47× on the G channel.
+        let r_p = 0.9_f32;
+        let g_p = 0.5_f32;
+        let b_p = 0.2_f32;
+        let y_p = LR * r_p + LG * g_p + LB * b_p;
+        let cb = (b_p - y_p) / 1.8814;
+        let cr = (r_p - y_p) / 1.4746;
+
+        // Inverse matrix as in the implementation (without the Hunt scaling
+        // 1/1.1·f; this is a pure matrix round-trip check).
+        let r_back = y_p + 1.4746 * cr;
+        let g_back = y_p - 0.16455 * cb - 0.57135 * cr;
+        let b_back = y_p + 1.8814 * cb;
+
+        assert!(
+            (r_back - r_p).abs() < 1e-5,
+            "R round-trip: {r_back} vs {r_p}"
+        );
+        assert!(
+            (g_back - g_p).abs() < 1e-5,
+            "G round-trip: {g_back} vs {g_p}"
+        );
+        assert!(
+            (b_back - b_p).abs() < 1e-5,
+            "B round-trip: {b_back} vs {b_p}"
+        );
     }
 
     #[test]

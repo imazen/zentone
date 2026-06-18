@@ -321,8 +321,10 @@ pub(crate) fn bt2446a_tier(
     let one_p_one = f32x8::splat(token, 1.1);
     let inv_1_8814 = f32x8::splat(token, 1.0 / 1.8814);
     let inv_1_4746 = f32x8::splat(token, 1.0 / 1.4746);
-    let mat_g_b = f32x8::splat(token, 0.16455 / 0.6780);
-    let mat_g_r = f32x8::splat(token, 0.57135 / 0.6780);
+    // 0.16455 = 2·Kb·(1-Kb)/Kg, 0.57135 = 2·Kr·(1-Kr)/Kg for BT.2020 (already
+    // divided by Kg; do NOT divide again — that was the pre-fix bug).
+    let mat_g_b = f32x8::splat(token, 0.16455);
+    let mat_g_r = f32x8::splat(token, 0.57135);
     let mat_r_cr = f32x8::splat(token, 1.4746);
     let mat_b_cb = f32x8::splat(token, 1.8814);
     let zero_one = f32x8::splat(token, 0.1);
@@ -407,7 +409,9 @@ pub(crate) fn bt2446a_tier(
         let cr = f * (r_p - y_p) / 1.4746;
         let y_tmo = y_sdr - 0.1_f32.max(0.0) * cr.max(0.0);
         let r_out = (y_tmo + 1.4746 * cr).clamp(0.0, 1.0);
-        let g_out = (y_tmo - (0.16455 / 0.6780) * cb - (0.57135 / 0.6780) * cr).clamp(0.0, 1.0);
+        // 0.16455 / 0.57135 are already the BT.2020 G' coefficients (already
+        // divided by Kg); see bt2446a.rs for the derivation.
+        let g_out = (y_tmo - 0.16455 * cb - 0.57135 * cr).clamp(0.0, 1.0);
         let b_out = (y_tmo + 1.8814 * cb).clamp(0.0, 1.0);
         *px = [r_out, g_out, b_out];
     }
