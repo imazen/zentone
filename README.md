@@ -93,7 +93,7 @@ Curves that need RGB→Y weights take them at construction. Use `LUMA_BT709`, `L
 | `pipeline` | Fused PQ/HLG → tone-map → BT.709 → soft-clip strip kernels, with optional sRGB-u8 output |
 | `gainmap` | `LumaGainMapSplitter`, `LumaToneMap`, `SplitConfig`, `SplitStats`, plus adapters and PQ/HLG row helpers |
 
-The six `gamut` matrices are public consts in the `gamut` module — `gamut::BT2020_TO_BT709`, `BT709_TO_BT2020`, `P3_TO_BT709`, `BT709_TO_P3`, `BT2020_TO_P3`, `P3_TO_BT2020` — applied with `gamut::apply_matrix` (one `[f32; 3]`), `gamut::apply_matrix_row` (interleaved, `channels: usize`), or `gamut::apply_matrix_row_simd` / `apply_matrix_row_simd_rgba` (a `&mut [[f32; 3]]` / `&mut [[f32; 4]]` strip). The common HDR step is `BT2020_TO_BT709`.
+The six `gamut` matrices are public consts in the `gamut` module — `gamut::BT2020_TO_BT709`, `BT709_TO_BT2020`, `P3_TO_BT709`, `BT709_TO_P3`, `BT2020_TO_P3`, `P3_TO_BT2020` — applied with `gamut::apply_matrix` (one `[f32; 3]`), `gamut::apply_matrix_row` (interleaved, `channels: u8`), or `gamut::apply_matrix_row_simd` / `apply_matrix_row_simd_rgba` (a `&mut [[f32; 3]]` / `&mut [[f32; 4]]` strip). The common HDR step is `BT2020_TO_BT709`.
 
 ## Architecture
 

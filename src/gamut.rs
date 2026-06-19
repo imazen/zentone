@@ -72,9 +72,15 @@ pub fn apply_matrix(m: &[[f32; 3]; 3], rgb: [f32; 3]) -> [f32; 3] {
 }
 
 /// Apply a 3×3 matrix to a row of interleaved RGB f32 pixels in place.
-pub fn apply_matrix_row(m: &[[f32; 3]; 3], row: &mut [f32], channels: usize) {
+///
+/// `channels` must be 3 (RGB) or 4 (RGBA); row length must be a multiple of
+/// it. Alpha (index 3 when `channels == 4`) is left untouched. The `u8` type
+/// matches the [`ToneMap`](crate::ToneMap) trait's `channels` parameter so a
+/// single `let channels = 3u8;` chains through the gamut → tone-map seam
+/// without a cast.
+pub fn apply_matrix_row(m: &[[f32; 3]; 3], row: &mut [f32], channels: u8) {
     debug_assert!(channels == 3 || channels == 4);
-    for chunk in row.chunks_exact_mut(channels) {
+    for chunk in row.chunks_exact_mut(channels as usize) {
         let rgb = [chunk[0], chunk[1], chunk[2]];
         let out = apply_matrix(m, rgb);
         chunk[0] = out[0];
