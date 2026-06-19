@@ -178,14 +178,14 @@ impl AdaptationGrid {
         }
     }
 
-    fn add_row(&mut self, row_data: &[f32], y: u32, image_width: u32, channels: usize) {
+    fn add_row(&mut self, row_data: &[f32], y: u32, image_width: u32, channels: u8) {
         let cell_y = y / self.cell_size;
         if cell_y >= self.height {
             return;
         }
 
         for (x, pixel) in row_data
-            .chunks(channels)
+            .chunks(channels as usize)
             .enumerate()
             .take(image_width as usize)
         {
@@ -403,7 +403,7 @@ impl StreamingTonemapper {
             return Ok(()); // silently drop beyond image height
         }
 
-        let channels = self.channels as usize;
+        let channels = self.channels;
         let src = &hdr_row[..self.row_stride];
 
         self.grid.add_row(src, input_row, self.width, channels);

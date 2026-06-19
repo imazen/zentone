@@ -927,8 +927,8 @@ mod tests {
     /// Build a grayscale HDR row in `[0, max]`. Grayscale is the exact
     /// round-trip case: no SDR channel is pushed out of `[0, 1]` by the
     /// chromaticity-preserving rescale.
-    fn synth_grayscale_hdr_row(pixels: usize, channels: usize, max: f32) -> Vec<f32> {
-        let mut row = Vec::with_capacity(pixels * channels);
+    fn synth_grayscale_hdr_row(pixels: usize, channels: u8, max: f32) -> Vec<f32> {
+        let mut row = Vec::with_capacity(pixels * channels as usize);
         for i in 0..pixels {
             let y = (i as f32 / pixels.max(1) as f32) * max;
             row.push(y);

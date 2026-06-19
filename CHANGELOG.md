@@ -15,6 +15,7 @@ adheres to semver.
 
 ### Changed
 
+- Unified the last two internal `channels: usize` parameters to `u8` (the private `CellGrid::add_row` and a gainmap test helper), so every `channels` count crate-wide is now `u8`. No public-API impact; completes the #23 unification.
 - Exclude `tests/` and `.gitignore` from the published crate package to reduce crate download size (~234 KB saved); `benches/` retained due to explicit `[[bench]]` targets in Cargo.toml.
 
 ### Fixed
