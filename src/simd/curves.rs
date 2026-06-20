@@ -371,9 +371,16 @@ pub(crate) fn bt2446a_tier(
         let cr_pos = cr.max(zero);
         let y_tmo = y_sdr - zero_one * cr_pos;
 
-        let r_out = (y_tmo + mat_r_cr * cr).max(zero).min(one);
-        let g_out = (y_tmo - mat_g_b * cb - mat_g_r * cr).max(zero).min(one);
-        let b_out = (y_tmo + mat_b_cb * cb).max(zero).min(one);
+        let r_prime_out = (y_tmo + mat_r_cr * cr).max(zero).min(one);
+        let g_prime_out = (y_tmo - mat_g_b * cb - mat_g_r * cr).max(zero).min(one);
+        let b_prime_out = (y_tmo + mat_b_cb * cb).max(zero).min(one);
+
+        // BT.1886 EOTF (^2.4): spec emits gamma-encoded R'G'B'; the
+        // `ToneMap` trait contract is linear-light in / linear-light out
+        // (see bt2446a.rs for the derivation and why this matters).
+        let r_out = r_prime_out.pow_midp(2.4);
+        let g_out = g_prime_out.pow_midp(2.4);
+        let b_out = b_prime_out.pow_midp(2.4);
 
         let valid = y_p.simd_gt(zero);
         let or_arr = f32x8::blend(valid, r_out, zero).to_array();
@@ -408,12 +415,17 @@ pub(crate) fn bt2446a_tier(
         let cb = f * (b_p - y_p) / 1.8814;
         let cr = f * (r_p - y_p) / 1.4746;
         let y_tmo = y_sdr - 0.1_f32.max(0.0) * cr.max(0.0);
-        let r_out = (y_tmo + 1.4746 * cr).clamp(0.0, 1.0);
+        let r_prime_out = (y_tmo + 1.4746 * cr).clamp(0.0, 1.0);
         // 0.16455 / 0.57135 are already the BT.2020 G' coefficients (already
         // divided by Kg); see bt2446a.rs for the derivation.
-        let g_out = (y_tmo - 0.16455 * cb - 0.57135 * cr).clamp(0.0, 1.0);
-        let b_out = (y_tmo + 1.8814 * cb).clamp(0.0, 1.0);
-        *px = [r_out, g_out, b_out];
+        let g_prime_out = (y_tmo - 0.16455 * cb - 0.57135 * cr).clamp(0.0, 1.0);
+        let b_prime_out = (y_tmo + 1.8814 * cb).clamp(0.0, 1.0);
+        // BT.1886 EOTF (^2.4) — see bt2446a.rs for the linear-light contract.
+        *px = [
+            powf(r_prime_out, 2.4),
+            powf(g_prime_out, 2.4),
+            powf(b_prime_out, 2.4),
+        ];
     }
 }
 

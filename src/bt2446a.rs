@@ -25,7 +25,12 @@ const LB: f32 = 0.0593;
 ///
 /// Construct with `new()`, then apply via the [`ToneMap`] trait. Input
 /// is linear-light BT.2020 RGB normalized so `1.0 = hdr_peak_nits`.
-/// Output is gamma-domain BT.2020 RGB normalized so `1.0 = sdr_peak_nits`.
+/// Output is linear-light BT.2020 RGB normalized so `1.0 = sdr_peak_nits`
+/// — the BT.2446-1 §4 pipeline natively emits gamma-encoded `R'_TMO`
+/// `G'_TMO` `B'_TMO` (BT.1886 1/2.4); we apply the BT.1886 EOTF (`^2.4`)
+/// at the output to satisfy the [`ToneMap`] trait's linear-light
+/// contract (matching `Bt2446B`, `Bt2446C`, `Bt2408`, and libplacebo's
+/// own `bt2446a` which ends with `bt1886_eotf`).
 ///
 /// # When to pick this
 ///
@@ -141,9 +146,21 @@ impl ToneMap for Bt2446A {
         // (already divided by Kg = 0.6780; do not divide again — the
         // pre-2025 zentone double-divided, making green channel ~1.47×
         // off and shifting hue on saturated content).
-        let r_out = (y_tmo + 1.4746 * cr).clamp(0.0, 1.0);
-        let g_out = (y_tmo - 0.16455 * cb - 0.57135 * cr).clamp(0.0, 1.0);
-        let b_out = (y_tmo + 1.8814 * cb).clamp(0.0, 1.0);
+        let r_prime_out = (y_tmo + 1.4746 * cr).clamp(0.0, 1.0);
+        let g_prime_out = (y_tmo - 0.16455 * cb - 0.57135 * cr).clamp(0.0, 1.0);
+        let b_prime_out = (y_tmo + 1.8814 * cb).clamp(0.0, 1.0);
+
+        // BT.1886 EOTF (`^2.4`): the spec emits gamma-encoded R'G'B', but the
+        // `ToneMap` trait contract is linear-light in / linear-light out
+        // (matching Bt2446B/C/Bt2408 + libplacebo's `bt2446a` which closes
+        // with `bt1886_eotf`). Without this step the consumer treats the
+        // gamma-encoded value as linear and double-gamma-encodes through
+        // its display OETF — every pixel comes out far too bright (median
+        // ΔE2000 ≈ 23 vs producer-graded SDR on the imazen-26 shootout,
+        // dead last out of 20 curves).
+        let r_out = powf(r_prime_out, 2.4);
+        let g_out = powf(g_prime_out, 2.4);
+        let b_out = powf(b_prime_out, 2.4);
 
         [r_out, g_out, b_out]
     }
@@ -331,6 +348,67 @@ mod tests {
         assert!(
             (b_back - b_p).abs() < 1e-5,
             "B round-trip: {b_back} vs {b_p}"
+        );
+    }
+
+    #[test]
+    fn output_is_linear_light_not_gamma_encoded() {
+        // The `ToneMap` trait contract is "linear-light HDR in, linear-light
+        // SDR out" (lib.rs §76 + §137). The BT.2446-1 spec's pipeline
+        // gamma-encodes R/G/B with `^(1/2.4)` at step 1, runs the tone curve
+        // in gamma + Y'Cb'Cr' domain, and emits `Y'_TMO C'_b,TMO C'_r,TMO`
+        // — *gamma-encoded* SDR. To deliver linear-light SDR per the trait
+        // contract (and to match Bt2446B / Bt2446C / Bt2408, all of which
+        // operate end-to-end in linear-light), we MUST apply the BT.1886
+        // EOTF (`^2.4`) at the output. libplacebo does the same thing in
+        // tone_mapping.c:525 (`x = bt1886_eotf(x, output_min, output_max)`).
+        //
+        // Pre-fix Bt2446A returned gamma-encoded values, which the shootout
+        // consumer then treated as linear and double-gamma-encoded into
+        // sRGB — every pixel came out far too bright (median ΔE2000 ≈ 23
+        // against producer-graded SDR, dead last out of 20 curves on the
+        // 76-sample imazen-26 shootout).
+        //
+        // Pin: HDR peak round-trips, HDR black round-trips, and HDR
+        // mid-grey lands in the linear-light range that the spec implies
+        // *after* BT.1886 decode (≈ 0.37 linear, not 0.66 gamma).
+        let tm = Bt2446A::new(1000.0, 100.0);
+
+        // Black → black is unaffected by the EOTF.
+        let black = tm.map_rgb([0.0, 0.0, 0.0]);
+        assert_eq!(black, [0.0, 0.0, 0.0]);
+
+        // Peak → peak: `1.0^2.4 = 1.0`, so the EOTF is identity here too.
+        // But this confirms the saturating top is preserved.
+        let peak = tm.map_rgb([1.0, 1.0, 1.0]);
+        for c in peak {
+            assert!(
+                (c - 1.0).abs() < 1e-4,
+                "HDR peak should round-trip to SDR peak: {c}"
+            );
+        }
+
+        // The critical mid-grey case. Trace by hand:
+        //   r' = 0.18^(1/2.4) = 0.4815
+        //   y_p = log(1 + 12.26·0.4815)/log(13.26) ≈ 0.7474
+        //   y_c (middle branch) ≈ 0.806
+        //   y_sdr (gamma) = (5.69^0.806 - 1)/4.69 ≈ 0.660
+        //   y_sdr (linear) = 0.660^2.4 ≈ 0.370
+        // Pre-fix returned ≈ 0.660 (gamma-encoded); post-fix returns ≈ 0.370.
+        let mid = tm.map_rgb([0.18, 0.18, 0.18]);
+        for c in mid {
+            assert!(
+                (c - 0.370).abs() < 0.02,
+                "mid-grey HDR 0.18 should map to linear-light SDR ≈ 0.37, got {c}"
+            );
+        }
+
+        // Direct guard: the pre-fix bug returned gamma-encoded mid-grey at
+        // 0.66; any regression to that value is immediately visible.
+        assert!(
+            mid[0] < 0.55,
+            "mid-grey output regressed toward the pre-fix gamma-encoded value (~0.66); got {}",
+            mid[0]
         );
     }
 

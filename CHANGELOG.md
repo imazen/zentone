@@ -86,6 +86,24 @@ adheres to semver.
   source-normalized inputs; new `mobius_knee_actually_fires` regression
   test pins the bug.
 
+- **`Bt2446A` — output is now linear-light, not gamma-encoded** (third
+  algorithm bug against ITU-R BT.2446-1 §4, caught on the 76-sample
+  imazen-26 HDR shootout where `Bt2446A` ranked dead last out of 20
+  curves with median ΔE2000 ≈ 23 vs producer-graded SDR). The spec's
+  §4.1 pipeline gamma-encodes `R/G/B` with `^(1/2.4)` at step 1, runs
+  the tone curve in gamma + Y'Cb'Cr' domain, and emits gamma-encoded
+  `R'_TMO G'_TMO B'_TMO` (Table 3's "Colour space conversion" note: the
+  outputs are R'G'B' per BT.2020 Table 4 — primed = gamma). The `ToneMap`
+  trait contract is linear-light in / linear-light out (matching
+  `Bt2446B` / `Bt2446C` / `Bt2408`, all of which operate end-to-end in
+  linear-light). Pre-fix, the gamma-encoded output was treated as
+  linear by the consumer and then double-gamma-encoded into sRGB,
+  pushing every pixel far too bright. Fix: apply the BT.1886 EOTF
+  (`^2.4`) to each output channel at the end of `map_rgb` and the SIMD
+  `bt2446a_tier` kernel — the same closing step libplacebo applies via
+  `bt1886_eotf` in `tone_mapping.c:525`. New regression test
+  `output_is_linear_light_not_gamma_encoded` pins mid-grey HDR 0.18 →
+  linear SDR ≈ 0.37 (was 0.66 gamma) and guards the pre-fix value.
 - **`Bt2446A` — corrected two algorithm bugs against ITU-R BT.2446-1 §4
   and the libplacebo reference implementation.** Both silently
   miscalibrated the HDR→SDR mapping; the existing tests were loose
