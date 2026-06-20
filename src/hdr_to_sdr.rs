@@ -49,9 +49,14 @@ use crate::gamut::{soft_clip_knee, soft_clip_knee_strip};
 /// use zentone::HdrToSdr;
 ///
 /// // 1000-nit HDR source → 100-nit SDR target (default).
+/// // Input is source-normalized: 1.0 = source_peak_nits = 1000 nits.
 /// let converter = HdrToSdr::new(1000.0);
-/// let mut pixels = vec![[5.0_f32, 3.0, 1.5], [0.5, 0.5, 0.5]];
+/// let mut pixels = vec![
+///     [1.0_f32, 0.6, 0.3],     // bright HDR pixel near source peak
+///     [0.1, 0.1, 0.1],         // dim shadow region
+/// ];
 /// converter.apply_strip(&mut pixels);
+/// // Output is target-normalized: 1.0 = target_peak_nits = 100 nits.
 /// for px in &pixels {
 ///     for &c in px {
 ///         assert!((0.0..=1.0).contains(&c));
@@ -102,14 +107,28 @@ impl HdrToSdr {
 
     /// Apply the pipeline to a strip of linear `RGB f32` pixels in place.
     ///
-    /// Input is assumed normalized so `1.0 = source_peak_nits`
-    /// (relative-linear, the standard zenpixels convention). Output is
-    /// normalized so `1.0 = target_peak_nits`. Caller handles container
-    /// conversion (CICP / transfer / gamut matrix to BT.709 if needed)
-    /// separately.
+    /// Input is assumed normalized so `1.0 = source_peak_nits` (the
+    /// standard zenpixels source-normalized convention — a saturated HDR
+    /// pixel reads near `1.0` in input). Output is normalized so
+    /// `1.0 = target_peak_nits`. Caller handles container conversion
+    /// (CICP / transfer / gamut matrix to BT.709 if needed) separately.
+    ///
+    /// Internally the input is rescaled to Möbius's expected
+    /// target-normalized range `[0, peak]` (where `peak =
+    /// source_peak_nits / target_peak_nits`) before the curve runs,
+    /// so the caller never has to deal with the dual-normalization
+    /// convention.
     pub fn apply_strip(&self, rgb: &mut [[f32; 3]]) {
         let peak = self.peak_normalized();
         if peak > 1.0 {
+            // Rescale source-norm input (1.0 = source_peak_nits) to
+            // target-norm (1.0 = target_peak_nits = `peak` in source-norm)
+            // so Möbius sees the documented `[0, peak]` range.
+            for px in rgb.iter_mut() {
+                px[0] *= peak;
+                px[1] *= peak;
+                px[2] *= peak;
+            }
             let curve = ToneMapCurve::Mobius {
                 source_peak: peak,
                 knee: self.knee_tone,
@@ -120,15 +139,22 @@ impl HdrToSdr {
     }
 
     /// Per-pixel variant of [`apply_strip`](Self::apply_strip).
+    ///
+    /// Same input/output normalization contract — input is source-
+    /// normalized, output is target-normalized. The rescaling to
+    /// Möbius's expected range happens internally.
     #[must_use]
     pub fn apply_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
         let peak = self.peak_normalized();
         let after_tone = if peak > 1.0 {
+            // Rescale source-norm → target-norm before Möbius (mirrors
+            // the strip variant).
+            let scaled = [rgb[0] * peak, rgb[1] * peak, rgb[2] * peak];
             let curve = ToneMapCurve::Mobius {
                 source_peak: peak,
                 knee: self.knee_tone,
             };
-            curve.map_rgb(rgb)
+            curve.map_rgb(scaled)
         } else {
             rgb
         };
@@ -172,9 +198,11 @@ mod tests {
 
     #[test]
     fn mid_bright_compresses_toward_target() {
-        // HDR mid-tones above target peak should be compressed below 1.0.
+        // Source-normalized input: 0.5 = half of source_peak_nits =
+        // 500 nits HDR midtone for a 1000-nit source. Output must be
+        // finite and below 1.0 (= target peak).
         let c = HdrToSdr::new(1000.0);
-        let out = c.apply_rgb([5.0, 5.0, 5.0]);
+        let out = c.apply_rgb([0.5, 0.5, 0.5]);
         for v in out {
             assert!(
                 v.is_finite() && v < 1.0,
@@ -184,16 +212,46 @@ mod tests {
     }
 
     #[test]
+    fn mobius_knee_actually_fires() {
+        // Pin the bug-fix: a saturated HDR pixel (= 1.0 in source-norm,
+        // = source_peak_nits = 4000 nits) must be visibly compressed by
+        // Möbius. Before the rescale fix, the input was 1.0 which is
+        // way below Möbius's knee + peak in target-norm, so the curve
+        // sat in its identity branch and over-bright pixels passed
+        // through unchanged. After the fix, 1.0 source-norm rescales
+        // to peak=40 target-norm, well above the knee, triggering the
+        // rational rolloff toward 1.0.
+        let c = HdrToSdr::new(4000.0);
+        // Pre-fix: this would have returned the input near-unchanged
+        // (modulo the soft-clip). Post-fix: rolled off into [0, 1].
+        let out = c.apply_rgb([1.0, 1.0, 1.0]);
+        for v in out {
+            assert!(
+                v.is_finite() && (0.0..1.0).contains(&v),
+                "saturated source pixel must compress strictly below \
+                 target peak: got {v}"
+            );
+        }
+        // And a small midtone (0.1 source-norm = 400 nits) compresses
+        // less dramatically.
+        let small = c.apply_rgb([0.1, 0.1, 0.1]);
+        for v in small {
+            assert!(v.is_finite() && (0.0..1.0).contains(&v));
+        }
+    }
+
+    #[test]
     fn output_in_unit_range() {
-        // Stress: a strip of HDR pixels, output must end up in [0, 1].
+        // Stress: a strip of HDR pixels (source-norm). Output must end
+        // up in [0, 1] target-norm.
         let c = HdrToSdr::new(4000.0);
         let mut pixels = vec![
             [0.0_f32, 0.0, 0.0],
-            [0.1, 0.5, 0.3],
-            [1.0, 1.0, 1.0],
-            [10.0, 5.0, 2.0],
-            [40.0, 0.0, 0.0],  // peak red @ source peak
-            [30.0, 30.0, 0.0], // peak yellow
+            [0.025, 0.125, 0.075], // ≈ [100, 500, 300] nits midtone
+            [0.25, 0.25, 0.25],    // ≈ 1000 nits each
+            [1.0, 1.0, 1.0],       // peak white
+            [1.0, 0.0, 0.0],       // peak red
+            [0.75, 0.75, 0.0],     // peak yellow
         ];
         c.apply_strip(&mut pixels);
         for (i, px) in pixels.iter().enumerate() {
@@ -208,10 +266,11 @@ mod tests {
 
     #[test]
     fn hue_preserved_on_saturated_color() {
-        // A pure-red HDR pixel — channel ratios after the pipeline should
-        // keep red as the dominant channel, with green/blue still small.
+        // A pure-red HDR pixel (1.0 red = source peak nits, faint
+        // green/blue from noise) — channel ratios after the pipeline
+        // should keep red as the dominant channel.
         let c = HdrToSdr::new(1000.0);
-        let out = c.apply_rgb([10.0_f32, 0.5, 0.5]);
+        let out = c.apply_rgb([1.0_f32, 0.05, 0.05]);
         assert!(out[0] > out[1], "red should remain dominant");
         assert!(out[0] > out[2]);
         for v in out {
@@ -224,10 +283,10 @@ mod tests {
         let c = HdrToSdr::new(2000.0);
         let pixels = [
             [0.0_f32, 0.0, 0.0],
-            [0.3, 0.5, 0.1],
-            [5.0, 2.0, 1.0],
-            [20.0, 0.0, 0.0],
-            [0.5, 0.5, 0.5],
+            [0.15, 0.25, 0.05], // ≈ [300, 500, 100] nits
+            [0.5, 0.2, 0.1],
+            [1.0, 0.0, 0.0], // peak red
+            [0.25, 0.25, 0.25],
         ];
         let mut strip = pixels.to_vec();
         c.apply_strip(&mut strip);
@@ -268,15 +327,21 @@ mod tests {
 
     #[test]
     fn pipeline_finite_on_extreme_inputs() {
-        // Defensive: very high HDR + very low target. Output must stay
-        // finite and in [0, 1].
+        // Defensive: very high HDR (peak_normalized = 100) + over-peak
+        // input (1.0 source-norm is the documented max but a defect
+        // pixel can land slightly above). Output must stay finite and
+        // in [0, 1].
         let c = HdrToSdr {
             source_peak_nits: 10_000.0,
             target_peak_nits: 100.0,
             knee_tone: 0.30,
             knee_gamut: 0.95,
         };
-        let mut strip = vec![[100.0_f32, 50.0, 1.0], [0.0, 0.0, 0.0]];
+        let mut strip = vec![
+            [1.0_f32, 0.5, 0.01], // peak red ≈ 10k nits
+            [1.5, 1.0, 0.0],      // slight defect above source peak
+            [0.0, 0.0, 0.0],
+        ];
         c.apply_strip(&mut strip);
         for px in &strip {
             for &v in px {
@@ -289,7 +354,7 @@ mod tests {
     fn custom_knees_change_output() {
         // Sanity-check the configuration knobs actually take effect:
         // a different knee should yield a measurably different pixel.
-        let rgb = [3.0_f32, 1.5, 0.8];
+        let rgb = [0.5_f32, 0.3, 0.15]; // source-norm midtone
         let default = HdrToSdr::new(1000.0).apply_rgb(rgb);
         let custom = HdrToSdr {
             source_peak_nits: 1000.0,

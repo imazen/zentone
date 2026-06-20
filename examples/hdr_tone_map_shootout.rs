@@ -23,14 +23,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use zencodecs::DecodeRequest;
-use zenpixels_dev::DiffuseWhite;
-use zenpixels_dev::buffer::PixelBuffer;
-use zenpixels_dev::descriptor::{
-    ChannelLayout, ChannelType, PixelDescriptor, TransferFunction,
-};
-use zenpixels_dev::hdr::ContentLightLevel;
 use zenpixels_convert::PixelBufferConvertExt;
 use zenpixels_convert::hdr::{CllMeasure, LightLevelMethod};
+use zenpixels_dev::DiffuseWhite;
+use zenpixels_dev::buffer::PixelBuffer;
+use zenpixels_dev::descriptor::{ChannelLayout, ChannelType, PixelDescriptor, TransferFunction};
+use zenpixels_dev::hdr::ContentLightLevel;
 
 use zentone::{Bt2408Tonemapper, Bt2446A, Bt2446B, Bt2446C, HdrToSdr, ToneMap, ToneMapCurve};
 
@@ -191,7 +189,6 @@ fn rebuild_rgba8_srgb(bytes: &[u8]) -> anyhow::Result<PixelBuffer> {
     }
 }
 
-
 /// Convert a PixelBuffer (any layout / transfer) to tightly packed linear
 /// RGB f32 of the source's primaries.
 fn pixel_buffer_to_linear_rgb(buf: &PixelBuffer) -> anyhow::Result<LinearRgb> {
@@ -246,9 +243,7 @@ fn copy_buffer_tight(buf: &PixelBuffer) -> anyhow::Result<PixelBuffer> {
     let width = buf.width();
     let height = buf.height();
 
-    let row_bytes = width as usize
-        * desc.channels() as usize
-        * desc.channel_type().byte_size();
+    let row_bytes = width as usize * desc.channels() as usize * desc.channel_type().byte_size();
     let total = row_bytes * height as usize;
     let mut tight = vec![0u8; total];
 
@@ -321,7 +316,10 @@ enum CurveSpec {
 impl CurveSpec {
     fn label(&self) -> String {
         match *self {
-            CurveSpec::Mobius { knee_tone, knee_gamut } => {
+            CurveSpec::Mobius {
+                knee_tone,
+                knee_gamut,
+            } => {
                 format!("mobius_kt{:.2}_kg{:.2}", knee_tone, knee_gamut)
             }
             CurveSpec::Bt2446A => "bt2446a".into(),
@@ -394,7 +392,10 @@ fn apply_curve(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32) -> Line
     // remap so they all end up in the SDR baseline's scale (1.0 = ~SDR
     // display peak, since linearised sRGB hits 1.0 at display white).
     match curve {
-        CurveSpec::Mobius { knee_tone, knee_gamut } => {
+        CurveSpec::Mobius {
+            knee_tone,
+            knee_gamut,
+        } => {
             // HdrToSdr's Möbius takes input where 1.0 = target_peak (the
             // libplacebo convention — despite the wrapper's docstring claim
             // that "1.0 = source_peak_nits", the actual code passes the
@@ -784,10 +785,7 @@ struct SampleResult {
     cells: Vec<CellMetrics>,
 }
 
-fn best_mobius_label_from(
-    curve_grid: &[CurveSpec],
-    samples: &[SampleResult],
-) -> Option<String> {
+fn best_mobius_label_from(curve_grid: &[CurveSpec], samples: &[SampleResult]) -> Option<String> {
     curve_grid
         .iter()
         .enumerate()
@@ -828,10 +826,7 @@ fn write_report(
         sample_results.len(),
         sample_results.len() + failures.len()
     ));
-    s.push_str(&format!(
-        "**Total runtime:** {:.1}s\n\n",
-        runtime_secs
-    ));
+    s.push_str(&format!("**Total runtime:** {:.1}s\n\n", runtime_secs));
     s.push_str(
         "**Methodology.** For each sample we:\n\
 1. Call `zencodecs::DecodeRequest::decode_gain_map()` to obtain the producer's \
@@ -864,8 +859,12 @@ matches the producer's aesthetic, NOT necessarily scene-referred fidelity.\n\n",
 
     // --- Per-curve summary ---
     s.push_str("## Per-curve summary (sorted by median ΔE2000 ascending)\n\n");
-    s.push_str("| Rank | Curve | Median PSNR (dB) | Median ΔE2000 | Median max\\|Δ\\| | Median %>ΔE5 |\n");
-    s.push_str("|------|-------|------------------|---------------|-----------------|---------------|\n");
+    s.push_str(
+        "| Rank | Curve | Median PSNR (dB) | Median ΔE2000 | Median max\\|Δ\\| | Median %>ΔE5 |\n",
+    );
+    s.push_str(
+        "|------|-------|------------------|---------------|-----------------|---------------|\n",
+    );
 
     let mut summary: Vec<(String, f32, f32, f32, f32)> = curve_grid
         .iter()
@@ -1125,16 +1124,8 @@ fn main() -> anyhow::Result<()> {
         );
 
         let source_peak = measure_source_peak_nits(&hdr);
-        let hdr_max_raw = hdr
-            .px
-            .iter()
-            .copied()
-            .fold(f32::NEG_INFINITY, f32::max);
-        let sdr_max_raw = sdr
-            .px
-            .iter()
-            .copied()
-            .fold(f32::NEG_INFINITY, f32::max);
+        let hdr_max_raw = hdr.px.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let sdr_max_raw = sdr.px.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         println!(
             "  Source peak: {:.0} nits (raw HDR max = {:.3}, SDR max = {:.3})",
             source_peak, hdr_max_raw, sdr_max_raw
@@ -1178,11 +1169,7 @@ fn main() -> anyhow::Result<()> {
                 metrics.pct_de_gt_5,
             );
 
-            let montage_path = Path::new(MONTAGES_DIR).join(format!(
-                "{}__{}.png",
-                stem,
-                c.label()
-            ));
+            let montage_path = Path::new(MONTAGES_DIR).join(format!("{}__{}.png", stem, c.label()));
             if let Err(e) = save_montage(&montage_path, &sdr, &cand) {
                 eprintln!("    montage save failed: {}", e);
             }

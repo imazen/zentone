@@ -52,6 +52,21 @@ adheres to semver.
 
 ### Fixed
 
+- **`HdrToSdr` input normalization now matches its docstring** — the
+  wrapper previously passed source-normalized input (`1.0 = source_peak_nits`,
+  max ≈ 1.0) straight to `ToneMapCurve::Mobius`, which expects
+  target-normalized input (`1.0 = target_peak_nits`, max = `source/target`
+  ratio). Result: Möbius's knee + rolloff branch was effectively dead,
+  because the input range stayed inside `[0, 1]` instead of stretching to
+  `[0, peak]` where the rolloff is supposed to act. Surfaced by the HDR
+  cross-curve shootout on real UltraHDR samples (commit `39737ee` — the
+  validation example pre-multiplied by `peak` to work around the bug).
+  Fix: `apply_strip` / `apply_rgb` now rescale source-norm input to
+  target-norm before feeding Möbius (`px *= peak`), so the caller side of
+  the API matches the documented contract. Existing tests updated to use
+  source-normalized inputs; new `mobius_knee_actually_fires` regression
+  test pins the bug.
+
 - **`Bt2446A` — corrected two algorithm bugs against ITU-R BT.2446-1 §4
   and the libplacebo reference implementation.** Both silently
   miscalibrated the HDR→SDR mapping; the existing tests were loose
