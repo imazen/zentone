@@ -31,6 +31,25 @@ adheres to semver.
   target_peak_nits)` and doesn't expose a Möbius-style knee. `knee_gamut`
   stays for the soft-clip-knee post-process.
 
+### Performance
+
+- **`Bt2446A::map_strip_simd` is ~2.3× faster** (111 → 258 Mpix/s
+  measured on Zen 4 / AMD Ryzen 9 7950X w/ AVX-512; `RUSTFLAGS="-C target-cpu=native"`).
+  The kernel now resolves to `f32x16` ops on AVX-512 hardware (was f32x8
+  only), every transcendental switches to its `_unchecked` variant (inputs
+  are pre-clamped to `pos_eps`), and the BT.1886 EOTF (`x^2.4`) uses a
+  degree-7 monomial polynomial evaluated via Estrin's method in place of
+  three serial `pow_midp` calls — critical-path latency drops from ~28 to
+  ~12 cycles per channel. Approximation error 5.88e-5 vs `libm::powf`,
+  10× inside the SIMD parity tolerance and ~3000× tighter than the
+  perceptual delta the regression tests fence. Scalar `map_rgb` path
+  keeps `libm::powf` for bit-exact reproducibility — only the SIMD strip
+  kernel uses the polynomial. Bench harness:
+  `examples/bt2446a_throughput.rs`, results:
+  [`benchmarks/bt2446a_throughput_2026-06-20.md`](benchmarks/bt2446a_throughput_2026-06-20.md).
+  Since `HdrToSdr` now defaults to `Bt2446A` on every web HDR→SDR
+  conversion, this speedup is on the hot path for every served image.
+
 ### Added
 
 - `filmic_narkowicz` input-domain documentation + `narkowicz_input_domain_pins`

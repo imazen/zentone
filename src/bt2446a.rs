@@ -174,7 +174,7 @@ impl ToneMap for Bt2446A {
                 self.rho_sdr,
                 self.inv_rho_sdr_minus_1,
             ),
-            [v3, neon, wasm128, scalar]
+            [v4(cfg(avx512)), v3, neon, wasm128, scalar]
         );
     }
 }
