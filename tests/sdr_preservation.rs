@@ -68,19 +68,20 @@ fn bt2408_identity_when_no_compression_needed() {
 
 #[test]
 fn bt2446c_linear_segment_is_proportional() {
-    // Default params: k1=0.83802, inflection at y_ip = k4/k1 = 94.3%
-    // Below that, Y_SDR = k1 * Y_HDR (linear, slope k1).
-    // For input in [0, 0.5] (well below inflection at 0.943), the
-    // output should be input * k1, then scaled by the 100% normalization.
+    // Default params (per ITU-R BT.2446-1 §6.1.4 eq. 10):
+    //   k1 = 0.83802, inflection Y_ip = 58.5 / k1 ≈ 69.81 nits (eq. 6).
+    // Below the inflection, Y_SDR = k1 · Y_HDR in nits. The caller's
+    // input is normalized so 1.0 = hdr_peak_nits and the output is
+    // normalized so 1.0 = sdr_peak_nits, giving a normalized slope of
+    //   k1 · (hdr_peak / sdr_peak) = 0.83802 · 10 ≈ 8.3802.
+    // For inputs ≤ 0.06 (= 60 nits, still below the 69.81-nit knee on
+    // a 1000-nit-peak source) the output sits on the linear branch.
     let tm = Bt2446C::new(1000.0, 100.0);
-    let k1 = 0.83802_f32;
+    let normalized_slope = 0.83802_f32 * (1000.0 / 100.0);
 
-    for &v in &[0.01, 0.05, 0.1, 0.2, 0.5] {
+    for &v in &[0.001_f32, 0.005, 0.01, 0.03, 0.06] {
         let out = tm.map_rgb([v, v, v]);
-        // Input v is linear [0,1]. map_rgb converts to percentage (*100),
-        // applies tone curve (k1 * pct), normalizes back (/100).
-        // Expected: v * k1 (since the linear segment is Y_SDR = k1 * Y_HDR).
-        let expected = v * k1;
+        let expected = v * normalized_slope;
         for (ch, &o) in out.iter().enumerate() {
             assert!(
                 (o - expected).abs() < 0.02,

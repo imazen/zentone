@@ -516,14 +516,18 @@ pub(crate) fn bt2446b_tier(
 // ============================================================================
 
 #[archmage::magetypes(define(f32x8), v3, neon, wasm128, scalar)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn bt2446c_tier(
     token: Token,
     row: &mut [[f32; 3]],
     k1: f32,
     k2: f32,
+    k3: f32,
     k4: f32,
     y_ip: f32,
     alpha: f32,
+    hdr_peak_nits: f32,
+    sdr_peak_nits: f32,
 ) {
     let zero = f32x8::zero(token);
     let lr = f32x8::splat(token, LR_2020);
@@ -547,12 +551,13 @@ pub(crate) fn bt2446c_tier(
 
     let k1_v = f32x8::splat(token, k1);
     let k2_v = f32x8::splat(token, k2);
+    let k3_v = f32x8::splat(token, k3);
     let k4_v = f32x8::splat(token, k4);
     let y_ip_v = f32x8::splat(token, y_ip);
     let inv_y_ip = f32x8::splat(token, 1.0 / y_ip);
-    let one_hundred = f32x8::splat(token, 100.0);
-    let inv_one_hundred = f32x8::splat(token, 1.0 / 100.0);
-    let pct_clamp = f32x8::splat(token, 100.0);
+    let to_nits = f32x8::splat(token, hdr_peak_nits);
+    let inv_sdr = f32x8::splat(token, 1.0 / sdr_peak_nits);
+    let nits_ceil = f32x8::splat(token, 10_000.0);
     let lo = f32x8::splat(token, 0.0);
     let hi = f32x8::splat(token, 1.09);
     let pos_eps = f32x8::splat(token, f32::MIN_POSITIVE);
@@ -568,25 +573,26 @@ pub(crate) fn bt2446c_tier(
             ga[i] = px[1];
             ba[i] = px[2];
         }
-        let r_pct = f32x8::load(token, &ra).max(zero).min(pct_clamp) * one_hundred;
-        let g_pct = f32x8::load(token, &ga).max(zero).min(pct_clamp) * one_hundred;
-        let b_pct = f32x8::load(token, &ba).max(zero).min(pct_clamp) * one_hundred;
+        let r_nits = (f32x8::load(token, &ra).max(zero) * to_nits).min(nits_ceil);
+        let g_nits = (f32x8::load(token, &ga).max(zero) * to_nits).min(nits_ceil);
+        let b_nits = (f32x8::load(token, &ba).max(zero) * to_nits).min(nits_ceil);
 
         let (cr_, cg_, cb_) = if do_crosstalk {
             (
-                d_v * r_pct + a_v * g_pct + a_v * b_pct,
-                a_v * r_pct + d_v * g_pct + a_v * b_pct,
-                a_v * r_pct + a_v * g_pct + d_v * b_pct,
+                d_v * r_nits + a_v * g_nits + a_v * b_nits,
+                a_v * r_nits + d_v * g_nits + a_v * b_nits,
+                a_v * r_nits + a_v * g_nits + d_v * b_nits,
             )
         } else {
-            (r_pct, g_pct, b_pct)
+            (r_nits, g_nits, b_nits)
         };
 
         let y = lr * cr_ + lg * cg_ + lb * cb_;
         let y_safe = y.max(pos_eps);
 
+        // Spec §6.1.4 eq. (5): k2·ln(Y/Y_ip - k3) + k4.
         let lo_branch = k1_v * y;
-        let log_arg = (y_safe * inv_y_ip).max(pos_eps);
+        let log_arg = (y_safe * inv_y_ip - k3_v).max(pos_eps);
         let ln_v = log_arg.log2_midp() * ln2;
         let hi_branch = k2_v * ln_v + k4_v;
         let below = y.simd_lt(y_ip_v);
@@ -597,7 +603,7 @@ pub(crate) fn bt2446c_tier(
         let sdr_g = cg_ * ratio;
         let sdr_b = cb_ * ratio;
 
-        let (or_pct, og_pct, ob_pct) = if do_crosstalk {
+        let (or_nits, og_nits, ob_nits) = if do_crosstalk {
             (
                 inv_d_v * sdr_r + inv_a_v * sdr_g + inv_a_v * sdr_b,
                 inv_a_v * sdr_r + inv_d_v * sdr_g + inv_a_v * sdr_b,
@@ -607,9 +613,9 @@ pub(crate) fn bt2446c_tier(
             (sdr_r, sdr_g, sdr_b)
         };
 
-        let r_out = (or_pct * inv_one_hundred).max(lo).min(hi);
-        let g_out = (og_pct * inv_one_hundred).max(lo).min(hi);
-        let b_out = (ob_pct * inv_one_hundred).max(lo).min(hi);
+        let r_out = (or_nits * inv_sdr).max(lo).min(hi);
+        let g_out = (og_nits * inv_sdr).max(lo).min(hi);
+        let b_out = (ob_nits * inv_sdr).max(lo).min(hi);
 
         let pos = y.simd_gt(zero);
         let or_arr = f32x8::blend(pos, r_out, zero).to_array();
@@ -622,20 +628,21 @@ pub(crate) fn bt2446c_tier(
         }
     }
 
+    let inv_sdr_scalar = 1.0 / sdr_peak_nits;
     for px in iter.into_remainder().iter_mut() {
-        let rgb_pct = [
-            px[0].clamp(0.0, 100.0) * 100.0,
-            px[1].clamp(0.0, 100.0) * 100.0,
-            px[2].clamp(0.0, 100.0) * 100.0,
+        let rgb_nits = [
+            (px[0].max(0.0) * hdr_peak_nits).min(10_000.0),
+            (px[1].max(0.0) * hdr_peak_nits).min(10_000.0),
+            (px[2].max(0.0) * hdr_peak_nits).min(10_000.0),
         ];
         let ct = if do_crosstalk {
             [
-                d * rgb_pct[0] + a * rgb_pct[1] + a * rgb_pct[2],
-                a * rgb_pct[0] + d * rgb_pct[1] + a * rgb_pct[2],
-                a * rgb_pct[0] + a * rgb_pct[1] + d * rgb_pct[2],
+                d * rgb_nits[0] + a * rgb_nits[1] + a * rgb_nits[2],
+                a * rgb_nits[0] + d * rgb_nits[1] + a * rgb_nits[2],
+                a * rgb_nits[0] + a * rgb_nits[1] + d * rgb_nits[2],
             ]
         } else {
-            rgb_pct
+            rgb_nits
         };
         let y = LR_2020 * ct[0] + LG_2020 * ct[1] + LB_2020 * ct[2];
         if y <= 0.0 {
@@ -645,23 +652,24 @@ pub(crate) fn bt2446c_tier(
         let y_sdr = if y < y_ip {
             k1 * y
         } else {
-            k2 * libm::logf(y / y_ip) + k4
+            let arg = (y / y_ip - k3).max(f32::MIN_POSITIVE);
+            k2 * libm::logf(arg) + k4
         };
         let ratio = y_sdr / y;
-        let sdr_pct = [ct[0] * ratio, ct[1] * ratio, ct[2] * ratio];
+        let sdr_nits = [ct[0] * ratio, ct[1] * ratio, ct[2] * ratio];
         let sdr = if do_crosstalk {
             [
-                inv_d * sdr_pct[0] + inv_a * sdr_pct[1] + inv_a * sdr_pct[2],
-                inv_a * sdr_pct[0] + inv_d * sdr_pct[1] + inv_a * sdr_pct[2],
-                inv_a * sdr_pct[0] + inv_a * sdr_pct[1] + inv_d * sdr_pct[2],
+                inv_d * sdr_nits[0] + inv_a * sdr_nits[1] + inv_a * sdr_nits[2],
+                inv_a * sdr_nits[0] + inv_d * sdr_nits[1] + inv_a * sdr_nits[2],
+                inv_a * sdr_nits[0] + inv_a * sdr_nits[1] + inv_d * sdr_nits[2],
             ]
         } else {
-            sdr_pct
+            sdr_nits
         };
         *px = [
-            (sdr[0] / 100.0).clamp(0.0, 1.09),
-            (sdr[1] / 100.0).clamp(0.0, 1.09),
-            (sdr[2] / 100.0).clamp(0.0, 1.09),
+            (sdr[0] * inv_sdr_scalar).clamp(0.0, 1.09),
+            (sdr[1] * inv_sdr_scalar).clamp(0.0, 1.09),
+            (sdr[2] * inv_sdr_scalar).clamp(0.0, 1.09),
         ];
     }
 }

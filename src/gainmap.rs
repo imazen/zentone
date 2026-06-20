@@ -1086,14 +1086,18 @@ mod tests {
     /// and bump `clipped_sdr_pixels` rather than panic.
     #[test]
     fn extreme_highlights_clamp_gracefully() {
-        let split = LumaGainMapSplitter::new(
-            Bt2446C::new(1000.0, 100.0),
-            SplitConfig {
-                max_log2: 3.0, // 8× cap; HDR with luma 100 will exceed
-                ..Default::default()
-            },
-        );
-        let hdr = vec![100.0_f32, 100.0, 100.0, 0.5, 0.5, 0.5];
+        let cfg = SplitConfig {
+            max_log2: 3.0, // 8× cap; HDR with luma 100 will exceed
+            ..Default::default()
+        };
+        let lo = cfg.min_log2;
+        let hi = cfg.max_log2;
+        let split = LumaGainMapSplitter::new(Bt2446C::new(1000.0, 100.0), cfg);
+        // 100.0 is way above the spec's [0,1] normalized HDR range and
+        // exercises the max_log2 clip. 0.05 sits in BT.2446-C's linear
+        // branch (50 nits < Y_ip ≈ 69.81 nits) where HDR > SDR holds and
+        // the gain stays in the conventional positive band.
+        let hdr = vec![100.0_f32, 100.0, 100.0, 0.05, 0.05, 0.05];
         let mut sdr = vec![0.0; hdr.len()];
         let mut gain = vec![0.0; hdr.len() / 3];
         let mut stats = SplitStats::default();
@@ -1102,7 +1106,7 @@ mod tests {
             assert!((0.0..=1.0).contains(v), "SDR out of range: {v}");
         }
         for v in &gain {
-            assert!((0.0..=3.0).contains(v), "gain out of clamp: {v}");
+            assert!((lo..=hi).contains(v), "gain out of clamp: {v}");
         }
         assert!(
             stats.observed_max_log2 > 3.0,
