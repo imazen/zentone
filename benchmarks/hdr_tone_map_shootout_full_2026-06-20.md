@@ -314,3 +314,71 @@ nice -n19 cargo run -p zentone --release \
 
 Side-car CSV: `/home/lilith/work/zen/zentone/benchmarks/hdr_tone_map_shootout_full_2026-06-20_gainforge.csv`.
 Source: `examples/hdr_tone_map_shootout_gainforge.rs`.
+
+---
+
+## Post-fix re-shoot — Bt2446A + Bt2446C + Bt2390 (2026-06-20)
+
+After the three bug fixes (Bt2446A linear-light output `60cf33b6`, Bt2446C spec-correct k3/Y_ip/scaling `3ecd45f5`, HdrToSdr input rescale `ca614df0`), re-ran just the curves that should have moved. Bt2390 included as the reference baseline.
+
+**Tested**: 3 curves × 3 peak methods × 76 samples = 684 cell-evaluations. Runtime: 445.7s (7.4min).
+
+**Samples processed**: 76 (33 UltraHDR JPEG + 43 HEIC) of 76 gain-mapped candidates from `/home/lilith/work/codec-corpus/imazen-26/`.
+
+### Per-curve summary by peak method (median across samples)
+
+Columns: median ΔE2000 (lower = closer to producer SDR), median PSNR (dB; higher = better), median max|Δ| in normalized linear, median % pixels with ΔE > 5. The **Δ vs prior** column reports `post_fix - pre_fix` ΔE2000; a negative value means the fix improved the curve.
+
+#### `measure_max`
+
+| Curve | Median ΔE2000 | Prior ΔE2000 | Δ vs prior | Median PSNR (dB) | Median max\|Δ\| | Median %>ΔE5 |
+|-------|---------------|--------------|------------|------------------|-----------------|---------------|
+| `bt2446a` | 3.035 | 22.452 | **-19.417 (improved)** | 28.63 | 0.3334 | 2.78 |
+| `bt2390` | 8.342 | 8.342 | +0.000 | 19.88 | 0.4342 | 82.55 |
+| `bt2446c` | 16.342 | 11.947 | +4.395 (worse) | 13.72 | 0.7336 | 97.71 |
+
+#### `measure_robust`
+
+| Curve | Median ΔE2000 | Prior ΔE2000 | Δ vs prior | Median PSNR (dB) | Median max\|Δ\| | Median %>ΔE5 |
+|-------|---------------|--------------|------------|------------------|-----------------|---------------|
+| `bt2446a` | 3.172 | 22.974 | **-19.802 (improved)** | 28.24 | 0.3193 | 3.09 |
+| `bt2390` | 6.089 | 6.089 | -0.000 | 22.94 | 0.3545 | 70.08 |
+| `bt2446c` | 16.342 | 10.653 | +5.689 (worse) | 13.72 | 0.7336 | 97.71 |
+
+#### `measure_max_smoothed`
+
+| Curve | Median ΔE2000 | Prior ΔE2000 | Δ vs prior | Median PSNR (dB) | Median max\|Δ\| | Median %>ΔE5 |
+|-------|---------------|--------------|------------|------------------|-----------------|---------------|
+| `bt2446a` | 3.078 | 22.541 | **-19.463 (improved)** | 28.30 | 0.3318 | 2.74 |
+| `bt2390` | 8.331 | 8.331 | +0.000 | 20.14 | 0.4239 | 80.67 |
+| `bt2446c` | 16.342 | 11.909 | +4.433 (worse) | 13.72 | 0.7336 | 97.71 |
+
+### Verdict
+
+Under the production-default `measure_robust` peak: `bt2390` median ΔE2000 = 6.089 (prior 6.089), `bt2446a` = 3.172 (prior 22.974), `bt2446c` = 16.342 (prior 10.653).
+
+**Winner under `measure_robust` (post-fix)**: `bt2446a` at median ΔE2000 3.172. **Bt2446A overtakes Bt2390** post-fix, moving from ΔE 22.974 → 3.172 (Δ -19.802). This was the headline goal of the linear-light output fix `60cf33b6`.
+
+**Updated HdrToSdr default recommendation**: switch to Bt2446A as the curve closest to producer-graded SDR (median ΔE 3.172 vs Bt2390's 6.089; gap +2.917 ΔE).
+
+### Per-source-device breakdown (using `measure_robust`)
+
+| Curve | UltraHDR JPEG (median ΔE2000) | HEIC (median ΔE2000) |
+|---|---|---|
+| `bt2390` | 5.150 (33 samples) | 7.844 (43 samples) |
+| `bt2446a` | 3.338 (33 samples) | 2.428 (43 samples) |
+| `bt2446c` | 17.820 (33 samples) | 14.101 (43 samples) |
+
+**Tonemap thumbnails + per-sample montages** saved under [`/mnt/v/output/zentone/reshoot-2446/`](http://172.23.240.1:3300/zentone/reshoot-2446/). Naming: `<stem>__REF.png` (the producer-SDR reference; 1× per sample), `<stem>__<curve>__<peak_method>.png` (each candidate tonemap, 1024-pixel-wide PNG, 9 per sample), and `<stem>__MONTAGE_<peak_method>.png` (the 4-panel side-by-side REF | Bt2390 | Bt2446A | Bt2446C at 768-pixel-per-panel, 3 per sample).
+
+### Reproduce
+
+```bash
+nice -n19 cargo build --example hdr_tone_map_reshoot_2446 \
+  --release --features hdr-shootout
+nice -n19 cargo run --example hdr_tone_map_reshoot_2446 \
+  --release --features hdr-shootout
+```
+
+Streaming CSV: `/home/lilith/work/zen/zentone/benchmarks/hdr_tone_map_reshoot_2446_2026-06-20.csv`.
+Source: `examples/hdr_tone_map_reshoot_2446.rs`.
