@@ -60,7 +60,7 @@ archmage = { version = "0.9.22", default-features = false, features = ["macros"]
 magetypes = { version = "0.9.22", default-features = false }
 
 [dev-dependencies]
-gainforge = "0.4.1"
+gainforge = "0.5.0"
 moxcms = ">=0.8.1, <0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
 zensim = "0.2.6"
@@ -90,6 +90,10 @@ required-features = ["hdr-shootout"]
 
 [[example]]
 name = "hdr_tone_map_shootout_full"
+required-features = ["hdr-shootout"]
+
+[[example]]
+name = "hdr_tone_map_shootout_gainforge"
 required-features = ["hdr-shootout"]
 
 [[bench]]

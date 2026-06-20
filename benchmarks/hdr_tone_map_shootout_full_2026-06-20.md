@@ -222,3 +222,95 @@ Sample inputs: `/home/lilith/work/codec-corpus/imazen-26/**/{*.jpg,*.jpeg,*.heic
 Per-sample × per-cell montages (top-3 + bottom-3 per cell): `/mnt/v/output/zentone/shootout-full/...`.
 Full CSV: `/home/lilith/work/zen/zentone/benchmarks/hdr_tone_map_shootout_full_2026-06-20.csv`.
 Source: `examples/hdr_tone_map_shootout_full.rs`.
+
+---
+
+## gainforge curve sweep (addendum, 2026-06-20)
+
+**Tested**: 10 cells × 3 peak methods × 76 samples = 2280 cell-evaluations. Runtime: 918.5s (15.3min). gainforge version: 0.5.0 (`Itu2408` formerly `Rec2408`).
+
+**Goal**: test whether gainforge's `MappingColorSpace::{Jzazbz, Yrg}` color-space mapping beats zentone's per-RGB-channel tone-map (the BT.2390 winner of the main shootout, median ΔE2000 6.089 under `measure_robust`).
+
+**Pipeline**: HDR linear f32 (anchored 1.0 = 203 nits) → PQ-encoded u8 → `gainforge::create_tone_mapper_rgb(BT2020-PQ → sRGB, method, wcs).tonemap_lane(pq_u8, srgb_u8)` → u8 sRGB → linearize → diff against the producer SDR base. PQ encoding uses two frames per gainforge's internal LUT convention:
+- **Aces / Filmic / FilmicSpline**: `reference_display = 10000/203 ≈ 49.26` in gainforge's LUT, so PQ-encode in standard PQ-absolute frame (255 u8 = 10000 nits, our SDR-white u8 ≈ 148).
+- **Itu2408**: `reference_display = 1.0` in gainforge's LUT, so PQ-encode in content-relative frame (255 u8 = `content_max_brightness` nits). Re-encoded per peak-method since `content_max_brightness = source_peak_nits`.
+
+The u8 round-trip is necessary because gainforge's Yrg/Jzazbz factories don't expose a clean f32-linear-RGB entry point; the u8 PQ path is canonical and the quantization (256 PQ-encoded steps) is well below the ΔE differences being measured (>5).
+
+### Per-cell summary by peak method
+
+#### `measure_max` — sorted by median ΔE2000 ascending (BT.2390 reference: 8.342)
+
+| Rank | Cell | WCS | Median PSNR (dB) | Median ΔE2000 | Δ vs BT.2390 | Median max\|Δ\| | Median %>ΔE5 |
+|------|------|-----|------------------|---------------|--------------|-----------------|---------------|
+| 1 | `gainforge_itu2408_rgb` | rgb | 20.12 | 8.453 | +0.111 | 0.5403 | 84.80 |
+| 2 | `gainforge_filmic_spline_rgb` | rgb | 19.89 | 8.774 | +0.432 | 0.5207 | 77.05 |
+| 3 | `gainforge_aces_yrg` | yrg | 17.89 | 9.875 | +1.533 | 0.6173 | 97.14 |
+| 4 | `gainforge_filmic_rgb` | rgb | 17.75 | 9.877 | +1.535 | 0.6607 | 81.37 |
+| 5 | `gainforge_aces_rgb` | rgb | 18.18 | 10.178 | +1.836 | 0.6110 | 96.99 |
+| 6 | `gainforge_filmic_yrg` | yrg | 17.09 | 10.211 | +1.869 | 0.7079 | 80.12 |
+| 7 | `gainforge_filmic_jzazbz` | jzazbz | 15.33 | 13.577 | +5.235 | 0.6814 | 92.52 |
+| 8 | `gainforge_filmic_spline_jzazbz` | jzazbz | 14.97 | 15.148 | +6.806 | 0.5100 | 91.66 |
+| 9 | `gainforge_aces_jzazbz` | jzazbz | 10.47 | 25.919 | +17.577 | 0.8657 | 97.34 |
+| 10 | `gainforge_itu2408_jzazbz` | jzazbz | 9.25 | 29.628 | +21.286 | 0.5031 | 99.13 |
+
+#### `measure_robust` — sorted by median ΔE2000 ascending (BT.2390 reference: 6.089)
+
+| Rank | Cell | WCS | Median PSNR (dB) | Median ΔE2000 | Δ vs BT.2390 | Median max\|Δ\| | Median %>ΔE5 |
+|------|------|-----|------------------|---------------|--------------|-----------------|---------------|
+| 1 | `gainforge_itu2408_rgb` | rgb | 19.99 | 8.477 | +2.388 | 0.5403 | 84.65 |
+| 2 | `gainforge_filmic_spline_rgb` | rgb | 19.89 | 8.774 | +2.685 | 0.5207 | 77.05 |
+| 3 | `gainforge_aces_yrg` | yrg | 17.89 | 9.875 | +3.786 | 0.6173 | 97.14 |
+| 4 | `gainforge_filmic_rgb` | rgb | 17.75 | 9.877 | +3.788 | 0.6607 | 81.37 |
+| 5 | `gainforge_aces_rgb` | rgb | 18.18 | 10.178 | +4.089 | 0.6110 | 96.99 |
+| 6 | `gainforge_filmic_yrg` | yrg | 17.09 | 10.211 | +4.122 | 0.7079 | 80.12 |
+| 7 | `gainforge_filmic_jzazbz` | jzazbz | 15.33 | 13.577 | +7.488 | 0.6814 | 92.52 |
+| 8 | `gainforge_filmic_spline_jzazbz` | jzazbz | 14.97 | 15.148 | +9.059 | 0.5100 | 91.66 |
+| 9 | `gainforge_aces_jzazbz` | jzazbz | 10.47 | 25.919 | +19.830 | 0.8657 | 97.34 |
+| 10 | `gainforge_itu2408_jzazbz` | jzazbz | 9.41 | 29.203 | +23.114 | 0.5031 | 99.06 |
+
+#### `measure_max_smoothed` — sorted by median ΔE2000 ascending (BT.2390 reference: 8.334)
+
+| Rank | Cell | WCS | Median PSNR (dB) | Median ΔE2000 | Δ vs BT.2390 | Median max\|Δ\| | Median %>ΔE5 |
+|------|------|-----|------------------|---------------|--------------|-----------------|---------------|
+| 1 | `gainforge_itu2408_rgb` | rgb | 20.08 | 8.467 | +0.133 | 0.5403 | 84.68 |
+| 2 | `gainforge_filmic_spline_rgb` | rgb | 19.89 | 8.774 | +0.440 | 0.5207 | 77.05 |
+| 3 | `gainforge_aces_yrg` | yrg | 17.89 | 9.875 | +1.541 | 0.6173 | 97.14 |
+| 4 | `gainforge_filmic_rgb` | rgb | 17.75 | 9.877 | +1.543 | 0.6607 | 81.37 |
+| 5 | `gainforge_aces_rgb` | rgb | 18.18 | 10.178 | +1.844 | 0.6110 | 96.99 |
+| 6 | `gainforge_filmic_yrg` | yrg | 17.09 | 10.211 | +1.877 | 0.7079 | 80.12 |
+| 7 | `gainforge_filmic_jzazbz` | jzazbz | 15.33 | 13.577 | +5.243 | 0.6814 | 92.52 |
+| 8 | `gainforge_filmic_spline_jzazbz` | jzazbz | 14.97 | 15.148 | +6.814 | 0.5100 | 91.66 |
+| 9 | `gainforge_aces_jzazbz` | jzazbz | 10.47 | 25.919 | +17.585 | 0.8657 | 97.34 |
+| 10 | `gainforge_itu2408_jzazbz` | jzazbz | 9.25 | 29.578 | +21.244 | 0.5031 | 99.13 |
+
+### Color-space effect: RGB vs Jzazbz vs Yrg
+
+For each curve family, median ΔE2000 under `measure_robust` per working color space (lower is closer to producer SDR).
+
+| Curve | RGB | Jzazbz | Yrg | Best WCS | Δ(RGB→best) |
+|---|---|---|---|---|---|
+| `aces` | 10.178 | 25.919 | 9.875 | **Yrg** | -0.303 |
+| `filmic` | 9.877 | 13.577 | 10.211 | **RGB** | +0.000 |
+| `itu2408` | 8.477 | 29.203 | n/a | **RGB** | +0.000 |
+| `filmic_spline` | 8.774 | 15.148 | n/a | **RGB** | +0.000 |
+
+### Verdict
+
+**gainforge winner**: `gainforge_itu2408_rgb` (WCS=rgb) at median ΔE2000 8.477 under `measure_robust` — does NOT beat BT.2390 (6.089); deficit 2.388.
+
+**Color-space ranking (count of curves where each WCS is best)**: rgb (3), yrg (1).
+
+**HdrToSdr default recommendation**: see the `Δ vs BT.2390` column under `measure_robust` above. If no gainforge cell shows a `BEATS` marker, keep the BT.2390 default. If one or more do, the Jzazbz/Yrg color-space path may be worth pulling into zentone (separate conversation — would require zentone to learn the moxcms RGB↔Jzazbz/Yrg conversions, not just adopt a new curve).
+
+**Tonemap thumbnails** (1024-pixel-wide PNG previews) saved under [`/mnt/v/output/zentone/shootout-full-gainforge/`](http://172.23.240.1:3300/zentone/shootout-full-gainforge/). Naming: `<sample-stem>__REF.png` (the producer-SDR reference) and `<sample-stem>__<cell_label>__<peak_method>.png` (each tonemap candidate). All cells × samples saved inline during the per-sample sweep (no end-of-run re-decode pass; bounded peak memory).
+
+### Reproduce
+
+```bash
+nice -n19 cargo run -p zentone --release \
+  --example hdr_tone_map_shootout_gainforge --features hdr-shootout
+```
+
+Side-car CSV: `/home/lilith/work/zen/zentone/benchmarks/hdr_tone_map_shootout_full_2026-06-20_gainforge.csv`.
+Source: `examples/hdr_tone_map_shootout_gainforge.rs`.
