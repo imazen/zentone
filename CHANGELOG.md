@@ -15,6 +15,14 @@ adheres to semver.
 
 ### Added
 
+- `examples/hdr_tone_map_shootout_full.rs` (dev-only, `hdr-shootout` feature) — extended HDR→SDR
+  shootout running on the 76-sample imazen-26 corpus subset that carries gain maps (UltraHDR JPEG +
+  iPhone HEIC), against 3 source-peak measurement methods (`measure_max` / `measure_robust` /
+  `measure_max_smoothed`) × 20 curve cells. CSV + bench markdown at
+  `benchmarks/hdr_tone_map_shootout_full_2026-06-20.{csv,md}`. Honours the post-`ca614df0` HdrToSdr
+  contract: source-normalized input fed straight into `apply_strip`. Dev-deps additions: `heic-decode`
+  feature on the path-`zencodecs` dev-dep + `heic = { git = ".../heic" }` patch override (heic 0.2.0
+  on crates.io is yanked).
 - `ToneMapCurve::Mobius { source_peak, knee }` — port of libplacebo's
   `mobius()` (the production HDR-playback default across mpv, VLC,
   FFmpeg, and Plex). `M(x) = scale · (x + a) / (x + b)` for `x > knee`,

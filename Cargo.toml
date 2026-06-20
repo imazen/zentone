@@ -69,7 +69,8 @@ zensim = "0.2.6"
 # `published` library remains slim.
 anyhow = "1"
 bytemuck = { version = "1.25", default-features = false }
-zencodecs = { path = "../zenpipe/zencodecs", default-features = false, features = ["jpeg", "jpeg-ultrahdr", "avif-decode", "raw-decode", "raw-decode-gainmap", "std"] }
+rayon = "1.10"
+zencodecs = { path = "../zenpipe/zencodecs", default-features = false, features = ["jpeg", "jpeg-ultrahdr", "avif-decode", "heic-decode", "raw-decode", "raw-decode-gainmap", "std"] }
 zenpixels-convert = { version = "0.2.15", default-features = false, features = ["std", "hdr-experimental", "rgb", "imgref"] }
 zenpixels-dev = { package = "zenpixels", version = "0.2.15", default-features = false, features = ["std", "imgref"] }
 # Manual AVIF gain-map reconstruction needs ultrahdr-core directly.
@@ -85,6 +86,10 @@ required-features = ["experimental"]
 
 [[example]]
 name = "hdr_tone_map_shootout"
+required-features = ["hdr-shootout"]
+
+[[example]]
+name = "hdr_tone_map_shootout_full"
 required-features = ["hdr-shootout"]
 
 [[bench]]
@@ -109,3 +114,4 @@ zenpixels = { git = "https://github.com/imazen/zenpixels" }
 zenpixels-convert = { git = "https://github.com/imazen/zenpixels" }
 ultrahdr-core = { git = "https://github.com/imazen/ultrahdr" }
 rav1d-safe = { git = "https://github.com/imazen/rav1d-safe" }
+heic = { git = "https://github.com/imazen/heic" }
