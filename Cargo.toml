@@ -51,6 +51,12 @@ zenpixels = ["dep:zenpixels"]
 # `hdr_tone_map_shootout` example against /mnt/v/input/gainmap-samples/.
 # Not part of the published API surface.
 hdr-shootout = []
+# Internal dev-only knob (NOT public API; the `__` prefix marks it as such):
+# gates the offline `examples/fit_pow_inv_24.rs` polynomial-fitting tool.
+# Polyfit itself is a dev-dep, so published binaries are unaffected; the
+# feature exists only to keep the example off the normal `cargo test --examples`
+# path. Run with `--features __polyfit-tools` to invoke.
+__polyfit-tools = []
 
 [dependencies]
 linear-srgb = { version = "0.6.12", default-features = false, features = ["transfer"] }
@@ -64,6 +70,11 @@ gainforge = "0.5.0"
 moxcms = ">=0.8.1, <0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
 zensim = "0.2.6"
+# Offline coefficient fitting for `examples/fit_pow_inv_24.rs`. Default features
+# disabled — we only need `rational::RationalFit` + `ChebyshevFit`, not plotting
+# or random transforms. Pulled in always for dev (no runtime impact on the
+# published crate; dev-deps don't ship), gated on a feature only by the example.
+polyfit = { path = "../../polyfit", default-features = false }
 # `hdr_tone_map_shootout` example needs UltraHDR decode + CllMeasure +
 # strongly-typed PixelBuffer construction. These deps are dev-only so the
 # `published` library remains slim.
@@ -83,6 +94,10 @@ zenbench = { version = "0.1.6", features = ["criterion-compat"] }
 [[example]]
 name = "visual_compare"
 required-features = ["experimental"]
+
+[[example]]
+name = "fit_pow_inv_24"
+required-features = ["__polyfit-tools"]
 
 [[example]]
 name = "hdr_tone_map_shootout"

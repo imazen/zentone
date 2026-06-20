@@ -50,6 +50,25 @@ adheres to semver.
   Since `HdrToSdr` now defaults to `Bt2446A` on every web HDR→SDR
   conversion, this speedup is on the hot path for every served image.
 
+### Investigation
+
+- **Polyfit replacement for the last `pow_midp_unchecked(1/2.4)` in
+  `Bt2446A::map_strip_simd`'s input transfer: tried, doesn't beat the
+  baseline.** Investigation log: appended section to
+  [`benchmarks/bt2446a_throughput_2026-06-20.md`](benchmarks/bt2446a_throughput_2026-06-20.md).
+  Reproducible fitting tool at `examples/fit_pow_inv_24.rs` (gated on the
+  `__polyfit-tools` dev feature). Summary: a sqrt-substituted piecewise
+  monomial of `√x` for `x^(1/2.4)` can hit 3.4e-4 max abs error on
+  `[0, 12]` as a 2-piece (eps=0.07, deg 7 + deg 10), but the BT.2446-A
+  kernel's downstream `(b_p - y_p)` Cb/Cr cancellation amplifies that to
+  5.2e-4 in the output — just over the 5e-4 × magnitude SIMD parity
+  tolerance. A 3-piece (eps=0.05/0.30, deg 7/9/11) fixes the precision
+  (2.16e-4 max output error) but regresses throughput from 258 → 203
+  Mpix/s (-21%) because the 3 parallel Horner chains create register
+  pressure and the deepest chain still has 11 FMA latency vs
+  `pow_midp_unchecked`'s shorter dependency-chain depth on Zen 4 V4.
+  Decision: keep `pow_midp_unchecked(1/2.4)` for the input transfer.
+
 ### Added
 
 - `filmic_narkowicz` input-domain documentation + `narkowicz_input_domain_pins`

@@ -172,3 +172,166 @@ between scalar reference and SIMD output stays within the 5e-4 tolerance.
   derivation comment).
 - Dispatcher: `src/bt2446a.rs::Bt2446A::map_strip_simd` — adds the
   `v4(cfg(avx512))` tier to the `incant!` tier list.
+
+## polyfit replacement for `x^(1/2.4)` — investigated, kept baseline
+
+The prior pass (above) noted that the three `pow_midp_unchecked(1/2.4)`
+calls for the input gamma encode resisted polynomial replacement because
+`f(x) = x^0.417` has an effectively-vertical tangent near 0 on the HDR
+input range. This pass walked that back through with the `polyfit` fork
+(at `/home/lilith/work/polyfit`, version 0.11.0) to verify the
+conclusion.
+
+### Tools used
+
+- **Polyfit fork** (`/home/lilith/work/polyfit`, v0.11.0) — provides
+  `RationalFit::from_function` (Sanathanan-Koerner iteration + LM
+  refinement) and `ChebyshevFit::new` + `as_monomial()` for direct
+  monomial conversion. Pulled in as a `dev-dependency` gated by the
+  `__polyfit-tools` feature; runtime crate unaffected.
+- **Offline fitting tool**: `examples/fit_pow_inv_24.rs`. Sweeps four
+  strategies — (A) plain monomial on `x`, (B) plain monomial on `√x`,
+  (C) rational `P(√x)/Q(√x)` with `P(0)=0` constraint, (D) two-piece
+  monomial on `√x`, (E) three-piece monomial on `√x` — at multiple
+  degrees and split points. Runs in ~12 s on Zen 4.
+
+### Findings (offline polynomial precision, before kernel amplification)
+
+| Strategy | Best result on `[0, 12]` (max abs err vs `libm::powf`) |
+| --- | --- |
+| A: plain monomial of `x`, deg ≤ 24 | ~14% (≥10% per the prior pass's note — confirmed) |
+| B: plain monomial of `√x`, deg ≤ 12 | 4.9e-3 (plateau, Chebyshev→monomial unstable past deg 11) |
+| C: rational `P(√x)/Q(√x)` with `P(0)=0`, P/Q ≤ 7/7 | 2.2e-2 (the SK fitter drifts at z=0 even with constraint) |
+| **D: 2-piece monomial on `√x`** (eps=0.07, near deg 7 + bulk deg 10) | **3.44e-4** |
+| **E: 3-piece monomial on `√x`** (eps=0.05/0.30, near deg 7 + mid deg 9 + far deg 11) | **2.60e-4** |
+
+The sqrt substitution `g(z) = z^(2/2.4) ≈ z^0.833` for `z = √x` flattens
+the singular tangent (`g'(0) = 0`), turning the fit into a well-behaved
+one. The 2-piece D crosses below the 5e-4 SIMD parity tolerance on the
+polynomial alone — confirming the prior pass's "polynomial fits over
+[0, 4] give 10%+ error" was a domain-only observation that the sqrt
+substitution fixes.
+
+### Why we kept the baseline
+
+Despite the sub-5e-4 polynomial fit, the BT.2446-A kernel's downstream
+math amplifies polynomial error:
+
+- `y_p = lr*r_p + lg*g_p + lb*b_p` — weighted average across 3 channels
+- `f = y_sdr / (1.1 * y_p)` — divide by `y_p` (~0.1-1.0 typical)
+- `cb = f * (b_p - y_p) * inv_1_8814` and `cr = f * (r_p - y_p) * inv_1_4746`
+  — subtractive cancellation when `b_p ≈ y_p` or `r_p ≈ y_p`
+- Output `r_out, g_out, b_out` linearly recombine `y_tmo + 1.4746*cr`
+  etc., so the amplified Cb/Cr propagates straight to the output.
+
+Measured kernel output error (over the existing SIMD parity test grid,
+9090 comparisons):
+
+| Implementation | Max output err vs `libm::powf` reference | Parity test |
+| --- | --- | --- |
+| Baseline `pow_midp_unchecked(1/2.4)` | 5.88e-5 | passes (5e-4 × magnitude tolerance, ~9× headroom) |
+| Polyfit D (2-piece, eps=0.07, near 7 + bulk 10) | 5.21e-4 | **FAILS** by 4% on `strip[821,2]` |
+| Polyfit D + `c[0]=0` anchor on near | 5.21e-4 | **FAILS** by 4% (the anchor only fixes the `pos_eps` mask leak, not the bulk's amplified error) |
+| Polyfit E (3-piece, eps=0.05/0.30, deg 7/9/11) | 2.16e-4 | passes (margin 2.3×) |
+
+The polyfit-derived polynomials are 4-100× **worse** than
+`pow_midp_unchecked`'s ~5.9e-5 baseline error. The baseline kernel's
+existing slack (5e-4 / 5.9e-5 ≈ 8.5×) was specifically the reason the
+prior pass got away with the EOTF polynomial replacement (max err
+5.88e-5) without touching the parity tolerance.
+
+### Throughput data with each candidate
+
+`examples/bt2446a_throughput.rs`, 1024×1024 cell, three runs, median
+reported. Same flags as the table at the top of this file
+(`RUSTFLAGS="-C target-cpu=native"`, `nice -n19`).
+
+| Implementation | 1024×1024 Mpix/s | vs baseline |
+| --- | --- | --- |
+| Baseline `pow_midp_unchecked` | 258 Mpix/s | 1.00× |
+| Polyfit D (2-piece) | (would pass parity test only after tolerance relaxation — not measured) | — |
+| Polyfit E (3-piece) | 203 Mpix/s | **0.79× (regression)** |
+
+The 3-piece's deepest dependency chain is the `√x → far-Horner` cascade
+(11 FMA ≈ 44 cycles latency). At the same time, the 30 splatted
+coefficients (8 near + 10 mid + 12 far) create register pressure on
+AVX-512's 32 zmm file. The 2-piece D would have lower latency (10 FMA
+on the bulk) and only 19 coefficients, but doesn't pass parity.
+
+### Decision: keep `pow_midp_unchecked(1/2.4)` in the SIMD kernel
+
+Per the prompt's "if the precision test passes but throughput doesn't
+improve materially (< 10% gain), report and skip" rule — the only
+polyfit candidate that passes parity is the 3-piece E, which regresses
+throughput by ~21%. We **do not** ship a slower kernel.
+
+### Rough edges in polyfit observed during this investigation
+
+These are notes for upstream/fork improvements — the fork has solid
+bones, but a few sharp corners showed up while driving it for this
+specific job:
+
+1. **`F32SearchResult`'s `max_ulp` / `bnd` numbers are unreliable for
+   functions whose output approaches zero.** Every fit I ran showed
+   `max_ulp` ≈ 1e9 because the reference function `x^(1/2.4)` has a
+   tiny magnitude near `x=0` — a 1-bit error on a `4.3e-3` output is
+   ~1e9 ULP. The number is technically correct (ULPs are bit-distance),
+   but it's not the *quality signal* most callers expect when picking
+   between fits. Suggestion: auto-flip to `F32ScoreMetric::AbsoluteError`
+   when the reference's measured min magnitude is below some threshold,
+   or document the trap loudly in the `F32ScoreMetric` enum docs.
+
+2. **`Constraint::with_weight(0.0, 0.0, 1e6)` doesn't fully pin the
+   `P(0)/Q(0) = 0` boundary on rational fits.** I added a high-weight
+   `(0, 0)` constraint to pass C and the SK iteration still produced
+   fits with `boundary_ulp ≈ 8.5e8`. The constraint is a soft weight
+   in the LS objective, not a hard projection; the f32 local search at
+   the end can drift away from it. Suggestion: expose a hard-pin
+   constraint mode that subtracts the constraint linearly from `P` then
+   refits the remaining residual — or just document that
+   `with_weight` is a softening, not a pinning.
+
+3. **`RationalFit` SK on functions with a singular tangent at the
+   fit-domain boundary is unstable**: my pass C runs with `restarts=8`
+   and `n_samples=40000` still produced wildly different `max_abs`
+   values across `(p_deg, q_deg)` pairs (`(4,4)` worse than `(3,3)`,
+   `(6,5)` worse than `(5,4)`). For sRGB EOTF (the polyfit examples'
+   reference use case) the boundary singular-tangent is at the
+   threshold (`0.04`), not at zero — so the SK fitter doesn't see it.
+   For our HDR input transfer the tangent is at the fit-domain corner.
+   Suggestion: detect "the function has a vertical tangent at the
+   fit-domain boundary" and emit a warning steering callers toward
+   sqrt substitution or piecewise splits.
+
+4. **`ChebyshevFit::as_monomial()` loses precision past ~degree 12 on
+   wide-domain fits.** This is expected mathematically (Chebyshev's
+   basis is well-conditioned; monomial isn't), but the docs don't
+   warn about it. I hit it on the plain-monomial-of-`√x` sweep —
+   deg 12 gives 8.0e-3, deg 14 gives 1.9e-1 — the Chebyshev fit IS
+   accurate, but converting to monomial form for SIMD Horner
+   evaluation throws the accuracy away. Suggestion: document the
+   degree ceiling on `as_monomial`'s rustdoc + add a `monomial_check`
+   helper that compares Chebyshev evaluation vs monomial evaluation
+   on dense samples and warns if they diverge.
+
+5. **No `_unchecked` polynomial mass-eval API** — every call site
+   (including this fit tool) ends up writing the same `eval_f32_horner`
+   helper. The `rational::optimize_f32` uses an internal one; exposing
+   `polyfit::eval::horner_f32(x, &[f32]) -> f32` (the same algorithm)
+   would dedupe a lot of caller boilerplate.
+
+None of these are blockers — the fork did exactly what was asked
+(produce a polynomial approximation with rigorous f32 metrics), and the
+3-piece E result is actually genuinely useful in any context where
+parity matters more than throughput. They're just things that would
+make the next person's life easier.
+
+### Source
+
+- Offline fitting tool: `examples/fit_pow_inv_24.rs` (gated on
+  `--features __polyfit-tools`)
+- Polyfit dev-dep wiring: `Cargo.toml` `[dev-dependencies]` + the
+  `__polyfit-tools` feature
+- Polyfit fork: `/home/lilith/work/polyfit` v0.11.0
+- The SIMD kernel `src/simd/curves.rs::bt2446a_tier` is **unchanged**
+  from the prior `f32x16 + Estrin EOTF` perf pass.
