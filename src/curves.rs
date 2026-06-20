@@ -89,7 +89,61 @@ pub(crate) fn tuned_reinhard(luma: f32, content_max: f32, display_max: f32) -> f
 
 /// Narkowicz ACES-inspired filmic S-curve.
 ///
-/// Cheap scene-linear approximation of ACES RRT+ODT.
+/// Cheap scene-linear approximation of ACES RRT+ODT. Verified bit-exact
+/// against Krzysztof Narkowicz's published formula (see
+/// [`tests/cross_reference.rs::narkowicz_matches_reference`]).
+///
+/// # Input domain
+///
+/// **The curve expects pre-exposed scene-linear input** where:
+/// - Scene mid-grey (18 % grey) sits at `x ≈ 0.18` → SDR output `≈ 0.267`
+/// - Scene white sits at `x ≈ 1.0` → output `≈ 0.804`
+/// - Specular highlights at `x ≈ 2.0` → output `≈ 0.915`
+/// - `x ≥ ~10` saturates to 1.0
+///
+/// The curve has saturation asymptote `a/c = 2.51/2.43 ≈ 1.033` (clamped
+/// to 1.0). Inputs above ~10 are mapped near 1.0 with vanishing
+/// distinction.
+///
+/// **For HDR→SDR rendering**, the caller MUST apply an exposure scale
+/// that places scene mid-grey at `x ≈ 0.18`. Two common mistakes:
+///
+/// - Passing `hdr / source_peak_nits` (e.g. nits / 1000): under-exposes
+///   the curve. A 50-nit mid-grey lands at `x = 0.05`, output `≈ 0.044`
+///   — too dark.
+/// - Passing `hdr * (diffuse_white_nits / target_peak_nits)` (e.g.
+///   `* 2.03`): over-exposes the curve. A 50-nit mid-grey lands at
+///   `x = 0.50`, output `≈ 0.62` — washed out.
+///
+/// For an HDR buffer anchored `1.0 = diffuse_white_nits` (203 nits per
+/// ultrahdr / heic convention), the buffer can be passed **directly,
+/// unscaled** — scene mid-grey is already at 0.18 (=36.5 nits / 203
+/// nits) and diffuse white is at 1.0. The shootout in
+/// `examples/hdr_tone_map_shootout_full.rs` multiplies by
+/// `diffuse_white_nits / target_peak_nits = 2.03` before invoking
+/// Narkowicz; this places scene mid-grey at `x ≈ 0.366` (output ≈
+/// 0.51), which is too bright and is the over-exposed frame above.
+///
+/// # Look character
+///
+/// Narkowicz has a strong "filmic" shape: deep shadow toe + saturated
+/// highlight shoulder + S-curve through the midtones. It does NOT match
+/// producer-graded SDR (camera ISP / colorist-graded output), which is
+/// typically more linear through the midtones. A 76-sample HDR→SDR
+/// shootout against producer-graded SDR scored Narkowicz at ΔE2000 ≈
+/// 22.4, well behind BT.2390 and BT.2446B. The curve is implemented
+/// correctly; it just isn't a faithful target for ISP-graded content.
+/// Prefer [`bt2390_tonemap`] or [`Bt2446B`](crate::Bt2446B) when the
+/// SDR target is producer-graded camera output.
+///
+/// # Stability
+///
+/// At extreme values (`x > ~1e18`), `x²` overflows `f32` → `Inf/Inf =
+/// NaN`. The early return for `x > 65536` (well past the 1.0 clamp
+/// threshold) keeps the curve panic- and NaN-free across all inputs.
+///
+/// Reference: Krzysztof Narkowicz, "ACES Filmic Tone Mapping Curve"
+/// <https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/>
 #[inline]
 pub fn filmic_narkowicz(x: f32) -> f32 {
     // Asymptote: a/c = 2.51/2.43 ≈ 1.033 → clamped to 1.0.
@@ -463,6 +517,14 @@ pub enum ToneMapCurve {
         luma: [f32; 3],
     },
     /// Narkowicz filmic (ACES-inspired S-curve).
+    ///
+    /// **Input must be pre-exposed scene-linear** with scene mid-grey
+    /// (~18 % grey) at `x ≈ 0.18` and scene white at `x ≈ 1.0`. See
+    /// [`filmic_narkowicz`] for the full input-domain contract and the
+    /// reason this curve is a poor match for producer-graded SDR
+    /// targets. For HDR→SDR pipelines targeting camera-ISP-graded SDR,
+    /// prefer [`Bt2390`](Self::Bt2390) or
+    /// [`Bt2446B`](crate::Bt2446B).
     Narkowicz,
     /// Hable filmic (GDC 2010).
     HableFilmic,
@@ -698,6 +760,58 @@ mod tests {
     fn narkowicz_black_and_saturation() {
         assert!(filmic_narkowicz(0.0).abs() < 1e-6);
         assert!((filmic_narkowicz(100.0) - 1.0).abs() < 0.01);
+    }
+
+    /// Pins the input-domain contract documented on [`filmic_narkowicz`].
+    ///
+    /// Locks the "correct" frame (pre-exposed scene-linear, mid-grey at
+    /// 0.18 in, ~0.27 out) and the two common "wrong" frames so future
+    /// investigators don't re-derive these by hand. If any of these
+    /// numbers shift, the curve's published formula changed (highly
+    /// unlikely) OR the input-domain doc on `filmic_narkowicz` needs an
+    /// update.
+    #[test]
+    fn narkowicz_input_domain_pins() {
+        // Pre-exposed scene-linear ("correct frame"):
+        // Scene mid-grey (18% of scene white) at x = 0.18 → ~0.267 SDR.
+        let y_grey = filmic_narkowicz(0.18);
+        assert!(
+            (y_grey - 0.2669).abs() < 0.001,
+            "scene-grey at x=0.18 should map to ~0.267, got {y_grey}"
+        );
+        // Scene white at x = 1.0 → ~0.804 SDR.
+        let y_white = filmic_narkowicz(1.0);
+        assert!(
+            (y_white - 0.8038).abs() < 0.001,
+            "scene-white at x=1.0 should map to ~0.804, got {y_white}"
+        );
+        // Specular highlight at x = 2.0 → near saturation (~0.915).
+        let y_highlight = filmic_narkowicz(2.0);
+        assert!(
+            (y_highlight - 0.9148).abs() < 0.001,
+            "highlight at x=2.0 should map to ~0.915, got {y_highlight}"
+        );
+
+        // "Under-exposed" frame (raw HDR / source_peak, e.g. 1000-nit
+        // peak buffer normalized to [0, 1]): a 50-nit mid-grey lands at
+        // x = 0.05 → output ~0.044 (looks like deep shadow). This is the
+        // input-domain MISUSE we warn about in the doc.
+        let y_underexposed = filmic_narkowicz(0.05);
+        assert!(
+            y_underexposed < 0.10,
+            "x=0.05 under-exposes to deep shadow (<0.10), got {y_underexposed}"
+        );
+
+        // "Over-exposed" frame (HDR anchored 1.0 = diffuse_white_nits=
+        // 203 then scaled by 203/100=2.03 to "target-norm"): a 50-nit
+        // mid-grey lands at x = 0.50 → output ~0.616 (washed out). This
+        // is the frame the shootout_full example uses; documented as
+        // misuse because mid-grey should be ~0.27, not ~0.62.
+        let y_overexposed = filmic_narkowicz(0.50);
+        assert!(
+            y_overexposed > 0.55,
+            "x=0.50 over-exposes mid-grey (>0.55), got {y_overexposed}"
+        );
     }
 
     #[test]

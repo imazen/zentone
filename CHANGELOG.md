@@ -15,6 +15,17 @@ adheres to semver.
 
 ### Added
 
+- `filmic_narkowicz` input-domain documentation + `narkowicz_input_domain_pins`
+  test. Documents the published Krzysztof Narkowicz curve's expectation that
+  scene mid-grey land at `x ≈ 0.18` (output ≈ 0.267) and pins the curve
+  output at canonical input points (0.05 / 0.18 / 0.50 / 1.0 / 2.0) so future
+  investigators don't re-derive these by hand. Also explains why
+  `examples/hdr_tone_map_shootout_full.rs` scored Narkowicz at ΔE2000 ≈ 22.4
+  on producer-graded SDR (the shootout's `* 2.03` input scale over-exposes
+  the curve by 2x; and Narkowicz's filmic look — deep toe, saturated shoulder
+  — diverges from camera-ISP-graded SDR even when correctly exposed). The
+  curve itself is bit-exact per the published formula
+  (`tests/cross_reference.rs::narkowicz_matches_reference`); no code change.
 - `examples/hdr_tone_map_shootout_full.rs` (dev-only, `hdr-shootout` feature) — extended HDR→SDR
   shootout running on the 76-sample imazen-26 corpus subset that carries gain maps (UltraHDR JPEG +
   iPhone HEIC), against 3 source-peak measurement methods (`measure_max` / `measure_robust` /
