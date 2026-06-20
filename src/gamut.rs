@@ -183,6 +183,90 @@ pub fn soft_clip(rgb: [f32; 3]) -> [f32; 3] {
     [r, g, b]
 }
 
+/// Hue-preserving soft-clip with a knee — identity below `knee`, smooth
+/// rational rolloff above.
+///
+/// For values below `knee` on every channel, this is identity (no change
+/// to in-gamut colors near the gamut centre). When `max(r, g, b) > knee`,
+/// a rational knee compression maps the max channel toward `1.0`:
+///
+/// ```text
+/// range      = 1.0 - knee
+/// excess     = max - knee
+/// compressed = knee + range · excess / (excess + range)
+/// scale      = compressed / max
+/// out        = rgb · scale         // all channels share the same scale → hue preserved
+/// ```
+///
+/// The curve is `C¹`-smooth at the knee (slope = 1) and asymptotically
+/// approaches `1.0`; output is guaranteed in `[0, 1]` for any
+/// non-negative input.
+///
+/// **Negatives first:** any negative channel is clamped to 0 before the
+/// rolloff (same convention as [`soft_clip`]).
+///
+/// `knee = 0.0` reduces to immediate hue-preserving compression at the
+/// boundary (very close to [`soft_clip`] but via max-channel scale, not
+/// sort-based interpolation). `knee = 1.0` is identity (no rolloff;
+/// out-of-gamut values pass through). Default in
+/// [`HdrToSdr`](crate::HdrToSdr) is `0.95`.
+///
+/// # Examples
+///
+/// ```
+/// use zentone::gamut::soft_clip_knee;
+/// // In-gamut interior (max < knee) → identity.
+/// assert_eq!(soft_clip_knee([0.5, 0.5, 0.5], 0.95), [0.5, 0.5, 0.5]);
+/// // Above the gamut → hue-preserving rolloff into [0, 1].
+/// let out = soft_clip_knee([1.2, 0.6, 0.0], 0.95);
+/// for c in out { assert!((0.0..=1.0).contains(&c)); }
+/// ```
+#[inline]
+pub fn soft_clip_knee(rgb: [f32; 3], knee: f32) -> [f32; 3] {
+    // Negatives first — same convention as `soft_clip`.
+    let r = rgb[0].max(0.0);
+    let g = rgb[1].max(0.0);
+    let b = rgb[2].max(0.0);
+    let knee = knee.clamp(0.0, 1.0);
+
+    let max = r.max(g).max(b);
+    // Below the knee on every channel → identity (covers NaN-via-max as
+    // well, since the max is the largest of three non-negative values).
+    if max <= knee {
+        return [r, g, b];
+    }
+    // knee == 1.0 → no rolloff. Pass through (negatives already clamped).
+    let range = 1.0 - knee;
+    if range <= 0.0 {
+        return [r, g, b];
+    }
+
+    let excess = max - knee;
+    let compressed = knee + range * excess / (excess + range);
+    // `max > knee >= 0` so `max > 0`; the divide is safe.
+    let scale = compressed / max;
+    [r * scale, g * scale, b * scale]
+}
+
+/// Strip variant of [`soft_clip_knee`] — applies the per-pixel rational
+/// rolloff to every RGB triple in `rgb` in place.
+///
+/// The inner loop auto-vectorises under default codegen; no `archmage` /
+/// `magetypes` dispatch is needed for the rational rolloff. If a future
+/// profile shows the scalar path regressing materially, lift this to a
+/// SIMD tier — but for the single-`max` + one-rational per pixel, scalar
+/// LLVM output is already tight.
+///
+/// **RGB-only:** this is `&mut [[f32; 3]]`; for RGBA, drop alpha to the
+/// 4-tuple yourself before/after the call (alpha is not luminance-bearing
+/// and gamut-clipping it is meaningless).
+#[inline]
+pub fn soft_clip_knee_strip(rgb: &mut [[f32; 3]], knee: f32) {
+    for px in rgb.iter_mut() {
+        *px = soft_clip_knee(*px, knee);
+    }
+}
+
 /// Clip sorted channels (hi >= mid >= lo) to [0, 1] preserving hue.
 #[inline(always)]
 fn clip_sorted(hi: &mut f32, mid: &mut f32, lo: &mut f32) {
@@ -433,6 +517,184 @@ mod tests {
             (clamped[1] - clamped[2]).abs() < 1e-6,
             "hard clamp should collapse g and b"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // soft_clip_knee
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn soft_clip_knee_interior_is_identity() {
+        // All channels below the knee → identity.
+        let knee = 0.95;
+        for rgb in [
+            [0.0_f32, 0.0, 0.0],
+            [0.1, 0.2, 0.3],
+            [0.5, 0.5, 0.5],
+            [0.94, 0.5, 0.0],
+        ] {
+            let out = soft_clip_knee(rgb, knee);
+            for i in 0..3 {
+                assert!(
+                    (out[i] - rgb[i]).abs() < 1e-7,
+                    "interior identity failed at {rgb:?}[{i}]: {out:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn soft_clip_knee_at_exactly_knee_is_identity() {
+        // Channel exactly at the knee → still identity (the rolloff
+        // condition is `max > knee`, strictly).
+        let knee = 0.95;
+        let rgb = [knee, 0.5, 0.0];
+        let out = soft_clip_knee(rgb, knee);
+        for i in 0..3 {
+            assert!(
+                (out[i] - rgb[i]).abs() < 1e-7,
+                "identity-at-knee failed [{i}]: {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn soft_clip_knee_rolls_off_above_knee() {
+        let knee = 0.95;
+        let rgb = [1.2_f32, 0.6, 0.0];
+        let out = soft_clip_knee(rgb, knee);
+        for c in out {
+            assert!((0.0..=1.0).contains(&c), "out of [0,1]: {out:?}");
+        }
+        // Max channel must have been compressed below 1.0.
+        let max = out[0].max(out[1]).max(out[2]);
+        assert!(max < 1.0, "expected max < 1.0, got {max}");
+    }
+
+    #[test]
+    fn soft_clip_knee_preserves_hue() {
+        // After compression, channel ratios are preserved (single per-pixel
+        // scale → r/g, r/b are unchanged).
+        let knee = 0.8;
+        let rgb = [2.0_f32, 1.0, 0.5];
+        let out = soft_clip_knee(rgb, knee);
+        // Original ratios: r:g = 2:1, g:b = 2:1.
+        // After scale, the ratios should be the same.
+        assert!((out[0] / out[1] - 2.0).abs() < 1e-4);
+        assert!((out[1] / out[2] - 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn soft_clip_knee_clamps_negatives_to_zero() {
+        let out = soft_clip_knee([-0.5_f32, 1.3, 0.2], 0.95);
+        assert_eq!(out[0], 0.0);
+        for c in out {
+            assert!((0.0..=1.0).contains(&c));
+        }
+    }
+
+    #[test]
+    fn soft_clip_knee_degenerate_knee_zero() {
+        // knee = 0.0 → immediate hue-preserving compression at the
+        // boundary. Output must be in [0, 1] for any non-negative input,
+        // and ratios preserved.
+        let knee = 0.0_f32;
+        let rgb = [2.0_f32, 1.0, 0.5];
+        let out = soft_clip_knee(rgb, knee);
+        for c in out {
+            assert!((0.0..=1.0).contains(&c), "knee=0 out of [0,1]: {out:?}");
+        }
+        // Ratios preserved.
+        assert!((out[0] / out[1] - 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn soft_clip_knee_degenerate_knee_one() {
+        // knee = 1.0 → no rolloff; pass through (out-of-gamut values
+        // are not compressed, only negatives are clamped).
+        let knee = 1.0_f32;
+        let rgb = [1.5_f32, 0.3, -0.2];
+        let out = soft_clip_knee(rgb, knee);
+        assert_eq!(out[0], 1.5);
+        assert_eq!(out[1], 0.3);
+        assert_eq!(out[2], 0.0); // negative clamped
+    }
+
+    #[test]
+    fn soft_clip_knee_midrange_knee() {
+        // knee = 0.5 — typical midpoint.
+        let knee = 0.5_f32;
+        let rgb = [0.8_f32, 0.5, 0.2];
+        let out = soft_clip_knee(rgb, knee);
+        for c in out {
+            assert!((0.0..=1.0).contains(&c));
+        }
+        // Max channel (0.8 > knee) got compressed; below-knee channels
+        // got scaled proportionally — but the per-pixel scale is < 1.0
+        // so all outputs shrink (still hue-preserving).
+        assert!(out[0] < 0.8);
+    }
+
+    #[test]
+    fn soft_clip_knee_asymptote_at_unit() {
+        // Very large input → output asymptotes toward 1.0 (and is in
+        // [0, 1]).
+        let knee = 0.95_f32;
+        let out = soft_clip_knee([1e6_f32, 5e5, 1e5], knee);
+        for c in out {
+            assert!((0.0..=1.0).contains(&c), "asymptote escape: {c}");
+        }
+    }
+
+    #[test]
+    fn soft_clip_knee_strip_matches_per_pixel() {
+        let knee = 0.92_f32;
+        let pixels = [
+            [0.0_f32, 0.0, 0.0],
+            [0.5, 0.5, 0.5],
+            [1.2, 0.7, 0.0],
+            [0.9, 1.1, 1.05],
+            [-0.1, 1.5, 0.4],
+        ];
+        let expected: alloc::vec::Vec<[f32; 3]> =
+            pixels.iter().map(|&p| soft_clip_knee(p, knee)).collect();
+        let mut actual = pixels.to_vec();
+        soft_clip_knee_strip(&mut actual, knee);
+        for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+            for k in 0..3 {
+                assert!(
+                    (a[k] - e[k]).abs() < 1e-7,
+                    "strip vs per-pixel mismatch px[{i}]ch[{k}]: {a:?} vs {e:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn soft_clip_knee_output_in_unit_range_for_random_inputs() {
+        // Sweep a grid of inputs (both in- and out-of-gamut, with
+        // negatives) and assert output is in [0, 1] for any knee value
+        // in [0, 1). `knee == 1.0` is documented as identity (no rolloff;
+        // out-of-gamut values pass through), so it's excluded.
+        let knees = [0.0_f32, 0.3, 0.5, 0.8, 0.95];
+        for knee in knees {
+            for &r in &[-0.5_f32, 0.0, 0.5, 0.95, 1.0, 1.5, 5.0] {
+                for &g in &[-0.5_f32, 0.0, 0.5, 0.95, 1.0, 1.5, 5.0] {
+                    for &b in &[-0.5_f32, 0.0, 0.5, 0.95, 1.0, 1.5, 5.0] {
+                        let out = soft_clip_knee([r, g, b], knee);
+                        for c in out {
+                            assert!(
+                                c.is_finite() && (0.0..=1.0).contains(&c),
+                                "knee={knee} rgb=[{r},{g},{b}] -> [{},{},{}] (c={c})",
+                                out[0],
+                                out[1],
+                                out[2]
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

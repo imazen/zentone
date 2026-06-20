@@ -205,6 +205,7 @@ mod error;
 mod filmic_spline;
 pub mod gainmap;
 pub mod gamut;
+pub mod hdr_to_sdr;
 pub mod hlg;
 mod math;
 pub mod pipeline;
@@ -227,6 +228,7 @@ pub use gainmap::{
     Bt2408Yrgb, ExtendedReinhardLuma, HableFilmic, LumaFn, LumaGainMapSplitter, LumaToneMap,
     SplitConfig, SplitStats,
 };
+pub use hdr_to_sdr::HdrToSdr;
 pub use scratch::TonemapScratch;
 pub use tone_map::ToneMap;
 

@@ -354,6 +354,10 @@ mod tests {
             ToneMapCurve::Agx(AgxLook::Default),
             ToneMapCurve::Agx(AgxLook::Punchy),
             ToneMapCurve::Agx(AgxLook::Golden),
+            ToneMapCurve::Mobius {
+                source_peak: 4.0,
+                knee: 0.30,
+            },
             ToneMapCurve::Clamp,
         ];
         // The actual fuzz repro values (zentone#21) plus assorted extremes.

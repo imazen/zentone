@@ -330,6 +330,102 @@ pub fn bt2390_tonemap_ext(
 }
 
 // ============================================================================
+// Möbius (libplacebo)
+// ============================================================================
+
+/// Coefficients for the Möbius tone-map. Depend only on
+/// `(source_peak, knee)`; per-pixel work is one branch + one add + one
+/// divide + one multiply once these are precomputed.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MobiusCoeffs {
+    /// Knee point (clamped to `(eps, 1 - eps)`).
+    pub j: f32,
+    /// Numerator offset `a`.
+    pub a: f32,
+    /// Denominator offset `b`.
+    pub b: f32,
+    /// Output scale.
+    pub scale: f32,
+    /// `true` if the input already fits the target (`source_peak <= 1.0`)
+    /// — in that case [`mobius_apply`] is identity.
+    pub identity: bool,
+}
+
+/// Compute Möbius coefficients per libplacebo
+/// (`src/tone_mapping.c:638-665`).
+///
+/// `source_peak` is the normalized source peak — `source_peak_nits /
+/// target_peak_nits`. `knee` is the linear knee in the normalized output
+/// range `[0, 1]` (libplacebo default `0.30`).
+///
+/// Edge cases:
+/// - `source_peak <= 1.0` returns `identity = true`; no tone mapping
+///   needed.
+/// - `knee` outside `(eps, 1 - eps)` is silently clamped to that range.
+/// - The denominator `peak - 1` is floored at `1e-6` (matches the
+///   `fmaxf` in the libplacebo source) to avoid divide-by-zero when the
+///   source peak is very close to (but above) the target peak.
+#[inline]
+pub(crate) fn mobius_coefficients(source_peak: f32, knee: f32) -> MobiusCoeffs {
+    const EPS: f32 = 1.0e-6;
+    // Identity guard: source already fits the target, or input is NaN.
+    // Written as `is_nan() || <= 1.0` to keep clippy happy and make the
+    // NaN branch explicit (the original `!(source_peak > 1.0)` is correct
+    // for both but trips `neg_cmp_op_on_partial_ord`).
+    if source_peak.is_nan() || source_peak <= 1.0 {
+        return MobiusCoeffs {
+            j: knee.clamp(EPS, 1.0 - EPS),
+            a: 0.0,
+            b: 1.0,
+            scale: 1.0,
+            identity: true,
+        };
+    }
+    let j = knee.clamp(EPS, 1.0 - EPS);
+    let p = source_peak;
+    let j2 = j * j;
+    let denom_a = j2 - 2.0 * j + p;
+    let a = -j2 * (p - 1.0) / denom_a;
+    let b = (j2 - 2.0 * j * p + p) / (p - 1.0).max(EPS);
+    let scale = (b * b + 2.0 * b * j + j2) / (b - a);
+    MobiusCoeffs {
+        j,
+        a,
+        b,
+        scale,
+        identity: false,
+    }
+}
+
+/// Apply a precomputed Möbius curve to a single channel.
+///
+/// `M(x) = x` for `x <= j`, `scale * (x + a) / (x + b)` for `x > j`.
+/// Negative input is clamped to 0 (linear light is non-negative).
+///
+/// **Algebraic reform for f32 safety:** the published form
+/// `scale * (x + a) / (x + b)` overflows for `x` near `f32::MAX`
+/// (`x + a ≈ x ≈ 3.4e38`, then `scale * x` exceeds the f32 range and
+/// returns `+Inf`). We use the algebraically identical
+/// `scale * (1 + (a - b) / (x + b))`, which evaluates the divide first
+/// (bounded for `x > 0` since `b` is finite and small), so the result
+/// stays finite for every finite input. As `x → ∞`, the divide → 0 and
+/// the output asymptotes to `scale` — the true mathematical limit.
+#[inline]
+pub(crate) fn mobius_apply(x: f32, c: MobiusCoeffs) -> f32 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if c.identity || x <= c.j {
+        return x;
+    }
+    // Equivalent to `scale * (x + a) / (x + b)` but stays finite at
+    // f32::MAX. Algebra:
+    //   (x + a) / (x + b) = 1 + (a - b) / (x + b)
+    // which approaches 1 as x → ∞.
+    c.scale * (1.0 + (c.a - c.b) / (x + c.b))
+}
+
+// ============================================================================
 // Unified dispatch enum
 // ============================================================================
 
@@ -385,6 +481,29 @@ pub enum ToneMapCurve {
     },
     /// AgX (Blender) with a named look.
     Agx(AgxLook),
+    /// Möbius tone-mapping curve (libplacebo's `mobius`).
+    ///
+    /// `M(x) = scale · (x + a) / (x + b)` for `x > knee`, identity below.
+    /// Coefficients solve `M(knee) = knee`, `M(source_peak) = 1.0`,
+    /// `M'(knee) = 1.0` — continuous and `C¹`-smooth at the knee.
+    ///
+    /// **Input must be normalized** to `[0, source_peak]` where `1.0` is
+    /// the SDR / target peak. Pass `source_peak = source_peak_nits /
+    /// target_peak_nits` (e.g. `1000 / 100 = 10.0`); `knee` is in the
+    /// normalized output range (default `0.30` per libplacebo).
+    ///
+    /// Operates per-channel; caller composes with
+    /// [`gamut::soft_clip_knee`](crate::gamut::soft_clip_knee) for hue
+    /// preservation at the gamut boundary.
+    ///
+    /// Default in production HDR playback (mpv, VLC, FFmpeg, Plex via
+    /// libplacebo).
+    Mobius {
+        /// Normalized source peak (`source_peak_nits / target_peak_nits`).
+        source_peak: f32,
+        /// Linear knee in `[eps, 1.0 - eps]` (libplacebo default `0.30`).
+        knee: f32,
+    },
     /// Clamp to `[0, 1]`.
     Clamp,
 }
@@ -473,6 +592,14 @@ impl ToneMap for ToneMapCurve {
                 ]
             }
             ToneMapCurve::Agx(look) => agx_tonemap(rgb, look),
+            ToneMapCurve::Mobius { source_peak, knee } => {
+                let c = mobius_coefficients(source_peak, knee);
+                [
+                    mobius_apply(rgb[0], c),
+                    mobius_apply(rgb[1], c),
+                    mobius_apply(rgb[2], c),
+                ]
+            }
             ToneMapCurve::Clamp => [
                 clamp_tonemap(rgb[0]),
                 clamp_tonemap(rgb[1]),
@@ -687,6 +814,10 @@ mod tests {
             ToneMapCurve::HableFilmic,
             ToneMapCurve::AcesAp1,
             ToneMapCurve::Agx(AgxLook::Punchy),
+            ToneMapCurve::Mobius {
+                source_peak: 4.0,
+                knee: 0.30,
+            },
             ToneMapCurve::Clamp,
         ];
         for c in curves {
@@ -694,6 +825,163 @@ mod tests {
             for v in out {
                 assert!(v.is_finite(), "curve {c:?} produced non-finite {v}");
                 assert!((0.0..=1.0).contains(&v), "curve {c:?} out of [0,1]: {v}");
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Möbius (libplacebo port)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn mobius_identity_when_source_below_target() {
+        // source_peak <= 1.0 → input already fits target. The curve must
+        // be a pure identity (no scaling, no knee).
+        let c = mobius_coefficients(0.5, 0.30);
+        assert!(c.identity, "source_peak <= 1.0 should set identity flag");
+        for x in [0.0_f32, 0.1, 0.5, 0.8, 1.0] {
+            assert!(
+                (mobius_apply(x, c) - x).abs() < 1e-7,
+                "mobius identity failed at x={x}"
+            );
+        }
+    }
+
+    #[test]
+    fn mobius_continuity_at_knee() {
+        // The libplacebo formula solves M(j) = j; the output must equal
+        // the input at the knee point.
+        for peak in [2.0_f32, 4.0, 10.0, 20.0] {
+            for knee in [0.05_f32, 0.30, 0.7] {
+                let c = mobius_coefficients(peak, knee);
+                let y = mobius_apply(knee, c);
+                assert!(
+                    (y - knee).abs() < 1e-5,
+                    "discontinuity at knee={knee} (peak={peak}): M({knee})={y}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mobius_maps_peak_to_unit() {
+        // M(peak) = 1.0 by construction.
+        for peak in [2.0_f32, 4.0, 10.0, 20.0, 100.0] {
+            let c = mobius_coefficients(peak, 0.30);
+            let y = mobius_apply(peak, c);
+            assert!(
+                (y - 1.0).abs() < 1e-4,
+                "M(peak={peak}) should be 1.0, got {y}"
+            );
+        }
+    }
+
+    #[test]
+    fn mobius_below_knee_is_identity() {
+        // Below the knee, the curve is literally `x`.
+        let c = mobius_coefficients(10.0, 0.30);
+        for x in [0.0_f32, 0.05, 0.1, 0.2, 0.29] {
+            assert!(
+                (mobius_apply(x, c) - x).abs() < 1e-7,
+                "below-knee identity failed at x={x}"
+            );
+        }
+    }
+
+    #[test]
+    fn mobius_monotonic() {
+        // Strictly non-decreasing on [0, peak].
+        let c = mobius_coefficients(10.0, 0.30);
+        let mut last = 0.0_f32;
+        for i in 0..=200 {
+            let x = (i as f32) / 20.0; // 0 .. 10
+            let y = mobius_apply(x, c);
+            assert!(
+                y >= last - 1e-6,
+                "mobius not monotonic at x={x}: y={y} < last={last}"
+            );
+            assert!(y.is_finite(), "mobius non-finite at x={x}: y={y}");
+            last = y;
+        }
+    }
+
+    #[test]
+    fn mobius_negative_input_clamped_to_zero() {
+        let c = mobius_coefficients(10.0, 0.30);
+        assert_eq!(mobius_apply(-1.0, c), 0.0);
+        assert_eq!(mobius_apply(-1e20, c), 0.0);
+    }
+
+    #[test]
+    fn mobius_knee_outside_range_clamped() {
+        // knee should be silently clamped to (eps, 1 - eps).
+        let c_lo = mobius_coefficients(10.0, -0.5);
+        let c_hi = mobius_coefficients(10.0, 1.5);
+        assert!(c_lo.j > 0.0 && c_lo.j < 1.0);
+        assert!(c_hi.j > 0.0 && c_hi.j < 1.0);
+        // Both should still produce finite output everywhere.
+        for x in [0.0_f32, 0.5, 1.0, 5.0, 10.0] {
+            assert!(mobius_apply(x, c_lo).is_finite());
+            assert!(mobius_apply(x, c_hi).is_finite());
+        }
+    }
+
+    #[test]
+    fn mobius_dispatch_via_curve() {
+        // Variant in the ToneMapCurve enum dispatch.
+        let curve = ToneMapCurve::Mobius {
+            source_peak: 10.0,
+            knee: 0.30,
+        };
+        let out = curve.map_rgb([5.0, 8.0, 0.1]);
+        for v in out {
+            assert!(v.is_finite() && v >= 0.0);
+        }
+        // 0.1 is below the knee → identity passthrough.
+        assert!((out[2] - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mobius_dispatch_identity_when_no_compression_needed() {
+        // source_peak == target_peak → identity.
+        let curve = ToneMapCurve::Mobius {
+            source_peak: 1.0,
+            knee: 0.30,
+        };
+        let rgb = [0.4_f32, 0.7, 0.9];
+        let out = curve.map_rgb(rgb);
+        for i in 0..3 {
+            assert!((out[i] - rgb[i]).abs() < 1e-7);
+        }
+    }
+
+    #[test]
+    fn mobius_dispatch_extreme_peak_finite() {
+        // Stress: very high peak, normal input — should remain finite.
+        let curve = ToneMapCurve::Mobius {
+            source_peak: 100.0,
+            knee: 0.30,
+        };
+        for x in [0.0_f32, 0.5, 5.0, 50.0, 100.0] {
+            let out = curve.map_rgb([x; 3]);
+            for v in out {
+                assert!(v.is_finite(), "non-finite at x={x}");
+            }
+        }
+    }
+
+    #[test]
+    fn mobius_dispatch_peak_just_above_target_finite() {
+        // peak - 1 close to zero — the `max(1e-6, ...)` floor keeps
+        // coefficients finite.
+        let curve = ToneMapCurve::Mobius {
+            source_peak: 1.0 + 1e-7,
+            knee: 0.30,
+        };
+        for x in [0.0_f32, 0.5, 1.0] {
+            let out = curve.map_rgb([x; 3]);
+            for v in out {
+                assert!(v.is_finite());
             }
         }
     }

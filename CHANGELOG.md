@@ -13,6 +13,38 @@ adheres to semver.
 
 - `gamut::apply_matrix_row` now takes `channels: u8` (was `usize`), matching the `ToneMap` trait and every other `channels` parameter in the crate, so a single channel-count value chains through the gamut → tone-map seam without a per-call-site cast (closes #23). Call sites passing an integer literal are unaffected; only those passing a `usize` *variable* need to switch to `u8`.
 
+### Added
+
+- `ToneMapCurve::Mobius { source_peak, knee }` — port of libplacebo's
+  `mobius()` (the production HDR-playback default across mpv, VLC,
+  FFmpeg, and Plex). `M(x) = scale · (x + a) / (x + b)` for `x > knee`,
+  identity below; coefficients solve `M(knee) = knee`, `M(source_peak) =
+  1.0`, `M'(knee) = 1.0` — continuous and C¹-smooth. Default knee
+  `0.30` matches libplacebo's `linear_knee`. Input is per-channel
+  normalized so `1.0` is the SDR target peak; pass `source_peak =
+  source_peak_nits / target_peak_nits`. Per-channel evaluation
+  re-associates the rational form to stay finite at `f32::MAX`.
+- `gamut::soft_clip_knee(rgb, knee)` + `gamut::soft_clip_knee_strip` —
+  hue-preserving rational knee rolloff. Identity below `knee` on every
+  channel; above, a single per-pixel scale on the max channel pulls all
+  channels toward `1.0`, preserving channel ratios (so hue is held
+  exactly). Negatives clamped to 0 first (same convention as
+  `soft_clip`). C¹-smooth at the knee; output guaranteed in `[0, 1]` for
+  any non-negative input when `knee < 1`. Cheap enough to ship without a
+  dedicated SIMD tier — LLVM auto-vectorises the inner loop.
+- `HdrToSdr { source_peak_nits, target_peak_nits, knee_tone, knee_gamut }`
+  — one-call HDR→SDR wrapper: Möbius tone-map → `soft_clip_knee`.
+  Production defaults are `target_peak_nits = 100`, `knee_tone = 0.30`,
+  `knee_gamut = 0.95`. Source peak is **caller-provided** — `zentone`
+  stays dep-free of `zenpixels-convert` per the workspace architecture
+  (zentone owns HDR algorithms, CLL measurement lives in
+  `zenpixels_convert::hdr::measure`). Skips tone mapping when
+  `source_peak_nits <= target_peak_nits` (input already fits target).
+  Gamut conversion (e.g. BT.2020 → BT.709) is the caller's
+  responsibility before `apply_strip`; this struct only handles
+  luminance compression + gamut-edge soft-clip in the target gamut.
+  Exposes `apply_strip(&mut [[f32; 3]])` and `apply_rgb([f32; 3])`.
+
 ### Changed
 
 - Unified the last two internal `channels: usize` parameters to `u8` (the private `CellGrid::add_row` and a gainmap test helper), so every `channels` count crate-wide is now `u8`. No public-API impact; completes the #23 unification.
