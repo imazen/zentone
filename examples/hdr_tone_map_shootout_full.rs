@@ -37,7 +37,8 @@ use zenpixels_dev::buffer::PixelBuffer;
 use zenpixels_dev::descriptor::{ChannelLayout, ChannelType, PixelDescriptor, TransferFunction};
 use zenpixels_dev::hdr::ContentLightLevel;
 
-use zentone::{Bt2408Tonemapper, Bt2446A, Bt2446B, Bt2446C, HdrToSdr, ToneMap, ToneMapCurve};
+use zentone::gamut::soft_clip_knee_strip;
+use zentone::{Bt2408Tonemapper, Bt2446A, Bt2446B, Bt2446C, ToneMap, ToneMapCurve};
 
 // =========================================================================
 // Paths / constants
@@ -411,33 +412,36 @@ fn apply_curve(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32) -> Line
             knee_tone,
             knee_gamut,
         } => {
-            // HdrToSdr now handles the source-norm → target-norm rescale
-            // internally (fix in commit ca614df0). Pass source-normalized
-            // input directly: 1.0 = source_peak_nits.
+            // After the Möbius → Bt2446A default swap, HdrToSdr no longer
+            // wraps Möbius. The historical Möbius cells in this shootout
+            // construct ToneMapCurve::Mobius directly so the grid stays
+            // comparable to past runs.
             //
-            // Our HDR buffer is anchored 1.0 = 203 nits. To source-normalize:
-            //   px_src_norm = px_hdr * (203 / source_peak_nits)
-            //               = px_hdr * content_norm_scale
+            // ToneMapCurve::Mobius takes target-normalized input in
+            // [0, peak] where peak = source / target. Our HDR buffer is
+            // anchored 1.0 = 203 nits, so to enter that domain we scale
+            // by (203 / target_peak_nits) instead of content_norm_scale.
+            let peak = (source_peak_nits / target_peak_nits).max(1.0);
+            let s_scale = 203.0_f32 / target_peak_nits;
             scratch
                 .par_chunks_mut(8192)
                 .zip(hdr.px.par_chunks(8192))
                 .for_each(|(sc, hc)| {
                     for (s, &h) in sc.iter_mut().zip(hc.iter()) {
-                        *s = h * content_norm_scale;
+                        *s = h * s_scale;
                     }
                 });
-            let converter = HdrToSdr {
-                source_peak_nits,
-                target_peak_nits,
-                knee_tone,
-                knee_gamut,
-            };
             let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(&mut scratch);
-            converter.apply_strip(strip);
+            ToneMapCurve::Mobius {
+                source_peak: peak,
+                knee: knee_tone,
+            }
+            .map_strip_simd(strip);
+            soft_clip_knee_strip(strip, knee_gamut);
+            // Suppress unused-variable warning for content_norm_scale in this
+            // branch; the other curve branches use it directly.
+            let _ = content_norm_scale;
             // Output is target-norm: 1.0 = target_peak_nits = 100 nits.
-            // The metrics frame expects 1.0 = SDR display peak (also 100 nits
-            // since SDR linearised sRGB hits 1.0 at display white). No
-            // further scaling needed.
         }
         CurveSpec::Bt2446A => {
             let tm = Bt2446A::new(source_peak_nits, target_peak_nits);

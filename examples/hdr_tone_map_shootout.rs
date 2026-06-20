@@ -30,7 +30,8 @@ use zenpixels_dev::buffer::PixelBuffer;
 use zenpixels_dev::descriptor::{ChannelLayout, ChannelType, PixelDescriptor, TransferFunction};
 use zenpixels_dev::hdr::ContentLightLevel;
 
-use zentone::{Bt2408Tonemapper, Bt2446A, Bt2446B, Bt2446C, HdrToSdr, ToneMap, ToneMapCurve};
+use zentone::gamut::soft_clip_knee_strip;
+use zentone::{Bt2408Tonemapper, Bt2446A, Bt2446B, Bt2446C, ToneMap, ToneMapCurve};
 
 use ultrahdr_core::Unstoppable;
 use ultrahdr_core::gainmap::{HdrOutputFormat, apply_gainmap};
@@ -396,25 +397,26 @@ fn apply_curve(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32) -> Line
             knee_tone,
             knee_gamut,
         } => {
-            // HdrToSdr's Möbius takes input where 1.0 = target_peak (the
-            // libplacebo convention — despite the wrapper's docstring claim
-            // that "1.0 = source_peak_nits", the actual code passes the
-            // input straight to ToneMapCurve::Mobius which expects target-
-            // peak units). Our HDR convention is "1.0 = 203 nits (SDR
-            // diffuse white)" — so to get into target-peak units we scale
-            // by `203 / target_peak_nits`. Output is then in [0, 1] where
+            // After the Möbius → Bt2446A default swap, HdrToSdr no longer
+            // wraps Möbius — this historical shootout cell constructs
+            // ToneMapCurve::Mobius directly to keep the comparison intact.
+            //
+            // ToneMapCurve::Mobius takes input in [0, peak] target-peak
+            // units. Our HDR convention is "1.0 = 203 nits (SDR diffuse
+            // white)" — scale by `203 / target_peak_nits` to get into
+            // target-peak units. Output is then in [0, 1] where
             // 1.0 = target_peak.
+            let peak = (source_peak_nits / target_peak_nits).max(1.0);
             for (s, &h) in scratch.iter_mut().zip(hdr.px.iter()) {
                 *s = h * (diffuse_white_nits / target_peak_nits);
             }
-            let converter = HdrToSdr {
-                source_peak_nits,
-                target_peak_nits,
-                knee_tone,
-                knee_gamut,
-            };
             let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(&mut scratch);
-            converter.apply_strip(strip);
+            ToneMapCurve::Mobius {
+                source_peak: peak,
+                knee: knee_tone,
+            }
+            .map_strip_simd(strip);
+            soft_clip_knee_strip(strip, knee_gamut);
         }
         CurveSpec::Bt2446A => {
             // Bt2446A: input gamma-domain (it applies the OETF internally).

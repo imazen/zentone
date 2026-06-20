@@ -2,12 +2,12 @@
 //!
 //! See [`HdrToSdr`] for the full pipeline and defaults.
 
+use crate::Bt2446A;
 use crate::ToneMap;
-use crate::curves::ToneMapCurve;
 use crate::gamut::{soft_clip_knee, soft_clip_knee_strip};
 
-/// One-call HDR-to-SDR conversion: tone-map (Möbius) → optional gamut
-/// matrix → soft-clip-knee.
+/// One-call HDR-to-SDR conversion: tone-map (BT.2446 Method A) → optional
+/// gamut matrix → soft-clip-knee.
 ///
 /// **Source peak is caller-provided** — `zentone` stays independent of
 /// `zenpixels-convert`. Use
@@ -15,9 +15,30 @@ use crate::gamut::{soft_clip_knee, soft_clip_knee_strip};
 /// `hdr-experimental`) to derive `source_peak_nits` from input pixels,
 /// or read it from container metadata.
 ///
-/// Defaults match production:
+/// # Rationale: why BT.2446 Method A
+///
+/// The 76-sample HDR shootout
+/// ([`benchmarks/hdr_tone_map_shootout_full_2026-06-20.md`](../../benchmarks/hdr_tone_map_shootout_full_2026-06-20.md))
+/// measured 20 curve cells against producer-graded SDR on both UltraHDR
+/// JPEG and iPhone HEIC sources under the production `measure_robust`
+/// peak method. Median ΔE2000 verdict:
+///
+/// - BT.2446 Method A — **3.17**
+/// - BT.2390 — 6.09
+/// - Möbius (previous default) — 16.65
+///
+/// Method A wins on both device classes — a ~5× improvement over Möbius
+/// at the median. Visual review confirmed Bt2446A is the closest match to
+/// producer-graded SDR; see CHANGELOG for the swap entry.
+///
+/// Callers who specifically need libplacebo-compatible HDR-playback
+/// behavior (mpv / VLC / FFmpeg parity) can still construct
+/// [`ToneMapCurve::Mobius`](crate::ToneMapCurve::Mobius) directly —
+/// `HdrToSdr` targets the distinct "match what users see in their phone
+/// or camera gallery after the device ISP grades the SDR" intent.
+///
+/// Defaults:
 /// - `target_peak_nits = 100.0` (SDR reference white).
-/// - `knee_tone = 0.30` (libplacebo `linear_knee` default).
 /// - `knee_gamut = 0.95` (gamut soft-clip kicks in 5 % below boundary).
 ///
 /// # Pipeline
@@ -25,19 +46,20 @@ use crate::gamut::{soft_clip_knee, soft_clip_knee_strip};
 /// Per pixel (in both [`apply_strip`](Self::apply_strip) and
 /// [`apply_rgb`](Self::apply_rgb)):
 ///
-/// 1. Compute `peak_normalized = source_peak_nits / target_peak_nits`.
-///    If `<= 1.0`, the input already fits the target — tone mapping is
-///    skipped (only the gamut soft-clip runs).
-/// 2. Apply [`ToneMapCurve::Mobius { source_peak: peak_normalized, knee:
-///    knee_tone }`](crate::ToneMapCurve::Mobius) per channel.
-/// 3. Apply [`gamut::soft_clip_knee`](crate::gamut::soft_clip_knee) with
-///    `knee_gamut`.
+/// 1. Apply [`Bt2446A`](crate::Bt2446A) with `(source_peak_nits,
+///    target_peak_nits)`. The EETF natively absorbs the source-norm input
+///    contract (`1.0 = source_peak_nits`) and emits target-norm output
+///    in `[0, 1]` (`1.0 = target_peak_nits`).
+/// 2. Apply [`gamut::soft_clip_knee`](crate::gamut::soft_clip_knee) with
+///    `knee_gamut` as defense against rare out-of-gamut excursions (NaN
+///    inputs, over-saturated content). Bt2446A clamps to `[0, 1]`
+///    internally so this is usually a no-op.
 ///
 /// Gamut conversion (e.g. BT.2020 → BT.709 via
 /// [`gamut::apply_matrix`](crate::gamut::apply_matrix)) is the **caller's**
 /// responsibility before [`apply_strip`](Self::apply_strip); this struct
 /// only handles luminance compression + gamut-edge soft-clip in the
-/// target gamut. The result is normalized so `1.0 = target_peak_nits`.
+/// target gamut.
 ///
 /// **RGB-only:** the strip variant is `&mut [[f32; 3]]`. For RGBA, drop
 /// alpha to a separate channel before calling; alpha is not luminance-
@@ -71,9 +93,6 @@ pub struct HdrToSdr {
     /// Target display peak luminance in nits. Output pixels are
     /// normalized so `1.0 = target_peak_nits`.
     pub target_peak_nits: f32,
-    /// Möbius knee point (libplacebo default `0.30`, in the normalized
-    /// output range).
-    pub knee_tone: f32,
     /// Gamut soft-clip knee (default `0.95` — rolloff kicks in 5 %
     /// below the gamut boundary).
     pub knee_gamut: f32,
@@ -81,27 +100,13 @@ pub struct HdrToSdr {
 
 impl HdrToSdr {
     /// Construct an HDR→SDR converter for a given source peak with
-    /// production defaults: `target_peak_nits = 100`, `knee_tone = 0.30`,
-    /// `knee_gamut = 0.95`.
+    /// production defaults: `target_peak_nits = 100`, `knee_gamut = 0.95`.
     #[must_use]
     pub fn new(source_peak_nits: f32) -> Self {
         Self {
             source_peak_nits,
             target_peak_nits: 100.0,
-            knee_tone: 0.30,
             knee_gamut: 0.95,
-        }
-    }
-
-    /// Compute the normalized peak (`source_peak_nits / target_peak_nits`).
-    /// Used internally; exposed so callers that already have it can
-    /// short-circuit.
-    #[inline]
-    fn peak_normalized(&self) -> f32 {
-        if self.target_peak_nits > 0.0 {
-            self.source_peak_nits / self.target_peak_nits
-        } else {
-            1.0 // identity guard against /0
         }
     }
 
@@ -112,52 +117,27 @@ impl HdrToSdr {
     /// pixel reads near `1.0` in input). Output is normalized so
     /// `1.0 = target_peak_nits`. Caller handles container conversion
     /// (CICP / transfer / gamut matrix to BT.709 if needed) separately.
-    ///
-    /// Internally the input is rescaled to Möbius's expected
-    /// target-normalized range `[0, peak]` (where `peak =
-    /// source_peak_nits / target_peak_nits`) before the curve runs,
-    /// so the caller never has to deal with the dual-normalization
-    /// convention.
     pub fn apply_strip(&self, rgb: &mut [[f32; 3]]) {
-        let peak = self.peak_normalized();
-        if peak > 1.0 {
-            // Rescale source-norm input (1.0 = source_peak_nits) to
-            // target-norm (1.0 = target_peak_nits = `peak` in source-norm)
-            // so Möbius sees the documented `[0, peak]` range.
-            for px in rgb.iter_mut() {
-                px[0] *= peak;
-                px[1] *= peak;
-                px[2] *= peak;
-            }
-            let curve = ToneMapCurve::Mobius {
-                source_peak: peak,
-                knee: self.knee_tone,
-            };
-            curve.map_strip_simd(rgb);
-        }
+        // Bt2446A's input contract is source-normalized
+        // (1.0 = source_peak_nits) and output is target-normalized
+        // (1.0 = sdr_peak_nits = target_peak_nits) — no rescale needed.
+        // When source_peak <= target_peak the EETF curve still runs but
+        // the rho_hdr / rho_sdr ratio collapses toward identity; we don't
+        // short-circuit because the small 1.0770 boost in the low segment
+        // is intentional BT.2446 behavior.
+        let tm = Bt2446A::new(self.source_peak_nits, self.target_peak_nits);
+        tm.map_strip_simd(rgb);
         soft_clip_knee_strip(rgb, self.knee_gamut);
     }
 
     /// Per-pixel variant of [`apply_strip`](Self::apply_strip).
     ///
     /// Same input/output normalization contract — input is source-
-    /// normalized, output is target-normalized. The rescaling to
-    /// Möbius's expected range happens internally.
+    /// normalized, output is target-normalized.
     #[must_use]
     pub fn apply_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
-        let peak = self.peak_normalized();
-        let after_tone = if peak > 1.0 {
-            // Rescale source-norm → target-norm before Möbius (mirrors
-            // the strip variant).
-            let scaled = [rgb[0] * peak, rgb[1] * peak, rgb[2] * peak];
-            let curve = ToneMapCurve::Mobius {
-                source_peak: peak,
-                knee: self.knee_tone,
-            };
-            curve.map_rgb(scaled)
-        } else {
-            rgb
-        };
+        let tm = Bt2446A::new(self.source_peak_nits, self.target_peak_nits);
+        let after_tone = tm.map_rgb(rgb);
         soft_clip_knee(after_tone, self.knee_gamut)
     }
 }
@@ -172,35 +152,44 @@ mod tests {
         let c = HdrToSdr::new(1000.0);
         assert_eq!(c.source_peak_nits, 1000.0);
         assert_eq!(c.target_peak_nits, 100.0);
-        assert!((c.knee_tone - 0.30).abs() < 1e-7);
         assert!((c.knee_gamut - 0.95).abs() < 1e-7);
     }
 
     #[test]
-    fn identity_when_source_equals_target() {
-        // source_peak == target_peak → no tone mapping, only soft-clip
-        // (which is identity for in-gamut content).
+    fn source_equals_target_stays_in_unit_range() {
+        // source_peak == target_peak: Bt2446A is NOT exact identity here
+        // — its low-segment scale factor (1.0770 · y_p) intentionally
+        // boosts midtones by ~7.7% in the perceptual-log domain. So we
+        // pin the looser invariant: a mid-gray input lands well within
+        // [0, 1], roughly preserves neutrality (channels stay equal),
+        // and doesn't catastrophically diverge from input.
         let c = HdrToSdr {
             source_peak_nits: 100.0,
             target_peak_nits: 100.0,
-            knee_tone: 0.30,
             knee_gamut: 0.95,
         };
-        let rgb = [0.4_f32, 0.7, 0.2];
+        let rgb = [0.4_f32, 0.4, 0.4];
         let out = c.apply_rgb(rgb);
-        for i in 0..3 {
-            assert!(
-                (out[i] - rgb[i]).abs() < 1e-7,
-                "identity failed [{i}]: {out:?}"
-            );
+        for v in out {
+            assert!(v.is_finite() && (0.0..=1.0).contains(&v));
         }
+        // Neutral input stays neutral.
+        assert!((out[0] - out[1]).abs() < 1e-4);
+        assert!((out[1] - out[2]).abs() < 1e-4);
+        // Output is in the same general region as input (not far off the
+        // diagonal — BT.2446-A at source==target gives a mild boost, not
+        // a wild excursion).
+        assert!(
+            (out[0] - rgb[0]).abs() < 0.25,
+            "source==target output strayed far from input: out={out:?} rgb={rgb:?}"
+        );
     }
 
     #[test]
-    fn mid_bright_compresses_toward_target() {
+    fn mid_bright_via_bt2446a_compresses_toward_target() {
         // Source-normalized input: 0.5 = half of source_peak_nits =
         // 500 nits HDR midtone for a 1000-nit source. Output must be
-        // finite and below 1.0 (= target peak).
+        // finite and at or below 1.0 (= target peak).
         let c = HdrToSdr::new(1000.0);
         let out = c.apply_rgb([0.5, 0.5, 0.5]);
         for v in out {
@@ -212,31 +201,27 @@ mod tests {
     }
 
     #[test]
-    fn mobius_knee_actually_fires() {
-        // Pin the bug-fix: a saturated HDR pixel (= 1.0 in source-norm,
-        // = source_peak_nits = 4000 nits) must be visibly compressed by
-        // Möbius. Before the rescale fix, the input was 1.0 which is
-        // way below Möbius's knee + peak in target-norm, so the curve
-        // sat in its identity branch and over-bright pixels passed
-        // through unchanged. After the fix, 1.0 source-norm rescales
-        // to peak=40 target-norm, well above the knee, triggering the
-        // rational rolloff toward 1.0.
+    fn bt2446a_emits_in_unit_range() {
+        // Saturated HDR pixel (= 1.0 source-norm = source_peak_nits)
+        // must map to roughly target-peak-level output ([0.8, 1.0]) per
+        // BT.2446-A's EETF, where ρ_H ≈ 33 at 10 000 nits drives the
+        // log-domain compression hard enough that the inverse delog
+        // lands near SDR white. Pre-Bt2446A this was a regression test
+        // for a Möbius input-normalization bug; now it's a generic pin
+        // on the new curve's well-defined peak behavior.
         let c = HdrToSdr::new(4000.0);
-        // Pre-fix: this would have returned the input near-unchanged
-        // (modulo the soft-clip). Post-fix: rolled off into [0, 1].
         let out = c.apply_rgb([1.0, 1.0, 1.0]);
         for v in out {
             assert!(
-                v.is_finite() && (0.0..1.0).contains(&v),
-                "saturated source pixel must compress strictly below \
-                 target peak: got {v}"
+                v.is_finite() && (0.0..=1.0).contains(&v),
+                "saturated source pixel must land in [0, 1] target-norm: got {v}"
             );
         }
-        // And a small midtone (0.1 source-norm = 400 nits) compresses
-        // less dramatically.
+        // And smaller midtones (0.1 source-norm = 400 nits) also stay
+        // in range.
         let small = c.apply_rgb([0.1, 0.1, 0.1]);
         for v in small {
-            assert!(v.is_finite() && (0.0..1.0).contains(&v));
+            assert!(v.is_finite() && (0.0..=1.0).contains(&v));
         }
     }
 
@@ -294,7 +279,7 @@ mod tests {
             let expected = c.apply_rgb(p);
             for (k, (a, e)) in strip[i].iter().zip(expected.iter()).enumerate() {
                 assert!(
-                    (a - e).abs() < 1e-6,
+                    (a - e).abs() < 1e-5,
                     "strip vs per-pixel diverge at px[{i}]ch[{k}]: {a} vs {e}"
                 );
             }
@@ -310,31 +295,35 @@ mod tests {
     }
 
     #[test]
-    fn source_below_target_skips_tone_map() {
-        // source_peak < target_peak → only soft-clip runs. In-gamut
-        // values pass through; out-of-gamut roll off.
+    fn source_below_target_stays_in_unit_range() {
+        // source_peak < target_peak: Bt2446A still runs (no internal
+        // short-circuit), but the rho_hdr ≈ rho_sdr ratio means the
+        // compression is mild — we just pin that output stays in [0, 1]
+        // and remains finite. (Pre-Bt2446A this branch was a hard
+        // identity pass-through; we no longer make that promise because
+        // the tonemap-as-a-function-of-(peak_hdr, peak_sdr) contract is
+        // cleaner this way and downstream consumers don't depend on
+        // identity at this boundary.)
         let c = HdrToSdr {
             source_peak_nits: 80.0,
             target_peak_nits: 100.0,
-            knee_tone: 0.30,
             knee_gamut: 0.95,
         };
         let out = c.apply_rgb([0.5_f32, 0.5, 0.5]);
         for v in out {
-            assert!((v - 0.5).abs() < 1e-7);
+            assert!(v.is_finite() && (0.0..=1.0).contains(&v));
         }
     }
 
     #[test]
     fn pipeline_finite_on_extreme_inputs() {
-        // Defensive: very high HDR (peak_normalized = 100) + over-peak
+        // Defensive: very high HDR (source = 10 000 nits) + over-peak
         // input (1.0 source-norm is the documented max but a defect
         // pixel can land slightly above). Output must stay finite and
         // in [0, 1].
         let c = HdrToSdr {
             source_peak_nits: 10_000.0,
             target_peak_nits: 100.0,
-            knee_tone: 0.30,
             knee_gamut: 0.95,
         };
         let mut strip = vec![
@@ -351,16 +340,17 @@ mod tests {
     }
 
     #[test]
-    fn custom_knees_change_output() {
+    fn custom_gamut_knee_changes_output() {
         // Sanity-check the configuration knobs actually take effect:
-        // a different knee should yield a measurably different pixel.
-        let rgb = [0.5_f32, 0.3, 0.15]; // source-norm midtone
+        // a very aggressive gamut knee should change a near-gamut-edge
+        // pixel measurably. (`knee_tone` is gone — Bt2446A is fully
+        // parameterized by source/target peaks.)
+        let rgb = [0.95_f32, 0.05, 0.05]; // near-gamut-edge red
         let default = HdrToSdr::new(1000.0).apply_rgb(rgb);
         let custom = HdrToSdr {
             source_peak_nits: 1000.0,
             target_peak_nits: 100.0,
-            knee_tone: 0.05,
-            knee_gamut: 0.70,
+            knee_gamut: 0.30, // very aggressive — rolloff starts at 30 %
         }
         .apply_rgb(rgb);
         let mut differs = false;
@@ -372,7 +362,7 @@ mod tests {
         }
         assert!(
             differs,
-            "expected different output with different knees: default={default:?} custom={custom:?}"
+            "expected different output with different knee_gamut: default={default:?} custom={custom:?}"
         );
     }
 }

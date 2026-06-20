@@ -12,6 +12,24 @@ adheres to semver.
      Add items here as you discover them. Do NOT ship these piecemeal — batch them. -->
 
 - `gamut::apply_matrix_row` now takes `channels: u8` (was `usize`), matching the `ToneMap` trait and every other `channels` parameter in the crate, so a single channel-count value chains through the gamut → tone-map seam without a per-call-site cast (closes #23). Call sites passing an integer literal are unaffected; only those passing a `usize` *variable* need to switch to `u8`.
+- `HdrToSdr::knee_tone` field removed. The default curve is now `Bt2446A` (which has no Möbius-style knee), so the field would always be dead. Callers wanting Möbius-knee behavior should construct `ToneMapCurve::Mobius { source_peak, knee }` directly.
+
+### Changed
+
+- **`HdrToSdr::new(source_peak_nits)` now uses `Bt2446A` instead of `Möbius` as
+  the internal tone-mapping curve**, based on the 76-sample HDR shootout
+  ([commit `5a25742`](../commit/5a25742) — `benchmarks/hdr_tone_map_shootout_full_2026-06-20.md`).
+  Median ΔE2000 to producer-graded SDR drops from ~16.65 to 3.17 — a ~5×
+  improvement at the median under the production `measure_robust` peak
+  method, across both UltraHDR JPEG and iPhone HEIC sources. The Möbius
+  variant ([`ToneMapCurve::Mobius`](src/curves.rs)) stays selectable for
+  callers who specifically need libplacebo-compatible HDR-playback
+  behavior (mpv/VLC/FFmpeg parity); `HdrToSdr` targets the distinct
+  "match what users see in their phone/camera gallery after the device
+  ISP grades the SDR" intent. The `knee_tone` field is dropped because
+  Bt2446A's EETF is fully parameterized by `(source_peak_nits,
+  target_peak_nits)` and doesn't expose a Möbius-style knee. `knee_gamut`
+  stays for the soft-clip-knee post-process.
 
 ### Added
 
