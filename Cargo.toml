@@ -126,13 +126,13 @@ required-features = ["experimental"]
 
 # Cross-crate git overrides for the dev-only zencodecs/zenpixels(-convert) pull.
 # Without these, cargo resolves crates.io versions that pre-date the
-# `reconstruct_hdr` + `CllMeasure` APIs the example needs. The patches that
-# would never get exercised by the gainmap example (heic, zenpng, zenrav1e,
-# zenwebp, etc.) are intentionally omitted so cargo doesn't warn about
-# "patch never used".
+# `reconstruct_hdr` + `CllMeasure` APIs the example needs. `zencodec` is NOT
+# patched: 0.1.24 is on crates.io now, so the transitive zencodecs pull
+# resolves it from the registry. The patches that would never get exercised by
+# the gainmap example (zenpng, zenrav1e, zenwebp, etc.) are intentionally
+# omitted so cargo doesn't warn about "patch never used".
 [patch.crates-io]
 zenjpeg = { git = "https://github.com/imazen/zenjpeg" }
-zencodec = { git = "https://github.com/imazen/zencodec" }
 zenpixels = { git = "https://github.com/imazen/zenpixels" }
 zenpixels-convert = { git = "https://github.com/imazen/zenpixels" }
 ultrahdr-core = { git = "https://github.com/imazen/ultrahdr" }

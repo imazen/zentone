@@ -40,6 +40,16 @@ adheres to semver.
 
 ### Changed
 
+- **deps: migrate to published `zencodec 0.1.24`; drop the git-rev patch.**
+  Removed the `[patch.crates-io] zencodec = { git = … }` override now that
+  `zencodec 0.1.24` is on crates.io. zencodec is not a direct dependency — it
+  only enters the graph through the dev-only `zencodecs` pull behind the
+  `hdr-shootout` example — and that transitive edge now resolves zencodec from
+  the registry (`source = registry+…` in `Cargo.lock`). The remaining git
+  overrides (`zenjpeg`, `zenpixels`, `zenpixels-convert`, `ultrahdr-core`,
+  `heic`, `rav1d-safe`) are unchanged; their mains aren't published yet. No
+  code changes — zentone reads no zencodec `estimate` / `ResourceEstimate` API.
+
 - **`HdrToSdr::new(source_peak_nits)` now uses `Bt2446A` instead of `Möbius` as
   the internal tone-mapping curve**, based on the 76-sample HDR shootout
   ([commit `5a25742`](../commit/5a25742) — `benchmarks/hdr_tone_map_shootout_full_2026-06-20.md`).
