@@ -80,7 +80,7 @@ impl Default for FilmicSplineConfig {
 /// from the peak / middle-gray ratio so the spline covers the dynamic
 /// range. For graded HDR10/HLG content with known mastering peaks, use
 /// [`Bt2408Tonemapper`](crate::Bt2408Tonemapper) or
-/// [`Bt2446A`](crate::Bt2446A) instead — they're calibrated to specific
+/// `zenpixels_convert::hdr::Bt2446A` instead — they're calibrated to specific
 /// nits values.
 ///
 /// # Examples

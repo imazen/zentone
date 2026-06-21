@@ -30,8 +30,9 @@ use zenpixels_dev::buffer::PixelBuffer;
 use zenpixels_dev::descriptor::{ChannelLayout, ChannelType, PixelDescriptor, TransferFunction};
 use zenpixels_dev::hdr::ContentLightLevel;
 
+use zenpixels_convert::hdr::Bt2446A;
 use zentone::gamut::soft_clip_knee_strip;
-use zentone::{Bt2408Tonemapper, Bt2446A, Bt2446B, Bt2446C, ToneMap, ToneMapCurve};
+use zentone::{Bt2408Tonemapper, Bt2446B, Bt2446C, ToneMap, ToneMapCurve};
 
 use ultrahdr_core::Unstoppable;
 use ultrahdr_core::gainmap::{HdrOutputFormat, apply_gainmap};

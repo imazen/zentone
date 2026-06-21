@@ -28,11 +28,12 @@ use crate::ToneMap;
 ///
 /// Live HLG broadcast → SDR. Conservative on clipped highlights (90% SDR
 /// maps to 75% HLG = HDR Reference White), so over-exposed regions in the
-/// source don't get amplified the way [`Bt2446A`](crate::Bt2446A) might.
+/// source don't get amplified the way a Hunt-correcting curve like
+/// `zenpixels_convert::hdr::Bt2446A` might.
 /// Cheap (single log call per pixel above the breakpoint, no perceptual
 /// log domain). For graded HDR10 content, prefer
 /// [`Bt2408Tonemapper`](crate::Bt2408Tonemapper) or
-/// [`Bt2446A`](crate::Bt2446A) instead.
+/// `zenpixels_convert::hdr::Bt2446A` instead.
 ///
 /// Reference: ITU-R BT.2446-1 §5 (03/2021), aligned with BT.2408 Annex 10
 /// (NBCU "hybrid-linear" workflow).

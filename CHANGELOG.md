@@ -12,7 +12,31 @@ adheres to semver.
      Add items here as you discover them. Do NOT ship these piecemeal — batch them. -->
 
 - `gamut::apply_matrix_row` now takes `channels: u8` (was `usize`), matching the `ToneMap` trait and every other `channels` parameter in the crate, so a single channel-count value chains through the gamut → tone-map seam without a per-call-site cast (closes #23). Call sites passing an integer literal are unaffected; only those passing a `usize` *variable* need to switch to `u8`.
-- `HdrToSdr::knee_tone` field removed. The default curve is now `Bt2446A` (which has no Möbius-style knee), so the field would always be dead. Callers wanting Möbius-knee behavior should construct `ToneMapCurve::Mobius { source_peak, knee }` directly.
+
+### Removed
+
+- **`Bt2446A` (curve struct + `bt2446a_tier` SIMD strip kernel)** moved to
+  [`zenpixels_convert::hdr::Bt2446A`](https://docs.rs/zenpixels-convert)
+  (gated on the existing `hdr-experimental` feature). The convert crate is
+  now the canonical home for ITU-R BT.2446 Method A; it lives next to the
+  CLL measurement primitives that feed the HDR → SDR pipeline, and composes
+  into a one-call `zenpixels_convert::hdr::HdrToSdr` wrapper that pairs the
+  curve with a BT.2020 → BT.709 primary conversion + OKLch soft chroma
+  compression. The byte-identical algorithm, the POW24 polynomial EOTF
+  coefficients, and the strip-vs-scalar parity test moved with the kernel.
+- **`HdrToSdr` (the zentone one-call wrapper) removed.** Use
+  [`zenpixels_convert::hdr::HdrToSdr`](https://docs.rs/zenpixels-convert)
+  instead — same `HdrToSdr::new(source_peak_nits)` constructor signature,
+  same `apply_strip` / `apply_rgb` API, plus a richer pipeline (it now
+  applies a BT.2020 → BT.709 primary matrix before the curve and uses an
+  OKLch soft-compress instead of zentone's `soft_clip_knee_strip` at the
+  output). Existing call sites only need to swap the import line.
+- Bt2446A-only examples (`examples/bt2446a_throughput.rs`,
+  `examples/hdr_tone_map_reshoot_2446.rs`) removed; throughput / shootout
+  work for that curve now belongs in the convert crate. Multi-curve
+  shootout examples (`hdr_tone_map_shootout`, `hdr_tone_map_shootout_full`)
+  were updated to import `Bt2446A` from `zenpixels_convert::hdr` and still
+  build under `--features hdr-shootout`.
 
 ### Changed
 

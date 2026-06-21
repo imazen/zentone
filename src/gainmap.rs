@@ -50,9 +50,7 @@
 //! `ultrahdr-core::compute_multichannel_gainmap`.
 
 use crate::math::{exp2f, log2f};
-use crate::{
-    Bt2408Tonemapper, Bt2446A, Bt2446B, Bt2446C, CompiledFilmicSpline, ToneMap, ToneMapCurve,
-};
+use crate::{Bt2408Tonemapper, Bt2446B, Bt2446C, CompiledFilmicSpline, ToneMap, ToneMapCurve};
 use alloc::vec;
 use linear_srgb::tf::{linear_to_pq, pq_to_linear};
 
@@ -142,13 +140,6 @@ impl LumaToneMap for Bt2408Yrgb {
 }
 
 impl LumaToneMap for Bt2446C {
-    #[inline]
-    fn map_luma(&self, y: f32) -> f32 {
-        self.map_rgb([y, y, y])[0]
-    }
-}
-
-impl LumaToneMap for Bt2446A {
     #[inline]
     fn map_luma(&self, y: f32) -> f32 {
         self.map_rgb([y, y, y])[0]
@@ -615,8 +606,8 @@ impl<T: LumaToneMap> LumaGainMapSplitter<T> {
 /// channel 3 is passed through unchanged.
 ///
 /// `content_peak_nits` is the source content peak (e.g. 1000 for an
-/// HDR10 1000-nit master). Curves like [`Bt2446A`]
-/// expect `1.0` to mean their constructor's `hdr_peak_nits`.
+/// HDR10 1000-nit master). Curves like [`Bt2446B`] expect `1.0` to mean
+/// their constructor's `hdr_peak_nits`.
 pub fn pq_to_normalized_linear_row(in_out: &mut [f32], channels: u8, content_peak_nits: f32) {
     assert!(channels == 3 || channels == 4, "channels must be 3 or 4");
     assert!(
@@ -857,12 +848,6 @@ mod tests {
     }
 
     #[test]
-    fn bt2446a_well_behaved() {
-        let c = Bt2446A::new(1000.0, 100.0);
-        assert_luma_curve_well_behaved(&c, 10.0, "Bt2446A");
-    }
-
-    #[test]
     fn bt2446b_well_behaved() {
         let c = Bt2446B::new(1000.0, 100.0);
         assert_luma_curve_well_behaved(&c, 10.0, "Bt2446B");
@@ -977,10 +962,6 @@ mod tests {
         let hdr = synth_grayscale_hdr_row(16, 3, 1.5);
 
         let curves: Vec<(alloc::boxed::Box<dyn LumaToneMap>, &'static str)> = vec![
-            (
-                alloc::boxed::Box::new(Bt2446A::new(1000.0, 100.0)),
-                "Bt2446A",
-            ),
             (
                 alloc::boxed::Box::new(Bt2446B::new(1000.0, 100.0)),
                 "Bt2446B",

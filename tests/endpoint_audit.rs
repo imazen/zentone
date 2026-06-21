@@ -51,7 +51,6 @@ fn all_tonemappers() -> Vec<(&'static str, Box<dyn ToneMap>)> {
             "Bt2408_MaxRgb",
             Box::new(Bt2408Tonemapper::max_rgb(4000.0, 1000.0)),
         ),
-        ("Bt2446A", Box::new(Bt2446A::new(4000.0, 100.0))),
         ("Bt2446B", Box::new(Bt2446B::new(4000.0, 100.0))),
         ("Bt2446C", Box::new(Bt2446C::new(4000.0, 100.0))),
         (

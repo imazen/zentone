@@ -26,7 +26,7 @@
 //!   [`gamut::apply_matrix_row_simd`], [`gamut::soft_clip_row_simd`],
 //!   [`hlg::hlg_ootf_row_simd`], and the
 //!   [`ToneMap::map_strip_simd`]
-//!   trait method (with SIMD overrides on `Bt2408Tonemapper`, `Bt2446A`,
+//!   trait method (with SIMD overrides on `Bt2408Tonemapper`,
 //!   `Bt2446B`, `Bt2446C`, and [`CompiledFilmicSpline`]).
 //! - **Reference / per-pixel.** [`ToneMap::map_rgb`], [`gamut::apply_matrix`],
 //!   [`gamut::soft_clip`], [`hlg::hlg_ootf`], and the named-curve scalar
@@ -56,9 +56,13 @@
 //!   BT.2390 EETF, and `Clamp`. No state, no allocation, SIMD-accelerated
 //!   row paths.
 //! - **ITU broadcast standards** — [`Bt2408Tonemapper`] (BT.2408 Annex 5
-//!   PQ-domain Hermite spline, YRGB or MaxRGB), [`Bt2446A`] / [`Bt2446B`]
-//!   / [`Bt2446C`] (BT.2446 Methods A, B, C). Constructed once with
-//!   `(content_max_nits, display_max_nits)`.
+//!   PQ-domain Hermite spline, YRGB or MaxRGB), [`Bt2446B`] / [`Bt2446C`]
+//!   (BT.2446 Methods B and C). Constructed once with
+//!   `(content_max_nits, display_max_nits)`. BT.2446 Method A used to live
+//!   here too; it moved to
+//!   [`zenpixels_convert::hdr::Bt2446A`](https://docs.rs/zenpixels-convert)
+//!   (gated on `hdr-experimental`) where it composes into a one-call
+//!   `HdrToSdr` pipeline with primary-converted output and gamut soft-clip.
 //! - **Filmic spline** — [`CompiledFilmicSpline`] / [`FilmicSplineConfig`]:
 //!   darktable / Blender-style rational spline with toe / linear / shoulder
 //!   regions and per-pixel highlight desaturation. Heavy parameter surface
@@ -117,7 +121,7 @@
 //! |---|---|
 //! | "Just give me something cheap and decent" | [`ToneMapCurve::Narkowicz`] or [`HableFilmic`](ToneMapCurve::HableFilmic) |
 //! | Game engine / shader port | [`ToneMapCurve::AcesAp1`] or [`Agx`](ToneMapCurve::Agx) |
-//! | Broadcast-grade HDR10 / HLG → SDR with display peak nits | [`Bt2408Tonemapper`] (PQ-domain) or [`Bt2446A`] |
+//! | Broadcast-grade HDR10 / HLG → SDR with display peak nits | [`Bt2408Tonemapper`] (PQ-domain) or `zenpixels_convert::hdr::Bt2446A` |
 //! | Live HLG → SDR, conservative on clipped highlights | [`Bt2446B`] |
 //! | HDR → SDR with **mathematical inverse** (round-trip / detection) | [`Bt2446C`] |
 //! | Calibrated photo workflow with toe / shoulder control | [`CompiledFilmicSpline`] |
@@ -147,7 +151,7 @@
 //!   float precision (modulo SDR clipping; tracked in
 //!   [`SplitStats::clipped_sdr_pixels`]).
 //!
-//! Most curves implement both traits — `Bt2408Yrgb`, `Bt2446A/B/C`,
+//! Most curves implement both traits — `Bt2408Yrgb`, `Bt2446B/C`,
 //! `ExtendedReinhardLuma`, [`CompiledFilmicSpline`], and [`HableFilmic`]
 //! all derive [`LumaToneMap`] from their luma response. The splitter's
 //! [`LumaToneMap`] is luma-only because chromaticity preservation
@@ -197,7 +201,6 @@
 extern crate alloc;
 
 mod bt2408;
-mod bt2446a;
 mod bt2446b;
 mod bt2446c;
 pub mod curves;
@@ -205,7 +208,6 @@ mod error;
 mod filmic_spline;
 pub mod gainmap;
 pub mod gamut;
-pub mod hdr_to_sdr;
 pub mod hlg;
 mod math;
 pub mod pipeline;
@@ -218,7 +220,6 @@ mod tone_map;
 pub mod experimental;
 
 pub use bt2408::{Bt2408Tonemapper, EetfSpace};
-pub use bt2446a::Bt2446A;
 pub use bt2446b::Bt2446B;
 pub use bt2446c::Bt2446C;
 pub use curves::{AgxLook, ToneMapCurve};
@@ -228,7 +229,6 @@ pub use gainmap::{
     Bt2408Yrgb, ExtendedReinhardLuma, HableFilmic, LumaFn, LumaGainMapSplitter, LumaToneMap,
     SplitConfig, SplitStats,
 };
-pub use hdr_to_sdr::HdrToSdr;
 pub use scratch::TonemapScratch;
 pub use tone_map::ToneMap;
 

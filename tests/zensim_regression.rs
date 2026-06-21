@@ -96,7 +96,6 @@ const GOLDEN_SCORES: &[(&str, f32)] = &[
     ("Bt2408_YRGB", 49.5),
     ("Bt2408_maxRGB", 61.6),
     ("FilmicSpline", 50.0),
-    ("Bt2446A", 36.6),
     ("Bt2446B", 46.1),
     ("Bt2446C", 75.8),
 ];
@@ -146,10 +145,6 @@ fn all_tonemappers() -> Vec<NamedTm> {
         NamedTm {
             name: "FilmicSpline",
             tm: Box::new(CompiledFilmicSpline::new(&FilmicSplineConfig::default())),
-        },
-        NamedTm {
-            name: "Bt2446A",
-            tm: Box::new(Bt2446A::new(1000.0, 100.0)),
         },
         NamedTm {
             name: "Bt2446B",

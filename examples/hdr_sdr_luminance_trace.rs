@@ -22,7 +22,8 @@ use zenpixels_dev::buffer::PixelBuffer;
 use zenpixels_dev::descriptor::{ChannelLayout, ChannelType, PixelDescriptor, TransferFunction};
 use zenpixels_dev::hdr::ContentLightLevel;
 
-use zentone::{Bt2446A, Bt2446C, ToneMap, ToneMapCurve};
+use zenpixels_convert::hdr::Bt2446A;
+use zentone::{Bt2446C, ToneMap, ToneMapCurve};
 
 const DIFFUSE_WHITE_NITS: f32 = 203.0;
 const TARGET_PEAK_NITS: f32 = 100.0;

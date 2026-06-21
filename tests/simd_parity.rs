@@ -592,8 +592,9 @@ fn tonemap_pq_to_srgb8_row_simd_matches_scalar() {
 // ============================================================================
 //
 // These tests pin the new SIMD strip kernels for `Bt2408Tonemapper`,
-// `Bt2446A/B/C`, and `CompiledFilmicSpline` against their per-pixel scalar
-// references. Tolerance reflects the precision of the underlying SIMD
+// `Bt2446B/C`, and `CompiledFilmicSpline` against their per-pixel scalar
+// references. (`Bt2446A` parity moved to zenpixels_convert with the curve.)
+// Tolerance reflects the precision of the underlying SIMD
 // transcendental: `pow_midp` / `log2_midp` / `exp2_midp` are ~3 ULP, so the
 // kernel's cumulative output error stacks up to a few times that.
 //
@@ -689,26 +690,6 @@ fn bt2408_strip_simd_matches_per_pixel() {
         total_max = total_max.max(m);
     }
     println!("bt2408_strip_simd_matches_per_pixel: {total} comparisons, max_err={total_max:.3e}");
-}
-
-#[test]
-fn bt2446a_strip_simd_matches_per_pixel() {
-    use zentone::Bt2446A;
-    let curves = [Bt2446A::new(1000.0, 100.0), Bt2446A::new(4000.0, 100.0)];
-    let mut total = 0;
-    let mut total_max = 0.0_f32;
-    for tm in curves.iter() {
-        // 3× pow_midp(1/2.4) for gamma encoding + log2_midp (perceptual
-        // linearization) + exp2_midp (rho_sdr^y_c) + chained `f / y_p` and
-        // YCbCr cancellation `b_p - y_p`. Subtractive cancellation on
-        // saturated colors (one channel ~1.0 with luma weight 0.06 →
-        // `b_p - y_p` near zero in absolute terms) inflates relative error
-        // through the f-multiply. 5e-4 × magnitude covers the long tail.
-        let (n, m) = check_strip_vs_per_pixel(tm, 5e-4);
-        total += n;
-        total_max = total_max.max(m);
-    }
-    println!("bt2446a_strip_simd_matches_per_pixel: {total} comparisons, max_err={total_max:.3e}");
 }
 
 #[test]

@@ -173,13 +173,6 @@ fn all_cases() -> Vec<Case> {
             monotonic: true,
         },
         Case {
-            name: "Bt2446A",
-            tm: Box::new(Bt2446A::new(1000.0, 100.0)),
-            sdr_bounded: true,
-            normalized_input: false,
-            monotonic: true,
-        },
-        Case {
             name: "Bt2446B",
             tm: Box::new(Bt2446B::new(1000.0, 100.0)),
             sdr_bounded: true,

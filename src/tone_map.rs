@@ -21,7 +21,6 @@
 ///   See per-curve docs.
 /// - **Input scale**: the curve decides what `1.0` means. ITU curves
 ///   ([`Bt2408Tonemapper`](crate::Bt2408Tonemapper),
-///   [`Bt2446A`](crate::Bt2446A) /
 ///   [`B`](crate::Bt2446B) /
 ///   [`C`](crate::Bt2446C)) use `1.0 = hdr_peak_nits`; classical curves
 ///   ([`ToneMapCurve`](crate::ToneMapCurve), [`AgX`](crate::AgxLook),
