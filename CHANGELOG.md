@@ -14,6 +14,30 @@ adheres to semver.
 - `gamut::apply_matrix_row` now takes `channels: u8` (was `usize`), matching the `ToneMap` trait and every other `channels` parameter in the crate, so a single channel-count value chains through the gamut → tone-map seam without a per-call-site cast (closes #23). Call sites passing an integer literal are unaffected; only those passing a `usize` *variable* need to switch to `u8`.
 - `HdrToSdr::knee_tone` field removed. The default curve is now `Bt2446A` (which has no Möbius-style knee), so the field would always be dead. Callers wanting Möbius-knee behavior should construct `ToneMapCurve::Mobius { source_peak, knee }` directly.
 
+### Added
+
+- **`Bt2446A::map_strip_simd_for_u8`** — relaxed-precision SIMD tone-map calibrated for
+  8-bit sRGB output. Uses a 2-piece sqrt-substituted monomial polynomial for the
+  `x^(1/2.4)` input gamma encode (kernel-amplified output error 5.21e-4, well below the
+  8-bit sRGB half-LSB threshold of 1.96e-3). Output is byte-identical to
+  `map_strip_simd` after sRGB-u8 encoding for ~all pixels (0/51 ±1-LSB mismatches on
+  the verification grid). Use this when the output is destined for sRGB-u8 (JPEG,
+  PNG-8, byte buffer); use `map_strip_simd` for 16-bit/EXR/half-float/PQ-round-trip
+  paths where the 5.21e-4 linear-light error is visible (≈ 34 16-bit LSBs). See
+  [`benchmarks/bt2446a_throughput_2026-06-20.md`](benchmarks/bt2446a_throughput_2026-06-20.md)
+  §"8-bit-display-targeted fast path" for the precision/throughput tradeoff.
+
+### Changed
+
+- **`HdrToSdr::apply_strip` routes through `Bt2446A::map_strip_simd_for_u8`** —
+  byte-identical to the prior `map_strip_simd` path after sRGB-u8 encoding (which is
+  what `HdrToSdr`'s consumers produce). Signals intent ("8-bit-display-targeted") at
+  the kernel boundary so future precision/perf tuning of the relaxed path doesn't risk
+  regressions on 16-bit consumers. Throughput is at parity on Zen 4 AVX-512 in the
+  current measurement (~260 Mpix/s, ±5% run-to-run variance); the path split is
+  shipped for intent clarity and future-proofing on hardware where the cost balance
+  shifts (older CPUs with slower div, NEON/WASM-SIMD without fast reciprocals).
+
 ### Changed
 
 - **`HdrToSdr::new(source_peak_nits)` now uses `Bt2446A` instead of `Möbius` as

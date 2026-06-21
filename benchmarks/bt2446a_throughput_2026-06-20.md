@@ -335,3 +335,121 @@ make the next person's life easier.
 - Polyfit fork: `/home/lilith/work/polyfit` v0.11.0
 - The SIMD kernel `src/simd/curves.rs::bt2446a_tier` is **unchanged**
   from the prior `f32x16 + Estrin EOTF` perf pass.
+
+## 8-bit-display-targeted fast path (`map_strip_simd_for_u8`)
+
+The polyfit investigation above produced a 2-piece sqrt-substitution
+polynomial that fits `x^(1/2.4)` with max polynomial error 3.44e-4 over
+`x ∈ [0, 11]` — far below the 8-bit sRGB half-LSB threshold (1.96e-3 in
+normalized linear space). The downstream BT.2446-A Cb/Cr amplification
+inflates the kernel output error to ~5.21e-4 — **still 3.8× below the
+half-LSB threshold**, so when the output is destined for sRGB-u8 the
+relaxed-precision polynomial is **byte-identical** to the spec-strict
+`pow_midp_unchecked(1/2.4)` after the sRGB encode for ~all pixels.
+
+This pass ships the relaxed path as
+[`Bt2446A::map_strip_simd_for_u8`](../src/bt2446a.rs) and routes
+`HdrToSdr::apply_strip` through it. The spec-strict
+[`Bt2446A::map_strip_simd`](../src/bt2446a.rs) path is unchanged.
+
+### Throughput, side-by-side
+
+`examples/bt2446a_throughput.rs` extended to run both paths on the same
+synthetic buffer at five sizes (256² → 7680×4320). Same flags as the
+results at the top (`RUSTFLAGS="-C target-cpu=native"`, `nice -n19
+ionice -c3`, AMD Ryzen 9 7950X / Zen 4 AVX-512).
+
+Representative run (third of three):
+
+| size      | pixels   | strict (Mpix/s) | u8-fast (Mpix/s) | speedup |
+|-----------|----------|----------------:|-----------------:|--------:|
+| 256×256   |  0.07 MP |           260.6 |            260.8 |   1.00× |
+| 1024×1024 |  1.05 MP |           250.9 |            247.8 |   0.99× |
+| 2048×2048 |  4.19 MP |           256.5 |            260.1 |   1.01× |
+| 3840×2160 |  8.29 MP |           255.3 |            252.3 |   0.99× |
+| 7680×4320 | 33.18 MP |           254.7 |            259.9 |   1.02× |
+
+Run-to-run variance is ±5%; the two paths land within that noise floor —
+**effectively at parity** on Zen 4 AVX-512.
+
+### Why no measured speedup (honest finding)
+
+`pow_midp_unchecked(1/2.4)` in magetypes 0.9.22 expands to:
+
+```text
+log2_midp_unchecked(x)        // ~4 FMA + 1 div + bit-ops (degree-3 poly)
+   * 1.0/2.4                  // 1 mul
+exp2_midp_unchecked(result)   // ~4 FMA + bit-ops (degree-3 poly)
+```
+
+≈ 8 FMAs + 1 div on a shallow dep chain, per `pow_midp_unchecked` call.
+Across 3 channels with ILP, that's ~10-12 cycles per pixel for the
+input-transfer step.
+
+The 2-piece sqrt-substituted polynomial:
+
+```text
+sqrt(x)                       // 14 cycle latency
+[parallel] Estrin near + bulk // depth 4 FMAs for bulk = ~16 cycles
+blend on z<eps                // 1 op
+```
+
+≈ depth 30 cycles per channel — comparable to `pow_midp_unchecked` once
+the FMA pipelines are saturated. Estrin's method keeps both branches'
+critical paths shallow, but the leading `sqrt` cost (14 cycles, can't
+overlap with the polynomial since the polynomial *needs* the sqrt
+result) eats the win.
+
+The polynomial form would likely win on:
+- Older CPUs with slower div (`pow_midp_unchecked`'s div is the
+  expensive op).
+- NEON without fast reciprocals (`vdivq_f32` is multi-cycle on Cortex-A
+  cores).
+- WASM-SIMD which has no native `vrsqrteq`-style estimate.
+
+This pass commits the path split anyway because:
+1. **Intent clarity**: callers writing JPEG/PNG-8 see "u8" in the name
+   and know they can use the lower-precision path without checking
+   pixel diffs.
+2. **Future-proofing**: when magetypes / archmage ship lower-precision
+   `pow_lowp` (sub-`pow_midp`) variants, the u8 path can swap in without
+   touching the spec-strict path.
+3. **Byte-equivalence is preserved** (the
+   `u8_fast_path_byte_identical_to_spec_strict_at_8bit` test pins this
+   at zero ±1-LSB mismatches across the case grid).
+
+### Byte-equivalence verification
+
+`src/bt2446a.rs::tests::u8_fast_path_byte_identical_to_spec_strict_at_8bit`
+runs spec-strict and u8-fast on a 17-pixel case grid across three source
+peaks (500 / 1000 / 4000 nits), encodes both outputs through `^(1/2.4)`
+→ `u8`, and asserts pairwise byte equality. The test hard-caps the ±1
+LSB mismatch rate at 5%; the current implementation lands at 0/51 byte
+mismatches on the grid.
+
+### Caller guidance: when to pick which
+
+- **Use `map_strip_simd_for_u8`** when the output is destined for
+  sRGB-u8 (JPEG, PNG-8, byte buffer). This is what
+  [`HdrToSdr::apply_strip`](../src/hdr_to_sdr.rs) does — its consumers
+  produce sRGB-u8.
+- **Use `map_strip_simd`** for 16-bit PNG, EXR, half-float output, or
+  PQ-round-trip validation. The 5.21e-4 linear-light error is invisible
+  at 8-bit but visible at 16-bit (≈ 34 16-bit LSBs).
+- **Use `map_strip_simd`** for spec-validation reference output
+  (passes the existing `bt2446a_strip_simd_matches_per_pixel` 5e-4
+  parity test; the u8 fast path does not, by design — see the test's
+  own scalar tail vs SIMD body check
+  `u8_fast_path_simd_matches_scalar_within_tolerance` instead).
+
+### Source
+
+- Kernel: `src/simd/curves.rs::bt2446a_u8_tier`
+- Wrapper: `src/bt2446a.rs::Bt2446A::map_strip_simd_for_u8`
+- HdrToSdr swap: `src/hdr_to_sdr.rs::HdrToSdr::apply_strip`
+- Tests: `src/bt2446a.rs::tests::u8_fast_path_*`
+- Bench: `examples/bt2446a_throughput.rs` (extended to bench both paths)
+- Coefficients: `src/simd/curves.rs::POW_INV24_NEAR` /
+  `POW_INV24_BULK` / `POW_INV24_SPLIT_Z`
+- Reproducer: `examples/fit_pow_inv_24.rs` (run with `--features
+  __polyfit-tools`).

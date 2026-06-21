@@ -65,6 +65,16 @@ use crate::gamut::{soft_clip_knee, soft_clip_knee_strip};
 /// alpha to a separate channel before calling; alpha is not luminance-
 /// bearing and tone-mapping it is meaningless.
 ///
+/// # Precision
+///
+/// [`apply_strip`](Self::apply_strip) routes through
+/// [`Bt2446A::map_strip_simd_for_u8`], the 8-bit-display-targeted SIMD
+/// fast path. Output is byte-identical to the spec-strict
+/// [`Bt2446A::map_strip_simd`] path after sRGB-u8 encoding for ~all
+/// pixels. Callers writing 16-bit PNG / EXR / half-float output should
+/// invoke [`Bt2446A`] directly instead — the 5.21e-4 linear-light error
+/// of the fast path is visible at 16-bit precision.
+///
 /// # Example
 ///
 /// ```
@@ -117,6 +127,13 @@ impl HdrToSdr {
     /// pixel reads near `1.0` in input). Output is normalized so
     /// `1.0 = target_peak_nits`. Caller handles container conversion
     /// (CICP / transfer / gamut matrix to BT.709 if needed) separately.
+    ///
+    /// Uses the 8-bit-display-targeted
+    /// [`Bt2446A::map_strip_simd_for_u8`] SIMD fast path. Output is
+    /// byte-identical to the spec-strict
+    /// [`Bt2446A::map_strip_simd`] path after sRGB-u8 encoding for ~all
+    /// pixels — see that method's docstring for the precision tradeoff
+    /// and when to drop down to the spec-strict path directly.
     pub fn apply_strip(&self, rgb: &mut [[f32; 3]]) {
         // Bt2446A's input contract is source-normalized
         // (1.0 = source_peak_nits) and output is target-normalized
@@ -126,7 +143,7 @@ impl HdrToSdr {
         // short-circuit because the small 1.0770 boost in the low segment
         // is intentional BT.2446 behavior.
         let tm = Bt2446A::new(self.source_peak_nits, self.target_peak_nits);
-        tm.map_strip_simd(rgb);
+        tm.map_strip_simd_for_u8(rgb);
         soft_clip_knee_strip(rgb, self.knee_gamut);
     }
 
@@ -265,6 +282,15 @@ mod tests {
 
     #[test]
     fn apply_rgb_matches_apply_strip() {
+        // `apply_strip` uses the 8-bit-display-targeted SIMD fast path
+        // (`Bt2446A::map_strip_simd_for_u8` — 2-piece sqrt-substituted
+        // polynomial for `x^(1/2.4)` + Estrin EOTF), while `apply_rgb`
+        // uses scalar `libm::powf` end-to-end. The two are byte-identical
+        // after sRGB-u8 encoding, but the linear-light intermediate can
+        // diverge by up to ~5.21e-4 (the documented polynomial-amplified
+        // kernel error). Tolerance reflects that — if the divergence
+        // grows beyond it, either the polynomial constants regressed or
+        // the SIMD body's math drifted.
         let c = HdrToSdr::new(2000.0);
         let pixels = [
             [0.0_f32, 0.0, 0.0],
@@ -279,7 +305,7 @@ mod tests {
             let expected = c.apply_rgb(p);
             for (k, (a, e)) in strip[i].iter().zip(expected.iter()).enumerate() {
                 assert!(
-                    (a - e).abs() < 1e-5,
+                    (a - e).abs() < 1e-3,
                     "strip vs per-pixel diverge at px[{i}]ch[{k}]: {a} vs {e}"
                 );
             }
