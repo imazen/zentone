@@ -13,6 +13,12 @@
 //! 3. Adds 4th peak method: `measure_percentile @ 0.99999`.
 //! 4. CSV gains `color_handling_version` column ("2026-06-22-audited") so
 //!    rows merge with the 2026-06-20 baseline.
+//! 5. **2026-06-22-v2**: adds tail-aware metrics (ΔE2000 percentiles
+//!    p50/p90/p95/p99 + OKLab Euclidean ΔE mean/percentiles + threshold
+//!    fraction). OKLab is computed on linear sRGB (BT.709) D65, rotating
+//!    from the producer's primaries inside the OKLab subroutine. CSV
+//!    `metrics_version="2026-06-22-percentiles-oklab"` distinguishes this
+//!    schema; output filename suffixed with `_v2`.
 //!
 //! Runs 76 samples × 4 peak methods × 20 curves = 6080 cells.
 //!
@@ -47,9 +53,27 @@ use zentone::{Bt2408Tonemapper, Bt2446B, Bt2446C, ToneMap, ToneMapCurve};
 
 const SAMPLES_ROOT: &str = "/home/lilith/work/codec-corpus/imazen-26";
 const CSV_PATH: &str =
-    "/home/lilith/work/zen/zentone/benchmarks/hdr_tone_map_shootout_full_2026-06-22.csv";
+    "/home/lilith/work/zen/zentone/benchmarks/hdr_tone_map_shootout_full_2026-06-22_v2.csv";
 const WORKONGOING: &str = "/home/lilith/work/zen/zentone/.workongoing";
 const COLOR_HANDLING_VERSION: &str = "2026-06-22-audited";
+const METRICS_VERSION: &str = "2026-06-22-percentiles-oklab";
+
+// ΔE2000 histogram: 500 bins of width 0.1 covering [0, 50). Pixels with
+// ΔE2000 ≥ 50 are capped to the top bin (rare on tone-mapping; they exist on
+// pathological clip/clamp cells but the tail percentiles only need to *see*
+// them, not measure them precisely).
+const DE2K_HIST_BINS: usize = 500;
+const DE2K_HIST_BIN_WIDTH: f64 = 0.1;
+const DE2K_DE5_BIN: usize = 50; // ceil(5.0 / 0.1)
+
+// ΔE_OKLab histogram: 500 bins of width 0.001 covering [0, 0.5). OKLab JND
+// is around 0.04; 0.1 is "clearly different". Cap above 0.5 (saturated-color
+// clip on the worst Möbius-knee combos can exceed 0.3).
+const DE_OK_HIST_BINS: usize = 500;
+const DE_OK_HIST_BIN_WIDTH: f64 = 0.001;
+#[allow(dead_code)]
+const DE_OK_THRESHOLD: f64 = 0.04;
+const DE_OK_THRESHOLD_BIN: usize = 40; // 0.04 / 0.001
 /// New peak method: high percentile (1-in-100,000 pixels).
 const PERCENTILE_99999: f32 = 0.99999;
 
@@ -678,6 +702,17 @@ struct CellMetrics {
     mean_de2000: f32,
     max_abs_delta: f32,
     pct_de_gt_5: f32,
+    // New 2026-06-22-v2: tail-aware ΔE percentiles + OKLab Euclidean ΔE.
+    de2000_p50: f32,
+    de2000_p90: f32,
+    de2000_p95: f32,
+    de2000_p99: f32,
+    de_ok_mean: f32,
+    de_ok_p50: f32,
+    de_ok_p90: f32,
+    de_ok_p95: f32,
+    de_ok_p99: f32,
+    pct_above_de_ok_0p04: f32,
 }
 
 fn compute_metrics(reference: &LinearRgb, candidate: &LinearRgb) -> CellMetrics {
@@ -759,40 +794,246 @@ fn compute_metrics(reference: &LinearRgb, candidate: &LinearRgb) -> CellMetrics 
         })
         .reduce(|| 0.0_f32, |a, b| if a > b { a } else { b });
 
-    let (sum_de, count_gt5) = compute_de2000(reference, candidate);
-    let mean_de = (sum_de / n as f64) as f32;
-    let pct_gt5 = (count_gt5 as f64 * 100.0 / n as f64) as f32;
+    let HistogramOut {
+        sum_de2000,
+        de2000_hist,
+        sum_de_ok,
+        de_ok_hist,
+    } = compute_de_histograms(reference, candidate);
+
+    let n_f64 = n as f64;
+    let mean_de = (sum_de2000 / n_f64) as f32;
+    let count_gt5 = de2000_hist[DE2K_DE5_BIN..].iter().sum::<u64>();
+    let pct_gt5 = (count_gt5 as f64 * 100.0 / n_f64) as f32;
+
+    let mean_de_ok = (sum_de_ok / n_f64) as f32;
+    let count_de_ok_gt_t = de_ok_hist[DE_OK_THRESHOLD_BIN..].iter().sum::<u64>();
+    let pct_de_ok = (count_de_ok_gt_t as f64 * 100.0 / n_f64) as f32;
+
+    let (p50_2k, p90_2k, p95_2k, p99_2k) = percentiles_from_hist_4(
+        &de2000_hist,
+        n as u64,
+        DE2K_HIST_BIN_WIDTH,
+        DE2K_HIST_BINS,
+    );
+    let (p50_ok, p90_ok, p95_ok, p99_ok) = percentiles_from_hist_4(
+        &de_ok_hist,
+        n as u64,
+        DE_OK_HIST_BIN_WIDTH,
+        DE_OK_HIST_BINS,
+    );
 
     CellMetrics {
         psnr_db: psnr as f32,
         mean_de2000: mean_de,
         max_abs_delta: max_abs,
         pct_de_gt_5: pct_gt5,
+        de2000_p50: p50_2k,
+        de2000_p90: p90_2k,
+        de2000_p95: p95_2k,
+        de2000_p99: p99_2k,
+        de_ok_mean: mean_de_ok,
+        de_ok_p50: p50_ok,
+        de_ok_p90: p90_ok,
+        de_ok_p95: p95_ok,
+        de_ok_p99: p99_ok,
+        pct_above_de_ok_0p04: pct_de_ok,
     }
 }
 
-fn compute_de2000(reference: &LinearRgb, candidate: &LinearRgb) -> (f64, u64) {
-    // Parallel-reduce over pixel chunks (chunks of 3 floats = 1 pixel).
-    reference
+/// CDF walk to find p50/p90/p95/p99 from a histogram. Linear-interpolated
+/// inside the target bin (so 0.1-wide ΔE2000 bins resolve to ~0.05 ΔE; 0.001-
+/// wide OKLab bins resolve to ~5e-4). Returns the four percentiles as f32.
+fn percentiles_from_hist_4(
+    hist: &[u64],
+    total: u64,
+    bin_width: f64,
+    nbins: usize,
+) -> (f32, f32, f32, f32) {
+    if total == 0 {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    let targets = [0.50_f64, 0.90, 0.95, 0.99];
+    let total_f = total as f64;
+    let mut cum: u64 = 0;
+    let mut out = [0.0_f32; 4];
+    let mut next_target = 0usize;
+    for (bin, &cnt) in hist.iter().enumerate() {
+        if cnt == 0 {
+            continue;
+        }
+        let prev = cum;
+        cum += cnt;
+        while next_target < 4 {
+            let target_count = (targets[next_target] * total_f).ceil() as u64;
+            if cum >= target_count {
+                // Linear interpolation: the target falls inside this bin.
+                let into_bin = (target_count - prev) as f64;
+                let frac = into_bin / cnt as f64;
+                let val = (bin as f64 + frac) * bin_width;
+                out[next_target] = val as f32;
+                next_target += 1;
+            } else {
+                break;
+            }
+        }
+        if next_target == 4 {
+            break;
+        }
+    }
+    // If we still have unfilled targets (shouldn't happen unless total miscounted),
+    // pin them to top bin so it's visible.
+    while next_target < 4 {
+        out[next_target] = (nbins as f64 * bin_width) as f32;
+        next_target += 1;
+    }
+    (out[0], out[1], out[2], out[3])
+}
+
+struct HistogramOut {
+    sum_de2000: f64,
+    de2000_hist: Vec<u64>,
+    sum_de_ok: f64,
+    de_ok_hist: Vec<u64>,
+}
+
+/// Build per-pixel ΔE2000 + ΔE_OKLab histograms in a single pass over the
+/// (ref, candidate) pixel buffers. Each pixel does one Lab convert (D65 XYZ)
+/// + one OKLab convert + ΔE2000 + ΔE_OKLab.
+///
+/// `reference` and `candidate` are in the *producer's primaries* (BT.709 for
+/// iPhone HEIC, DisplayP3 for zfold7 UltraHDR JPEG). The current Lab path
+/// already passes them straight through to D65 XYZ — which is a producer-
+/// primaries-as-BT.709 approximation (DisplayP3 pixels get *slightly* off-axis
+/// Lab values, but the saturated-color audit kept it that way). OKLab is
+/// specified on BT.709 D65 linear sRGB, so we rotate to BT.709 inside the
+/// OKLab subroutine (`oklab_from_linear_in_primaries`).
+fn compute_de_histograms(
+    reference: &LinearRgb,
+    candidate: &LinearRgb,
+) -> HistogramOut {
+    // Per the brief, both `reference` and `candidate` are already in the same
+    // producer-primaries frame (candidate has been rotated to match earlier
+    // in compute_metrics). OKLab is defined on linear-sRGB (BT.709) D65 input;
+    // rotate per-pixel via the precomputed `<producer> → BT.709` matrix.
+    let ok_matrix = if reference.primaries == ColorPrimaries::Bt709 {
+        None
+    } else {
+        zenpixels_convert::gamut::conversion_matrix(reference.primaries, ColorPrimaries::Bt709)
+    };
+
+    let (sum2k, hist2k, sum_ok, hist_ok) = reference
         .px
         .par_chunks(3 * 4096)
         .zip(candidate.px.par_chunks(3 * 4096))
         .map(|(rc, cc)| {
-            let mut sum: f64 = 0.0;
-            let mut cnt: u64 = 0;
+            let mut sum_de2k: f64 = 0.0;
+            let mut hist_de2k = vec![0u64; DE2K_HIST_BINS];
+            let mut sum_de_ok: f64 = 0.0;
+            let mut hist_de_ok = vec![0u64; DE_OK_HIST_BINS];
             let n_px = rc.len() / 3;
             for i in 0..n_px {
-                let r_lab = linear_rgb_to_lab([rc[i * 3], rc[i * 3 + 1], rc[i * 3 + 2]]);
-                let c_lab = linear_rgb_to_lab([cc[i * 3], cc[i * 3 + 1], cc[i * 3 + 2]]);
-                let de = delta_e2000(r_lab, c_lab) as f64;
-                sum += de;
-                if de > 5.0 {
-                    cnt += 1;
+                let r = [rc[i * 3], rc[i * 3 + 1], rc[i * 3 + 2]];
+                let c = [cc[i * 3], cc[i * 3 + 1], cc[i * 3 + 2]];
+
+                // ΔE2000 in Lab (producer-primaries → D65 XYZ → Lab, see
+                // linear_rgb_to_lab comment block).
+                let r_lab = linear_rgb_to_lab(r);
+                let c_lab = linear_rgb_to_lab(c);
+                let de2k = delta_e2000(r_lab, c_lab) as f64;
+                sum_de2k += de2k;
+                {
+                    let bin = (de2k / DE2K_HIST_BIN_WIDTH) as usize;
+                    let bin = bin.min(DE2K_HIST_BINS - 1);
+                    hist_de2k[bin] += 1;
+                }
+
+                // ΔE_OKLab — Euclidean distance in OKLab space, computed on
+                // linear sRGB (BT.709) D65 input per the OKLab spec.
+                let r_lin709 = match ok_matrix {
+                    None => r,
+                    Some(m) => apply_matrix_pixel(&m, r),
+                };
+                let c_lin709 = match ok_matrix {
+                    None => c,
+                    Some(m) => apply_matrix_pixel(&m, c),
+                };
+                let r_ok = linear_srgb_to_oklab(r_lin709);
+                let c_ok = linear_srgb_to_oklab(c_lin709);
+                let dl = (r_ok[0] - c_ok[0]) as f64;
+                let da = (r_ok[1] - c_ok[1]) as f64;
+                let db = (r_ok[2] - c_ok[2]) as f64;
+                let de_ok = (dl * dl + da * da + db * db).sqrt();
+                sum_de_ok += de_ok;
+                {
+                    let bin = (de_ok / DE_OK_HIST_BIN_WIDTH) as usize;
+                    let bin = bin.min(DE_OK_HIST_BINS - 1);
+                    hist_de_ok[bin] += 1;
                 }
             }
-            (sum, cnt)
+            (sum_de2k, hist_de2k, sum_de_ok, hist_de_ok)
         })
-        .reduce(|| (0.0_f64, 0_u64), |a, b| (a.0 + b.0, a.1 + b.1))
+        .reduce(
+            || {
+                (
+                    0.0_f64,
+                    vec![0u64; DE2K_HIST_BINS],
+                    0.0_f64,
+                    vec![0u64; DE_OK_HIST_BINS],
+                )
+            },
+            |mut a, b| {
+                a.0 += b.0;
+                for (ai, bi) in a.1.iter_mut().zip(b.1.iter()) {
+                    *ai += *bi;
+                }
+                a.2 += b.2;
+                for (ai, bi) in a.3.iter_mut().zip(b.3.iter()) {
+                    *ai += *bi;
+                }
+                a
+            },
+        );
+    HistogramOut {
+        sum_de2000: sum2k,
+        de2000_hist: hist2k,
+        sum_de_ok: sum_ok,
+        de_ok_hist: hist_ok,
+    }
+}
+
+#[inline]
+fn apply_matrix_pixel(m: &[[f32; 3]; 3], rgb: [f32; 3]) -> [f32; 3] {
+    let (r, g, b) = (rgb[0], rgb[1], rgb[2]);
+    [
+        m[0][0] * r + m[0][1] * g + m[0][2] * b,
+        m[1][0] * r + m[1][1] * g + m[1][2] * b,
+        m[2][0] * r + m[2][1] * g + m[2][2] * b,
+    ]
+}
+
+/// Björn Ottosson's OKLab transform, on linear sRGB (BT.709) D65 input.
+/// Source: https://bottosson.github.io/posts/oklab/. Constants are byte-
+/// identical to the reference implementation. OKLab assumes the input is
+/// in [0, 1] but stays well-defined for negative or >1 values (cube root
+/// of a negative number returns NaN under f32::cbrt only if we pass negative;
+/// clamp to keep the metric well-defined for tone-mapped buffers).
+#[inline]
+fn linear_srgb_to_oklab(rgb: [f32; 3]) -> [f32; 3] {
+    let r = rgb[0].max(0.0);
+    let g = rgb[1].max(0.0);
+    let b = rgb[2].max(0.0);
+    let l_ = 0.4122214708_f32 * r + 0.5363325363 * g + 0.0514459929 * b;
+    let m_ = 0.2119034982_f32 * r + 0.6806995451 * g + 0.1073969566 * b;
+    let s_ = 0.0883024619_f32 * r + 0.2817188376 * g + 0.6299787005 * b;
+    let l = l_.cbrt();
+    let m = m_.cbrt();
+    let s = s_.cbrt();
+    [
+        0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+        1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+        0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+    ]
 }
 
 fn linear_rgb_to_lab(rgb: [f32; 3]) -> [f32; 3] {
@@ -977,10 +1218,15 @@ fn write_csv(samples: &[SampleResult], curve_grid: &[CurveSpec]) -> anyhow::Resu
     fs::create_dir_all(Path::new(CSV_PATH).parent().unwrap())?;
     let f = fs::File::create(CSV_PATH)?;
     let mut w = BufWriter::new(f);
-    // Schema = 2026-06-20 schema + `color_handling_version` for merging.
+    // Schema = 2026-06-22-audited columns + 2026-06-22-v2 tail metrics.
+    // New (right of old) columns are tail-aware: ΔE2000 percentiles and
+    // OKLab Euclidean ΔE (mean + percentiles + threshold count).
     writeln!(
         w,
-        "sample,format,peak_method,curve,knee_tone,knee_gamut,source_peak_nits,psnr_db,mean_de2000,max_abs_delta,pct_above_de5,color_handling_version"
+        "sample,format,peak_method,curve,knee_tone,knee_gamut,source_peak_nits,psnr_db,mean_de2000,max_abs_delta,pct_above_de5,color_handling_version,\
+de2000_p50,de2000_p90,de2000_p95,de2000_p99,\
+de_ok_mean,de_ok_p50,de_ok_p90,de_ok_p95,de_ok_p99,\
+pct_above_de_ok_0p04,metrics_version"
     )?;
     // Deterministic sort: sample asc, then PeakMethod::all() order, then
     // curve_grid order. PeakMethod::all() is fixed; curve_grid is built
@@ -1011,7 +1257,10 @@ fn write_csv(samples: &[SampleResult], curve_grid: &[CurveSpec]) -> anyhow::Resu
                     .unwrap_or_default();
                 writeln!(
                     w,
-                    "{},{},{},{},{},{},{:.1},{:.3},{:.4},{:.5},{:.3},{}",
+                    "{},{},{},{},{},{},{:.1},{:.3},{:.4},{:.5},{:.3},{},\
+{:.4},{:.4},{:.4},{:.4},\
+{:.5},{:.5},{:.5},{:.5},{:.5},\
+{:.3},{}",
                     stem,
                     r.format_label,
                     m.label(),
@@ -1024,6 +1273,17 @@ fn write_csv(samples: &[SampleResult], curve_grid: &[CurveSpec]) -> anyhow::Resu
                     cell.max_abs_delta,
                     cell.pct_de_gt_5,
                     COLOR_HANDLING_VERSION,
+                    cell.de2000_p50,
+                    cell.de2000_p90,
+                    cell.de2000_p95,
+                    cell.de2000_p99,
+                    cell.de_ok_mean,
+                    cell.de_ok_p50,
+                    cell.de_ok_p90,
+                    cell.de_ok_p95,
+                    cell.de_ok_p99,
+                    cell.pct_above_de_ok_0p04,
+                    METRICS_VERSION,
                 )?;
             }
         }
@@ -1141,11 +1401,18 @@ fn main() -> anyhow::Result<()> {
     );
     println!("Peak methods: {:?}", PeakMethod::all());
 
-    let mut sample_results: Vec<SampleResult> = Vec::new();
-    let mut failures: Vec<(PathBuf, String)> = Vec::new();
-
     let total = work_list.len();
-    for (idx, (path, fmt_label)) in work_list.iter().enumerate() {
+
+    // Parallelize across samples — each sample fits in one rayon job;
+    // the inner curve loop runs sequentially per job. 76 / 16 cores ≈ 5
+    // batches of ~20s each = ~100s wall-clock vs. the prior ~38 min when
+    // we parallelized curves under a single-sample-at-a-time outer loop.
+    // Memory: 16 samples × ~600 MB buffers + scratch ≈ ~15 GB (fits 128 GB).
+    type SampleOutcome = Result<SampleResult, (PathBuf, String)>;
+    let outcomes: Vec<SampleOutcome> = work_list
+        .par_iter()
+        .enumerate()
+        .map(|(idx, (path, fmt_label))| -> SampleOutcome {
         let stem_raw = path
             .file_name()
             .map(|x| x.to_string_lossy().into_owned())
@@ -1163,8 +1430,7 @@ fn main() -> anyhow::Result<()> {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("  read failed: {}", e);
-                failures.push((path.clone(), format!("read: {}", e)));
-                continue;
+                return Err((path.clone(), format!("read: {}", e)));
             }
         };
 
@@ -1173,8 +1439,7 @@ fn main() -> anyhow::Result<()> {
                 Ok(t) => t,
                 Err(e) => {
                     eprintln!("  decode failed: {}", e);
-                    failures.push((path.clone(), format!("decode: {}", e)));
-                    continue;
+                    return Err((path.clone(), format!("decode: {}", e)));
                 }
             };
         println!(
@@ -1188,24 +1453,21 @@ fn main() -> anyhow::Result<()> {
         // Skip cases.
         if hdr_max_raw < 1.05 && sdr_max_raw < 1.05 && (hdr_max_raw - sdr_max_raw).abs() < 0.05 {
             println!("  → skipping: HDR reconstruction returned SDR base (no boost)");
-            failures.push((
+            return Err((
                 path.clone(),
                 format!(
                     "no HDR boost (hdr_max={:.3}, sdr_max={:.3})",
                     hdr_max_raw, sdr_max_raw
                 ),
             ));
-            continue;
         }
         if sdr_descr == TransferFunction::Pq {
             println!("  → skipping: SDR base is PQ-encoded (base=HDR)");
-            failures.push((path.clone(), "SDR base is PQ-encoded".into()));
-            continue;
+            return Err((path.clone(), "SDR base is PQ-encoded".into()));
         }
         if !hdr_max_raw.is_finite() || !sdr_max_raw.is_finite() {
             println!("  → skipping: non-finite pixel data");
-            failures.push((path.clone(), "non-finite pixel data".into()));
-            continue;
+            return Err((path.clone(), "non-finite pixel data".into()));
         }
 
         let device_class = classify_device(path);
@@ -1224,8 +1486,13 @@ fn main() -> anyhow::Result<()> {
                 sdr_max_raw
             );
 
+            // Sequential within a sample — outer loop parallelizes across
+            // samples (16-wide) so the cores are filled by sample-level
+            // parallelism instead of curve-level. par_chunks inside
+            // apply_curve / compute_metrics still chew chunks via rayon's
+            // work-stealing pool when an outer slot is briefly idle.
             let cells: Vec<CellMetrics> = curve_grid
-                .par_iter()
+                .iter()
                 .map(|c| {
                     let cand = apply_curve(*c, &hdr, source_peak);
                     compute_metrics(&sdr, &cand)
@@ -1242,18 +1509,29 @@ fn main() -> anyhow::Result<()> {
             cells_per_method.insert(method, cells);
         }
 
-        sample_results.push(SampleResult {
+        let (w, h) = (sdr.width, sdr.height);
+        drop(hdr);
+        drop(sdr);
+
+        Ok(SampleResult {
             sample_path: path.clone(),
             format_label: fmt_label.clone(),
             device_class,
-            width: sdr.width,
-            height: sdr.height,
+            width: w,
+            height: h,
             source_peaks,
             cells: cells_per_method,
-        });
+        })
+    })
+    .collect();
 
-        drop(hdr);
-        drop(sdr);
+    let mut sample_results: Vec<SampleResult> = Vec::new();
+    let mut failures: Vec<(PathBuf, String)> = Vec::new();
+    for outcome in outcomes {
+        match outcome {
+            Ok(r) => sample_results.push(r),
+            Err(e) => failures.push(e),
+        }
     }
 
     let runtime = t0.elapsed().as_secs_f64();
