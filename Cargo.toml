@@ -115,6 +115,10 @@ required-features = ["hdr-shootout"]
 name = "hdr_sdr_luminance_trace"
 required-features = ["hdr-shootout"]
 
+[[example]]
+name = "flicker_test_render"
+required-features = ["hdr-shootout"]
+
 [[bench]]
 name = "tonemap_bench"
 harness = false
