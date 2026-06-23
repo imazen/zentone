@@ -127,18 +127,27 @@ def section_top5_grid(agg: dict) -> str:
     for metric, hib, title in rankings:
         out.append(f"### Top 5 by `{metric}` — {title}\n")
         top = top_k_by(agg, metric, k=5, reverse=hib)
-        headers = ["rank", "combo", metric, "de_ok_mean", "de_ok_p95", "mean_de2000", "pct>de5"]
+        # Omit the ranking metric from the companion columns to avoid dupes.
+        companion_keys = ["de_ok_mean", "de_ok_p95", "mean_de2000", "pct_above_de5"]
+        companions = [c for c in companion_keys if c != metric]
+        headers = ["rank", "combo", metric] + [
+            c.replace("pct_above_de5", "pct>de5") for c in companions
+        ]
         rows = []
         for i, (combo, a) in enumerate(top, 1):
-            rows.append([
+            row = [
                 str(i),
                 fmt_combo(combo),
                 f"{a[metric]:.5f}" if "de_ok" in metric else f"{a[metric]:.4f}",
-                f"{a['de_ok_mean']:.5f}",
-                f"{a['de_ok_p95']:.5f}",
-                f"{a['mean_de2000']:.4f}",
-                f"{a['pct_above_de5']:.2f}",
-            ])
+            ]
+            for ck in companions:
+                if "de_ok" in ck:
+                    row.append(f"{a[ck]:.5f}")
+                elif ck == "pct_above_de5":
+                    row.append(f"{a[ck]:.2f}")
+                else:
+                    row.append(f"{a[ck]:.4f}")
+            rows.append(row)
         out.append(md_table(headers, rows))
         out.append("")
     return "\n".join(out)
@@ -152,18 +161,24 @@ def worst_samples_table(
     matching = [r for r in rows if r["curve"] == curve and r["peak_method"] == peak]
     matching.sort(key=lambda r: r[metric], reverse=True)
     top = matching[:k]
-    headers = ["sample (stem)", metric, "de_ok_p99", "mean_de2000", "pct>de5"]
+    # Show a fixed companion set, omitting the ranking metric if it's already
+    # one of the companions (to avoid duplicate columns).
+    companion_keys = ["de2000_p99", "de_ok_p99", "mean_de2000", "pct_above_de5"]
+    companions = [c for c in companion_keys if c != metric]
+    headers = ["sample (stem)", metric] + [c.replace("pct_above_de5", "pct>de5") for c in companions]
     out = []
     for r in top:
         stem = r["sample"]
-        # Trim leading nnnn_ prefix for readability.
-        out.append([
-            stem[:50] + "..." if len(stem) > 53 else stem,
-            f"{r[metric]:.4f}" if "de_ok" in metric else f"{r[metric]:.3f}",
-            f"{r['de_ok_p99']:.4f}",
-            f"{r['mean_de2000']:.3f}",
-            f"{r['pct_above_de5']:.2f}",
-        ])
+        row = [stem[:50] + "..." if len(stem) > 53 else stem]
+        row.append(f"{r[metric]:.4f}" if "de_ok" in metric else f"{r[metric]:.3f}")
+        for ck in companions:
+            if "de_ok" in ck:
+                row.append(f"{r[ck]:.4f}")
+            elif ck == "pct_above_de5":
+                row.append(f"{r[ck]:.2f}")
+            else:
+                row.append(f"{r[ck]:.3f}")
+        out.append(row)
     return md_table(headers, out)
 
 
@@ -239,6 +254,12 @@ def main() -> int:
     )
 
     body_parts.append("\n## 1. Six-criteria top-5 grid\n")
+    body_parts.append(
+        "Note: ranks 1-4 across every metric are all `bt2446a × <peak method>` — "
+        "they cluster within ~3% of each other. Rank 5 jumps to a different curve "
+        "(typically `bt2390 × measure_robust` at ~2× the error). The top-1 winner "
+        "is therefore a peak-method choice within `bt2446a`, not a curve choice.\n"
+    )
     body_parts.append(section_top5_grid(agg))
 
     body_parts.append("\n## 2. Worst-tail samples under ΔE2000 p99 (top 4 combos)\n")
