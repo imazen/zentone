@@ -712,6 +712,8 @@ fn process_sample(stem: &str, path: &Path) -> anyhow::Result<SampleReport> {
     match &peak_metadata {
         Some((peak, src)) => {
             refresh_lock(&format!("render metadata {stem}"));
+            // Wipe a stale `.missing` marker from a prior run.
+            let _ = fs::remove_file(out_dir.join("bt2446a__metadata.png.missing"));
             let mapped = apply_bt2446a(&hdr, *peak);
             save_png(&mapped, &out_dir.join("bt2446a__metadata.png"))?;
             variants.push((
@@ -720,6 +722,8 @@ fn process_sample(stem: &str, path: &Path) -> anyhow::Result<SampleReport> {
             ));
         }
         None => {
+            // Wipe a stale `.png` from a prior run that found metadata.
+            let _ = fs::remove_file(out_dir.join("bt2446a__metadata.png"));
             fs::write(
                 out_dir.join("bt2446a__metadata.png.missing"),
                 "no container MaxCLL / HDRGainMapHeadroom / HDRCapacityMax found\n",
