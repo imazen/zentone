@@ -377,7 +377,7 @@ fn copy_buffer_tight(buf: &PixelBuffer) -> anyhow::Result<PixelBuffer> {
 struct PeakCache {
     /// CTA-861.3 literal max (== `histogram.max()`, matches `measure_max`).
     peak_max: f32,
-    /// `measure_robust` (== `measure_percentile(DEFAULT_PERCENTILE = 0.9999)`).
+    /// `measure_robust` (== `measure_percentile(DEFAULT_PERCENTILE = 0.99999)`).
     peak_robust: f32,
     /// `measure_max_smoothed` (spatial 3-tap box; not a histogram readout).
     peak_smoothed: f32,
