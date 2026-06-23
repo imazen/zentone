@@ -729,10 +729,22 @@ fn process_sample(stem: &str, path: &Path) -> anyhow::Result<SampleReport> {
 
     let mut variants: Vec<(String, String)> = vec![("REF (producer SDR)".to_string(), "REF.png".to_string())];
 
+    // Linear blends between robust and max — for eyeball-calibrating the
+    // "right" percentile when the visual sweet spot sits between the two
+    // extremes (sample #4 zfold7 facade was the original prompt:
+    // robust=630 was too dark, max=963 was OK, halfway ≈ 800 looked best).
+    let blend25 = peak_robust + 0.25 * (peak_max - peak_robust);
+    let blend50 = peak_robust + 0.50 * (peak_max - peak_robust);
+    let blend75 = peak_robust + 0.75 * (peak_max - peak_robust);
+
     for (label, file, peak) in [
         ("bt2446a max",      "bt2446a__max.png",      peak_max),
         ("bt2446a robust",   "bt2446a__robust.png",   peak_robust),
         ("bt2446a smoothed", "bt2446a__smoothed.png", peak_smoothed),
+        ("bt2446a blend25",  "bt2446a__blend25.png",  blend25),
+        ("bt2446a blend50",  "bt2446a__blend50.png",  blend50),
+        ("bt2446a blend75",  "bt2446a__blend75.png",  blend75),
+        ("bt2446a 1000nit",  "bt2446a__1000nit.png",  1000.0),
     ] {
         refresh_lock(&format!("render {label} {stem}"));
         let mapped = apply_bt2446a(&hdr, peak);
