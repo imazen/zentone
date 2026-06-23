@@ -43,7 +43,9 @@ use zenpixels_convert::PixelBufferConvertExt;
 use zenpixels_convert::hdr::{Bt2446A, CllMeasure, LightLevelMethod};
 use zenpixels_dev::DiffuseWhite;
 use zenpixels_dev::buffer::PixelBuffer;
-use zenpixels_dev::descriptor::{ChannelLayout, ChannelType, PixelDescriptor, TransferFunction};
+use zenpixels_dev::descriptor::{
+    ChannelLayout, ChannelType, ColorPrimaries, PixelDescriptor, TransferFunction,
+};
 use zenpixels_dev::hdr::ContentLightLevel;
 
 // =========================================================================
@@ -128,6 +130,7 @@ struct LinearRgb {
     width: u32,
     height: u32,
     px: Vec<f32>,
+    primaries: ColorPrimaries,
 }
 
 impl LinearRgb {
@@ -205,6 +208,7 @@ fn pixel_buffer_to_linear_rgb(buf: &PixelBuffer) -> anyhow::Result<LinearRgb> {
         width,
         height,
         px: tight,
+        primaries: src_desc.primaries,
     })
 }
 
@@ -368,35 +372,61 @@ fn apply_bt2446a(hdr: &LinearRgb, source_peak_nits: f32) -> LinearRgb {
         width: hdr.width,
         height: hdr.height,
         px: scratch,
+        primaries: hdr.primaries,
     }
 }
 
 // =========================================================================
-// PNG output
+// PNG output (truly SDR: convert source primaries → BT.709 + sRGB EOTF)
 // =========================================================================
-
-#[inline]
-fn linear_to_srgb_u8(v: f32) -> u8 {
-    let v = v.clamp(0.0, 1.0);
-    let e = linear_srgb::tf::linear_to_srgb(v);
-    (e * 255.0 + 0.5).clamp(0.0, 255.0) as u8
-}
-
-fn to_srgb_u8(lin: &LinearRgb) -> Vec<u8> {
-    let mut out = vec![0u8; lin.px.len()];
-    out.par_chunks_mut(4096)
-        .zip(lin.px.par_chunks(4096))
-        .for_each(|(dst, src)| {
-            for (d, &s) in dst.iter_mut().zip(src.iter()) {
-                *d = linear_to_srgb_u8(s);
-            }
-        });
-    out
-}
+//
+// The LinearRgb buffer carries the source's color primaries (DisplayP3 for
+// iPhone, BT.709/sRGB for Samsung). To produce a PNG that browsers render
+// correctly without an embedded profile, we go through PixelBufferConvertExt
+// so zenpixels-convert handles BOTH gamut conversion (src primaries → BT.709)
+// AND sRGB EOTF encoding in one fused pass. The output is then bit-for-bit
+// what any unprofiled-sRGB PNG should look like.
 
 fn save_png(lin: &LinearRgb, path: &Path) -> anyhow::Result<()> {
-    let buf = to_srgb_u8(lin);
-    image::save_buffer(path, &buf, lin.width, lin.height, image::ColorType::Rgb8)?;
+    // Wrap the LinearRgb pixels into a PixelBuffer with the source's primaries
+    // and linear transfer (which is what the buffer actually carries after
+    // pixel_buffer_to_linear_rgb / apply_bt2446a).
+    let src_desc = PixelDescriptor::new_full(
+        ChannelType::F32,
+        ChannelLayout::Rgb,
+        None,
+        TransferFunction::Linear,
+        lin.primaries,
+    );
+    let src_bytes: Vec<u8> = bytemuck::cast_slice(&lin.px).to_vec();
+    let src_buf = PixelBuffer::from_vec(src_bytes, lin.width, lin.height, src_desc)
+        .map_err(|e| anyhow::anyhow!("wrap PixelBuffer: {:?}", e))?;
+
+    // Target: 8-bit sRGB transfer in BT.709 primaries — what a browser
+    // assumes when there's no ICC/cICP. This forces a real gamut
+    // conversion when src_primaries != BT.709.
+    let tgt_desc = PixelDescriptor::new_full(
+        ChannelType::U8,
+        ChannelLayout::Rgb,
+        None,
+        TransferFunction::Srgb,
+        ColorPrimaries::Bt709,
+    );
+    let tgt_buf = src_buf
+        .convert_to(tgt_desc)
+        .map_err(|e| anyhow::anyhow!("convert to sRGB BT.709: {:?}", e.error()))?;
+
+    // Pack tightly for image::save_buffer (which wants contiguous Rgb8).
+    let slice = tgt_buf.as_slice();
+    let stride = slice.stride();
+    let bytes = slice.as_strided_bytes();
+    let row_bytes = lin.width as usize * 3;
+    let mut packed = vec![0u8; row_bytes * lin.height as usize];
+    for y in 0..lin.height as usize {
+        packed[y * row_bytes..(y + 1) * row_bytes]
+            .copy_from_slice(&bytes[y * stride..y * stride + row_bytes]);
+    }
+    image::save_buffer(path, &packed, lin.width, lin.height, image::ColorType::Rgb8)?;
     Ok(())
 }
 
@@ -472,9 +502,10 @@ fn write_per_sample_html(out_dir: &Path, rep: &SampleReport) -> anyhow::Result<(
   .stage img {{ display: block; width: 100%; height: auto;
     position: absolute; top: 0; left: 0; }}
   .stage .placeholder {{ visibility: hidden; }}
-  .legend {{ position: fixed; right: 16px; top: 64px; background: rgba(0,0,0,0.7);
-    border: 1px solid #444; padding: 8px 12px; font-size: 14px; font-weight: 700;
-    border-radius: 4px; z-index: 9; }}
+  .legend {{ position: absolute; left: 16px; top: 16px; background: rgba(0,0,0,0.85);
+    border: 2px solid #fff; padding: 10px 18px; font-size: 20px; font-weight: 800;
+    border-radius: 6px; z-index: 9; pointer-events: none;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9); letter-spacing: 0.02em; }}
 </style>
 </head>
 <body>
