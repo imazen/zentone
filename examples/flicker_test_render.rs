@@ -260,7 +260,7 @@ fn decode_sample(bytes: &[u8]) -> anyhow::Result<(LinearRgb, LinearRgb)> {
         .decode_full_frame()
         .map_err(|e| anyhow::anyhow!("decode SDR: {}", e.error()))?;
     let sdr_buf = sdr_out.into_buffer();
-    let sdr_rgb = pixel_buffer_to_linear_rgb(&sdr_buf)?;
+    let sdr_rgb = pixel_buffer_to_linear_rgb_in(&sdr_buf, None)?;
 
     let hdr_out = DecodeRequest::new(bytes)
         .with_orientation(OrientationHint::Correct)
@@ -268,7 +268,12 @@ fn decode_sample(bytes: &[u8]) -> anyhow::Result<(LinearRgb, LinearRgb)> {
         .decode_full_frame()
         .map_err(|e| anyhow::anyhow!("reconstruct_hdr: {}", e.error()))?;
     let hdr_buf = hdr_out.into_buffer();
-    let hdr_rgb = pixel_buffer_to_linear_rgb(&hdr_buf)?;
+    // Audit fix (2026-06-22 shootout `shootout_color_audit_2026-06-22.md`):
+    // Bt2446A's contract is linear BT.2020 RGB. The codec returns the
+    // reconstructed HDR in BT.709 linear (it normalizes during reconstruction).
+    // Rotate to BT.2020 once, here at decode, so every downstream `measure_*`
+    // / `apply_bt2446a` call sees the curve's specified primaries.
+    let hdr_rgb = pixel_buffer_to_linear_rgb_in(&hdr_buf, Some(ColorPrimaries::Bt2020))?;
 
     if sdr_rgb.width != hdr_rgb.width || sdr_rgb.height != hdr_rgb.height {
         anyhow::bail!(
@@ -282,14 +287,25 @@ fn decode_sample(bytes: &[u8]) -> anyhow::Result<(LinearRgb, LinearRgb)> {
     Ok((sdr_rgb, hdr_rgb))
 }
 
-fn pixel_buffer_to_linear_rgb(buf: &PixelBuffer) -> anyhow::Result<LinearRgb> {
+/// Linearize a PixelBuffer to f32 RGB, optionally rotating to a target gamut.
+///
+/// `target_primaries = None` → keep source primaries (linearize only).
+/// `target_primaries = Some(p)` → linearize AND gamut-rotate to `p`. Used
+/// on the HDR side to rotate codec-returned BT.709 to BT.2020 (Bt2446A's
+/// specified input gamut) once at decode time, so every downstream
+/// `measure_peak` / `apply_bt2446a` skips an otherwise-per-call rotation.
+fn pixel_buffer_to_linear_rgb_in(
+    buf: &PixelBuffer,
+    target_primaries: Option<ColorPrimaries>,
+) -> anyhow::Result<LinearRgb> {
     let src_desc = buf.descriptor();
+    let out_primaries = target_primaries.unwrap_or(src_desc.primaries);
     let target = PixelDescriptor::new_full(
         ChannelType::F32,
         ChannelLayout::Rgb,
         None,
         TransferFunction::Linear,
-        src_desc.primaries,
+        out_primaries,
     );
     let linear = if src_desc == target {
         copy_buffer_tight(buf)?
@@ -319,7 +335,7 @@ fn pixel_buffer_to_linear_rgb(buf: &PixelBuffer) -> anyhow::Result<LinearRgb> {
         width,
         height,
         px: tight,
-        primaries: src_desc.primaries,
+        primaries: out_primaries,
     })
 }
 
