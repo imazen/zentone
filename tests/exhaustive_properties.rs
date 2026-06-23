@@ -9,6 +9,10 @@
 //! monotonicity across the entire frame and catch per-row-processing bugs.
 
 #![allow(clippy::excessive_precision)]
+// `reinhard_simple` is publicly deprecated as of the 2026-06-22 audited HDR→SDR
+// shootout (superseded by `Bt2446A`). Exhaustive property tests still exercise
+// it for monotonicity / finite-output guarantees.
+#![allow(deprecated)]
 
 use zentone::curves::{aces_ap1, agx_tonemap, filmic_narkowicz, hable_filmic, reinhard_simple};
 use zentone::*;

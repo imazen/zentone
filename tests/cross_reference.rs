@@ -1,4 +1,9 @@
 #![allow(clippy::excessive_precision)]
+// The Reinhard family (`reinhard_simple`, `reinhard_extended`,
+// `reinhard_jodie`) is publicly deprecated as of the 2026-06-22 audited HDR→SDR
+// shootout (superseded by `Bt2446A`). These cross-reference tests still pin the
+// formulas against gainforge / published constants until the curves are removed.
+#![allow(deprecated)]
 //! Cross-reference tests verifying zentone's tone mapping curves against
 //! independently-extracted constants from gainforge (Radzivon Bartoshyk,
 //! BSD-3-Clause), the canonical Blender AgX, and the original Hable/

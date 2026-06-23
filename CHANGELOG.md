@@ -12,6 +12,38 @@ adheres to semver.
      Add items here as you discover them. Do NOT ship these piecemeal — batch them. -->
 
 - `gamut::apply_matrix_row` now takes `channels: u8` (was `usize`), matching the `ToneMap` trait and every other `channels` parameter in the crate, so a single channel-count value chains through the gamut → tone-map seam without a per-call-site cast (closes #23). Call sites passing an integer literal are unaffected; only those passing a `usize` *variable* need to switch to `u8`.
+- Remove the now-`#[deprecated]` + `#[doc(hidden)]` Reinhard curve family from `curves::*` (`reinhard_simple`, `reinhard_extended`, `reinhard_jodie`) and the matching `ToneMapCurve::Reinhard`, `ToneMapCurve::ExtendedReinhard`, `ToneMapCurve::ReinhardJodie`, `ToneMapCurve::TunedReinhard` enum variants. Production HDR→SDR is `zenpixels_convert::hdr::Bt2446A`; see the "Deprecated" section under `[Unreleased]` for the empirical basis.
+
+### Deprecated
+
+- **Reinhard family — `curves::reinhard_simple`, `curves::reinhard_extended`,
+  `curves::reinhard_jodie`** are now `#[deprecated]` + `#[doc(hidden)]`. The
+  2026-06-22 audited HDR→SDR shootout (76 imazen-26 gain-mapped samples × 20
+  curves × 4 peak methods, scored with mean + per-image-percentile ΔE2000 +
+  OKLab Euclidean ΔE against the producer SDR base) crowned `Bt2446A` as the
+  production-best HDR→SDR curve, winning mean ΔE2000 by 2-5× over every other
+  curve tested (next-best non-`Bt2446A` curve `bt2390` at mean ΔE2000 ≈ 8.16
+  vs `Bt2446A`'s 3.77). The Reinhard family was not tested directly but is
+  curve-class-equivalent — channel-independent global Reinhard variants are
+  uniformly worse than the YCbCr-saturation-corrected `Bt2446A` on saturated
+  content; the spec basis is the same ITU-R BT.2446-1 §4 reasoning that drove
+  the `HdrToSdr` default switch in this release. Use
+  [`zenpixels_convert::hdr::Bt2446A`](https://docs.rs/zenpixels-convert) for
+  production HDR→SDR mapping. Findings:
+  [`benchmarks/shootout_2026-06-22_findings_v2.md`](benchmarks/shootout_2026-06-22_findings_v2.md).
+  Removal queued for the next breaking release. The matching
+  `ToneMapCurve::Reinhard*` enum variants stay public for one release but
+  dispatch through the deprecated kernels and are scheduled for removal at
+  the same time.
+
+  Other shootout participants surveyed for the same treatment: `Narkowicz`,
+  `HableFilmic`, `aces_ap1`, `agx_tonemap`, `mobius_*` (every variant), and
+  `bt2390`. Of these, only `bt2390` (rank-5 by mean ΔE2000 at 8.16, ~2.2×
+  worse than `Bt2446A`) sits at the edge of the deprecation threshold; the
+  per-curve loss-magnitudes for the rest are not directly enumerated in the
+  findings (only top-5 combos are tabulated) so they stay public until a
+  follow-up sweep quantifies them — conservatively avoiding API
+  carpet-bombing per the brief.
 
 ### Removed
 

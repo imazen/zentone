@@ -11,6 +11,11 @@
 //! Experimental. Behind the `experimental` feature flag.
 
 use crate::Bt2408Tonemapper;
+// The `reinhard_simple` / `reinhard_extended` imports are publicly deprecated
+// (see `curves.rs` — superseded by `Bt2446A` per the 2026-06-22 shootout) but
+// the experimental curve-detector still matches fitted LUTs against them so it
+// can identify legacy HDR/SDR pairs encoded with the older curves.
+#[allow(deprecated)]
 use crate::curves::{filmic_narkowicz, hable_filmic, reinhard_extended, reinhard_simple};
 
 /// Result of curve detection.
@@ -55,6 +60,9 @@ pub enum DetectedParams {
 ///
 /// Returns the best match if the RMS error is below the threshold, or
 /// `None` if no curve matches well enough.
+// `reinhard_simple` and `reinhard_extended` are publicly deprecated; this
+// detector still references them to identify legacy HDR/SDR pairs.
+#[allow(deprecated)]
 pub fn detect_standard(lut: &[f32], max_hdr: f32, threshold: f32) -> Option<DetectedCurve> {
     let n = lut.len();
     if n < 256 {

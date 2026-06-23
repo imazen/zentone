@@ -14,6 +14,27 @@ use crate::math::{log2f, powf};
 /// Simple per-channel Reinhard: `x / (1 + x)`.
 ///
 /// Negative input is clamped to 0 (linear light is non-negative).
+///
+/// # Deprecated
+///
+/// Naive channel-independent global Reinhard with no display adaptation,
+/// no peak-luminance awareness, and no chroma correction. The 2026-06-22
+/// audited HDR→SDR shootout (76 imazen-26 gain-mapped samples × 20 curves
+/// × 4 peak methods, scored with ΔE2000 + OKLab Euclidean ΔE against the
+/// producer SDR base) crowned [`Bt2446A`](crate::Bt2446A) as the
+/// production-best HDR→SDR curve, winning mean ΔE2000 by 2-5× over every
+/// other curve tested. The Reinhard family was not tested directly but is
+/// curve-class-equivalent — channel-independent global Reinhard variants
+/// are uniformly worse than the YCbCr-saturation-corrected Bt2446A on
+/// saturated content. Findings:
+/// `benchmarks/shootout_2026-06-22_findings_v2.md`. Use
+/// [`zenpixels_convert::hdr::Bt2446A`] for production HDR→SDR mapping.
+/// Removal queued for the next zentone breaking release.
+#[deprecated(
+    since = "0.1.0",
+    note = "naive channel-independent Reinhard — superseded by Bt2446A per the 2026-06-22 audited HDR→SDR shootout (Bt2446A wins mean ΔE2000 by 2-5x). Use `zenpixels_convert::hdr::Bt2446A`. Removal queued for the next zentone breaking release."
+)]
+#[doc(hidden)]
 #[inline]
 pub fn reinhard_simple(x: f32) -> f32 {
     if x <= 0.0 {
@@ -31,6 +52,25 @@ pub(crate) fn clamp_tonemap(x: f32) -> f32 {
 /// Extended Reinhard with max luminance.
 ///
 /// `L_out = L_in * (1 + L_in / L_max²) / (1 + L_in)`.
+///
+/// # Deprecated
+///
+/// Channel-independent extended Reinhard. Carries a `L_max` knob but still
+/// lacks chroma correction and display-aware peak handling. The 2026-06-22
+/// audited HDR→SDR shootout crowned [`Bt2446A`](crate::Bt2446A) as the
+/// production-best HDR→SDR curve, winning mean ΔE2000 by 2-5× over every
+/// other curve tested. The Reinhard family was not tested directly but is
+/// curve-class-equivalent — channel-independent global Reinhard variants
+/// are uniformly worse than the YCbCr-saturation-corrected Bt2446A on
+/// saturated content. Findings:
+/// `benchmarks/shootout_2026-06-22_findings_v2.md`. Use
+/// [`zenpixels_convert::hdr::Bt2446A`] for production HDR→SDR mapping.
+/// Removal queued for the next zentone breaking release.
+#[deprecated(
+    since = "0.1.0",
+    note = "channel-independent extended Reinhard — superseded by Bt2446A per the 2026-06-22 audited HDR→SDR shootout (Bt2446A wins mean ΔE2000 by 2-5x). Use `zenpixels_convert::hdr::Bt2446A`. Removal queued for the next zentone breaking release."
+)]
+#[doc(hidden)]
 #[inline]
 pub fn reinhard_extended(l_in: f32, l_max: f32) -> f32 {
     if l_in <= 0.0 {
@@ -49,6 +89,27 @@ pub fn reinhard_extended(l_in: f32, l_max: f32) -> f32 {
 }
 
 /// Reinhard-Jodie tone mapping (per-channel and luminance-based blend).
+///
+/// # Deprecated
+///
+/// Reinhard-Jodie blends a per-channel Reinhard with a luminance-scaled
+/// Reinhard; it improves hue stability over plain per-channel Reinhard
+/// but still has no display adaptation, no peak-luminance awareness, and
+/// no YCbCr-domain chroma correction. The 2026-06-22 audited HDR→SDR
+/// shootout crowned [`Bt2446A`](crate::Bt2446A) as the production-best
+/// HDR→SDR curve, winning mean ΔE2000 by 2-5× over every other curve
+/// tested. The Reinhard family was not tested directly but is
+/// curve-class-equivalent — channel-independent global Reinhard variants
+/// are uniformly worse than the YCbCr-saturation-corrected Bt2446A on
+/// saturated content. Findings:
+/// `benchmarks/shootout_2026-06-22_findings_v2.md`. Use
+/// [`zenpixels_convert::hdr::Bt2446A`] for production HDR→SDR mapping.
+/// Removal queued for the next zentone breaking release.
+#[deprecated(
+    since = "0.1.0",
+    note = "Reinhard-Jodie has no display adaptation or chroma correction — superseded by Bt2446A per the 2026-06-22 audited HDR→SDR shootout (Bt2446A wins mean ΔE2000 by 2-5x). Use `zenpixels_convert::hdr::Bt2446A`. Removal queued for the next zentone breaking release."
+)]
+#[doc(hidden)]
 pub fn reinhard_jodie(rgb: [f32; 3], luma_coeffs: [f32; 3]) -> [f32; 3] {
     // Clamp to non-negative linear light and clamp the result to [0, 1],
     // matching the SIMD row path (`simd::reinhard_jodie_3_tier`, which does
@@ -572,6 +633,11 @@ pub enum ToneMapCurve {
 
 impl ToneMap for ToneMapCurve {
     fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
+        // The Reinhard family is publicly deprecated (see fn docstrings) but
+        // the `ToneMapCurve::Reinhard*` enum variants still dispatch to them
+        // until the next breaking release, so the internal calls are
+        // expected.
+        #[allow(deprecated)]
         match *self {
             ToneMapCurve::Reinhard => [
                 reinhard_simple(rgb[0]).min(1.0),
@@ -733,6 +799,11 @@ impl ToneMap for ToneMapCurve {
 }
 
 #[cfg(test)]
+// `reinhard_simple` / `reinhard_extended` / `reinhard_jodie` are publicly
+// deprecated (see fn docstrings — superseded by `Bt2446A` per the 2026-06-22
+// shootout), but the unit tests still exercise them to pin their numeric
+// behavior until the curves are removed in the next breaking release.
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::LUMA_BT709;

@@ -142,6 +142,10 @@ fn reinhard_3_tier(token: Token, row: &mut [f32]) {
         let v = f32x8::load(token, chunk).max(zero);
         (v / (one + v)).min(one).store(chunk);
     }
+    // Public `reinhard_simple` is deprecated, but the SIMD scalar tail still
+    // needs the same formula until the curve is removed in the next breaking
+    // release.
+    #[allow(deprecated)]
     for v in tail.iter_mut() {
         *v = crate::curves::reinhard_simple(*v);
     }
@@ -159,6 +163,8 @@ fn reinhard_4_tier(token: Token, row: &mut [f32]) {
         chunk[3] = a[0];
         chunk[7] = a[1];
     }
+    // Public `reinhard_simple` is deprecated; see `reinhard_3_tier`.
+    #[allow(deprecated)]
     for c in tail.chunks_exact_mut(4) {
         c[0] = crate::curves::reinhard_simple(c[0]);
         c[1] = crate::curves::reinhard_simple(c[1]);
@@ -485,6 +491,9 @@ fn reinhard_jodie_3_tier(token: Token, row: &mut [f32], luma: [f32; 3]) {
             chunk[i * 3 + 2] = bo[i];
         }
     }
+    // Public `reinhard_jodie` is deprecated; SIMD scalar tail still calls
+    // through it for parity until the curve is removed.
+    #[allow(deprecated)]
     for c in iter.into_remainder().chunks_exact_mut(3) {
         let o = crate::curves::reinhard_jodie([c[0], c[1], c[2]], luma);
         c[0] = o[0];
@@ -540,6 +549,9 @@ fn reinhard_jodie_4_tier(token: Token, row: &mut [f32], luma: [f32; 3]) {
             chunk[i * 4 + 2] = bo[i];
         }
     }
+    // Public `reinhard_jodie` is deprecated; SIMD scalar tail still calls
+    // through it for parity until the curve is removed.
+    #[allow(deprecated)]
     for c in iter.into_remainder().chunks_exact_mut(4) {
         let o = crate::curves::reinhard_jodie([c[0], c[1], c[2]], luma);
         c[0] = o[0];
