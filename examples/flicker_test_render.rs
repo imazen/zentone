@@ -243,6 +243,10 @@ enum PeakMethod {
     Max,
     Robust,
     MaxSmoothed,
+    /// Explicit percentile in `[0.0, 1.0]` — for the percentile sweep
+    /// (calibrating where the visually-best peak sits between
+    /// `Robust` = 0.9999 and `Max` = 1.0).
+    Percentile(f32),
 }
 
 // `PeakMethod` doesn't need a `label()` helper here — the variant-key strings
@@ -274,6 +278,12 @@ fn measure_peak(hdr: &LinearRgb, method: PeakMethod) -> f32 {
         PeakMethod::MaxSmoothed => ContentLightLevel::measure_max_smoothed(
             buf.as_slice(),
             DiffuseWhite::BT2408,
+            LightLevelMethod::MaxRgb,
+        ),
+        PeakMethod::Percentile(p) => ContentLightLevel::measure_percentile(
+            buf.as_slice(),
+            DiffuseWhite::BT2408,
+            p,
             LightLevelMethod::MaxRgb,
         ),
     };
@@ -737,14 +747,28 @@ fn process_sample(stem: &str, path: &Path) -> anyhow::Result<SampleReport> {
     let blend50 = peak_robust + 0.50 * (peak_max - peak_robust);
     let blend75 = peak_robust + 0.75 * (peak_max - peak_robust);
 
+    // Percentile sweep — the actual knob to tune `DEFAULT_PERCENTILE`.
+    // `Robust` already corresponds to 0.9999, `Max` to 1.0; these 4 fill in
+    // the gap so we can read off where the visual sweet spot lands as an
+    // actual percentile value rather than a heuristic linear blend.
+    refresh_lock(&format!("measure percentiles {stem}"));
+    let peak_p99_995 = measure_peak(&hdr, PeakMethod::Percentile(0.99995));
+    let peak_p99_999 = measure_peak(&hdr, PeakMethod::Percentile(0.99999));
+    let peak_p99_9995 = measure_peak(&hdr, PeakMethod::Percentile(0.999995));
+    let peak_p99_9999 = measure_peak(&hdr, PeakMethod::Percentile(0.999999));
+
     for (label, file, peak) in [
-        ("bt2446a max",      "bt2446a__max.png",      peak_max),
-        ("bt2446a robust",   "bt2446a__robust.png",   peak_robust),
-        ("bt2446a smoothed", "bt2446a__smoothed.png", peak_smoothed),
-        ("bt2446a blend25",  "bt2446a__blend25.png",  blend25),
-        ("bt2446a blend50",  "bt2446a__blend50.png",  blend50),
-        ("bt2446a blend75",  "bt2446a__blend75.png",  blend75),
-        ("bt2446a 1000nit",  "bt2446a__1000nit.png",  1000.0),
+        ("bt2446a max",         "bt2446a__max.png",       peak_max),
+        ("bt2446a robust",      "bt2446a__robust.png",    peak_robust),
+        ("bt2446a smoothed",    "bt2446a__smoothed.png",  peak_smoothed),
+        ("bt2446a blend25",     "bt2446a__blend25.png",   blend25),
+        ("bt2446a blend50",     "bt2446a__blend50.png",   blend50),
+        ("bt2446a blend75",     "bt2446a__blend75.png",   blend75),
+        ("bt2446a 1000nit",     "bt2446a__1000nit.png",   1000.0),
+        ("bt2446a p=99.995%",   "bt2446a__p99_995.png",   peak_p99_995),
+        ("bt2446a p=99.999%",   "bt2446a__p99_999.png",   peak_p99_999),
+        ("bt2446a p=99.9995%",  "bt2446a__p99_9995.png",  peak_p99_9995),
+        ("bt2446a p=99.9999%",  "bt2446a__p99_9999.png",  peak_p99_9999),
     ] {
         refresh_lock(&format!("render {label} {stem}"));
         let mapped = apply_bt2446a(&hdr, peak);
