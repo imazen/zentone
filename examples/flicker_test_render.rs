@@ -536,10 +536,10 @@ fn write_per_sample_html(out_dir: &Path, rep: &SampleReport) -> anyhow::Result<(
     metadata = <b>{meta_line}</b>
   </div>
 </div>
-<div class="legend" id="legend">A</div>
 <div class="stage" id="stage">
   <img id="imgA" class="placeholder" src="{default_a}" alt="A">
   <img id="imgB" class="placeholder" src="{default_b}" alt="B">
+  <div class="legend" id="legend">A</div>
 </div>
 <script>
 (function() {{
