@@ -1,10 +1,10 @@
 [package]
 name = "zentone"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.89"
 license = "AGPL-3.0-only OR LicenseRef-Imazen-Commercial"
-description = "HDR to SDR tone mapping: classical curves (Reinhard, ACES, AgX, BT.2408, filmic), plus experimental adaptive and streaming tonemappers"
+description = "HDR to SDR tone mapping curves: Hable, Narkowicz, ACES, AgX, Möbius (libplacebo), ITU BT.2408 / BT.2446-B / BT.2446-C, darktable filmic spline, plus an ISO 21496-1 / Ultra HDR gain-map splitter and experimental adaptive/streaming tonemappers"
 repository = "https://github.com/imazen/zentone"
 documentation = "https://docs.rs/zentone"
 readme = "README.md"
@@ -82,8 +82,15 @@ anyhow = "1"
 bytemuck = { version = "1.25", default-features = false }
 rayon = "1.10"
 zencodecs = { path = "../zenpipe/zencodecs", default-features = false, features = ["jpeg", "jpeg-ultrahdr", "avif-decode", "heic-decode", "raw-decode", "raw-decode-gainmap", "std"] }
-zenpixels-convert = { version = "0.2.15", default-features = false, features = ["std", "hdr-experimental", "rgb", "imgref"] }
-zenpixels-dev = { package = "zenpixels", version = "0.2.15", default-features = false, features = ["std", "imgref"] }
+# dev-deps: the `hdr-shootout` example needs the unpublished `Bt2446A` +
+# `hdr-experimental` feature gate that ships from the zenpixels repo on
+# `main`. Path-only (no `version = ...`) so `cargo package` doesn't try to
+# resolve them against crates.io — dev-deps without a version aren't
+# emitted into the published manifest, so downstream consumers see no
+# trace of these. The example only builds when `--features hdr-shootout`
+# is set, so the normal `cargo test` / docs.rs build path is unaffected.
+zenpixels-convert = { path = "../zenpixels/zenpixels-convert", default-features = false, features = ["std", "hdr-experimental", "rgb", "imgref"] }
+zenpixels-dev = { package = "zenpixels", path = "../zenpixels/zenpixels", default-features = false, features = ["std", "imgref"] }
 # Manual AVIF gain-map reconstruction needs ultrahdr-core directly.
 ultrahdr-core = { version = "0.5.0" }
 
@@ -140,17 +147,16 @@ name = "pipeline_bench"
 harness = false
 required-features = ["experimental"]
 
-# Cross-crate git overrides for the dev-only zencodecs/zenpixels(-convert) pull.
-# Without these, cargo resolves crates.io versions that pre-date the
-# `reconstruct_hdr` + `CllMeasure` APIs the example needs. `zencodec` is NOT
-# patched: 0.1.24 is on crates.io now, so the transitive zencodecs pull
-# resolves it from the registry. The patches that would never get exercised by
-# the gainmap example (zenpng, zenrav1e, zenwebp, etc.) are intentionally
-# omitted so cargo doesn't warn about "patch never used".
+# Cross-crate git overrides for the dev-only `hdr-shootout` example pull.
+# `zenpixels` and `zenpixels-convert` are now path deps in `[dev-dependencies]`
+# so they don't need a patch entry. The remaining patches expose APIs the
+# example needs that pre-date the latest crates.io publishes of the
+# transitive `zencodecs` graph (`zenjpeg`, `ultrahdr-core`, `rav1d-safe`,
+# `heic`). Patches never exercised by the example (zenpng, zenrav1e,
+# zenwebp, etc.) are intentionally omitted so cargo doesn't warn about
+# "patch never used".
 [patch.crates-io]
 zenjpeg = { git = "https://github.com/imazen/zenjpeg" }
-zenpixels = { git = "https://github.com/imazen/zenpixels" }
-zenpixels-convert = { git = "https://github.com/imazen/zenpixels" }
 ultrahdr-core = { git = "https://github.com/imazen/ultrahdr" }
 rav1d-safe = { git = "https://github.com/imazen/rav1d-safe" }
 heic = { git = "https://github.com/imazen/heic" }

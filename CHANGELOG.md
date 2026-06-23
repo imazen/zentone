@@ -11,8 +11,29 @@ adheres to semver.
 <!-- Breaking changes that will ship together in the next major (or minor for 0.x) release.
      Add items here as you discover them. Do NOT ship these piecemeal — batch them. -->
 
+- Remove the `#[deprecated]` + `#[doc(hidden)]` Reinhard curve family from `curves::*` (`reinhard_simple`, `reinhard_extended`, `reinhard_jodie`) and the matching `ToneMapCurve::Reinhard`, `ToneMapCurve::ExtendedReinhard`, `ToneMapCurve::ReinhardJodie`, `ToneMapCurve::TunedReinhard` enum variants. Production HDR→SDR is `zenpixels_convert::hdr::Bt2446A`; see the 0.2.0 "Deprecated" section for the empirical basis.
+
+## [0.2.0] - 2026-06-23
+
+This release relocates BT.2446 Method A — the production-best HDR→SDR curve per
+the 2026-06-22 audited shootout — to `zenpixels-convert`, where it composes with
+CLL measurement and primary conversion into a one-call `HdrToSdr` pipeline. The
+Reinhard family is `#[deprecated]` (kept for one release) on the same evidence.
+Downstream consumers swap the import from `zentone::Bt2446A` to
+`zenpixels_convert::hdr::Bt2446A` and from `zentone::HdrToSdr` to
+`zenpixels_convert::hdr::HdrToSdr`.
+
+### Breaking changes
+
+- `Bt2446A` (struct + `bt2446a_tier` SIMD strip kernel) moved to
+  [`zenpixels_convert::hdr::Bt2446A`](https://docs.rs/zenpixels-convert)
+  (gated on the existing `hdr-experimental` feature). See "Removed" below.
+- `HdrToSdr` (the zentone one-call wrapper) removed; use
+  [`zenpixels_convert::hdr::HdrToSdr`](https://docs.rs/zenpixels-convert)
+  instead — same `HdrToSdr::new(source_peak_nits)` constructor signature
+  and same `apply_strip` / `apply_rgb` API, plus a richer pipeline. See
+  "Removed" below.
 - `gamut::apply_matrix_row` now takes `channels: u8` (was `usize`), matching the `ToneMap` trait and every other `channels` parameter in the crate, so a single channel-count value chains through the gamut → tone-map seam without a per-call-site cast (closes #23). Call sites passing an integer literal are unaffected; only those passing a `usize` *variable* need to switch to `u8`.
-- Remove the now-`#[deprecated]` + `#[doc(hidden)]` Reinhard curve family from `curves::*` (`reinhard_simple`, `reinhard_extended`, `reinhard_jodie`) and the matching `ToneMapCurve::Reinhard`, `ToneMapCurve::ExtendedReinhard`, `ToneMapCurve::ReinhardJodie`, `ToneMapCurve::TunedReinhard` enum variants. Production HDR→SDR is `zenpixels_convert::hdr::Bt2446A`; see the "Deprecated" section under `[Unreleased]` for the empirical basis.
 
 ### Deprecated
 
@@ -206,6 +227,9 @@ adheres to semver.
 
 - Unified the last two internal `channels: usize` parameters to `u8` (the private `CellGrid::add_row` and a gainmap test helper), so every `channels` count crate-wide is now `u8`. No public-API impact; completes the #23 unification.
 - Exclude `tests/` and `.gitignore` from the published crate package to reduce crate download size (~234 KB saved); `benches/` retained due to explicit `[[bench]]` targets in Cargo.toml.
+- Refreshed `README.md` and the `Cargo.toml` `description` to reflect the post-`Bt2446A`-graduation surface — the curve table now points BT.2446 Method A at `zenpixels-convert`, the in-development warning is dated to June 2026, and the deprecated Reinhard family is called out alongside the recommended `Bt2446A` replacement.
+- Dev-dependencies `zenpixels-convert` + `zenpixels` switched from `version = "0.2.15"` to `path = "../zenpixels/..."` so `cargo package` resolves cleanly while the latest sibling APIs (e.g. the `hdr-experimental` feature) are still pre-publish on those crates. Removed the now-unnecessary `[patch.crates-io] zenpixels` / `zenpixels-convert` entries (path deps don't need them); the remaining `zenjpeg` / `ultrahdr-core` / `rav1d-safe` / `heic` patches stay for the transitive `zencodecs` graph the `hdr-shootout` example pulls.
+- Fixed two broken intra-doc-links (`tests/cross_reference.rs::narkowicz_matches_reference` on `curves::filmic_narkowicz` was a path that rustdoc can't resolve, now plain text; the `HdrToSdr` link on `gamut::soft_clip_knee` pointed at the now-removed wrapper, redirected to `zenpixels_convert::hdr::HdrToSdr`). `cargo doc --no-deps --features experimental` is warning-free.
 
 ### Fixed
 

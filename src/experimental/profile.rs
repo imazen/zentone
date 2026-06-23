@@ -7,9 +7,8 @@
 //!
 //! The LUT can be applied in two different ways; the constructor returns a
 //! plain [`ProfileToneCurve`], and you pick an application mode with
-//! [`per_channel`](ProfileToneCurve::per_channel) or
-//! [`luminance`](ProfileToneCurve::luminance). Both return wrapper views
-//! that implement [`ToneMap`](crate::ToneMap).
+//! [`ProfileToneCurve::per_channel`] or [`ProfileToneCurve::luminance`].
+//! Both return wrapper views that implement [`crate::ToneMap`].
 //!
 //! ```
 //! # #[cfg(feature = "experimental")] {
@@ -91,7 +90,7 @@ impl ProfileToneCurve {
     }
 
     /// Per-channel application: evaluates the curve independently on R, G,
-    /// and B. The returned view implements [`ToneMap`](crate::ToneMap).
+    /// and B. The returned view implements [`crate::ToneMap`].
     #[inline]
     pub fn per_channel(&self) -> ProfilePerChannel<'_> {
         ProfilePerChannel { curve: self }
@@ -99,7 +98,7 @@ impl ProfileToneCurve {
 
     /// Luminance-preserving application: maps luminance through the curve
     /// and rescales RGB by the resulting ratio, preserving hue. The returned
-    /// view implements [`ToneMap`](crate::ToneMap).
+    /// view implements [`crate::ToneMap`].
     #[inline]
     pub fn luminance(&self, luma: [f32; 3]) -> ProfileLuminance<'_> {
         ProfileLuminance { curve: self, luma }

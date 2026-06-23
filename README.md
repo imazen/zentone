@@ -1,10 +1,10 @@
 # zentone ![CI](https://img.shields.io/github/actions/workflow/status/imazen/zentone/ci.yml?style=flat-square&label=CI) ![crates.io](https://img.shields.io/crates/v/zentone?style=flat-square) ![lib.rs](https://img.shields.io/crates/v/zentone?style=flat-square&label=lib.rs&color=blue) ![docs.rs](https://img.shields.io/docsrs/zentone?style=flat-square) ![MSRV](https://img.shields.io/crates/msrv/zentone?style=flat-square) ![license](https://img.shields.io/crates/l/zentone?style=flat-square)
 
-HDR to SDR tone mapping curves in safe Rust. Classical curves (Reinhard, Hable, Narkowicz, ACES, AgX), ITU-R BT.2408 / BT.2446 EETFs, the darktable/Blender filmic spline, and an ISO 21496-1 / Apple Ultra HDR gain-map splitter.
+HDR to SDR tone mapping curves in safe Rust. Classical curves (Hable, Narkowicz, ACES, AgX, Möbius), ITU-R BT.2408 / BT.2446 Methods B and C, the darktable/Blender filmic spline, and an ISO 21496-1 / Apple Ultra HDR gain-map splitter. The production-best HDR→SDR curve from the 2026-06-22 audited shootout — BT.2446 Method A — graduated to [`zenpixels-convert`](https://lib.rs/crates/zenpixels-convert), where it composes into a one-call `HdrToSdr` pipeline with primary conversion and OKLch soft compression; the deprecated Reinhard family in `curves` is queued for removal in the next breaking release.
 
 zentone is a **curve library**, not a color pipeline. It expects linear-light f32 input and returns linear-light f32 output. Transfer-function decode/encode (PQ, HLG, sRGB), primary conversion, and ICC handling live elsewhere — `linear-srgb` for the math, `zenpixels-convert` for format negotiation. The `pipeline` module composes a few of those pieces into fused PQ/HLG → sRGB strip kernels for the common case. There's no codec dependency.
 
-> **Active development as of April 2026.** Public APIs may rename or reorganize through the next few minor releases; anything under the `experimental` feature is explicitly unstable and may change without semver bumps. Pin minor versions and read `CHANGELOG.md` before upgrading. This is the first publish to crates.io — the in-development `&[f32]` + `channels: u8` pipeline forms were removed before release in favor of the SIMD strip-form APIs (`&[[f32; 3]]` / `&[[f32; 4]]`).
+> **Active development as of June 2026.** Public APIs may rename or reorganize through the next few minor releases; anything under the `experimental` feature is explicitly unstable and may change without semver bumps. Pin minor versions and read `CHANGELOG.md` before upgrading. The 0.2.0 release relocated `Bt2446A` (the production-best HDR→SDR curve per the 2026-06-22 shootout) to [`zenpixels-convert`](https://lib.rs/crates/zenpixels-convert), removed the bundled `HdrToSdr` wrapper in favor of the convert crate's richer pipeline (primary conversion + OKLch soft compression), and deprecated the channel-independent Reinhard family.
 
 ```toml
 [dependencies]
@@ -66,9 +66,9 @@ The splitter emits raw f32 log2 gain; u8 quantization and gamma encoding are the
 
 ## API tiers
 
-- **Hot path — strip / row SIMD.** `pipeline::tonemap_pq_*_row_simd`, `pipeline::tonemap_hlg_*_row_simd`, `gamut::apply_matrix_row_simd`, `gamut::soft_clip_row_simd`, `hlg::hlg_ootf_row_simd`, and the `ToneMap::map_strip_simd` trait method (with SIMD overrides on `Bt2408Tonemapper`, `Bt2446A/B/C`, and `CompiledFilmicSpline`). Use these for any non-trivial workload.
-- **Per-pixel reference.** `ToneMap::map_rgb`, the named-curve scalar functions in `curves` (`reinhard_simple`, `bt2390_tonemap`, `narkowicz_aces`, …), `gamut::apply_matrix`, `gamut::soft_clip`. Suitable for one-off use, doctests, and cross-checks against external implementations. Don't put these in inner loops.
-- **Stateful tonemappers.** `Bt2408Tonemapper`, `Bt2446A`, `Bt2446B`, `Bt2446C`, `CompiledFilmicSpline`. Constructed once with `(content_peak_nits, display_peak_nits)` (or a `FilmicSplineConfig`); apply via the `ToneMap` trait.
+- **Hot path — strip / row SIMD.** `pipeline::tonemap_pq_*_row_simd`, `pipeline::tonemap_hlg_*_row_simd`, `gamut::apply_matrix_row_simd`, `gamut::soft_clip_row_simd`, `hlg::hlg_ootf_row_simd`, and the `ToneMap::map_strip_simd` trait method (with SIMD overrides on `Bt2408Tonemapper`, `Bt2446B`, `Bt2446C`, and `CompiledFilmicSpline`). Use these for any non-trivial workload.
+- **Per-pixel reference.** `ToneMap::map_rgb`, the named-curve scalar functions in `curves` (`filmic_narkowicz`, `hable_filmic`, `aces_ap1`, `agx_tonemap`, `bt2390_tonemap`, …), `gamut::apply_matrix`, `gamut::soft_clip`. Suitable for one-off use, doctests, and cross-checks against external implementations. Don't put these in inner loops.
+- **Stateful tonemappers.** `Bt2408Tonemapper`, `Bt2446B`, `Bt2446C`, `CompiledFilmicSpline`. Constructed once with `(content_peak_nits, display_peak_nits)` (or a `FilmicSplineConfig`); apply via the `ToneMap` trait. For BT.2446 Method A, use [`zenpixels_convert::hdr::Bt2446A`](https://lib.rs/crates/zenpixels-convert) — it graduated to the convert crate where it composes with CLL measurement and primary conversion.
 - **Gain map splitter.** `LumaGainMapSplitter`, `LumaToneMap`, `SplitConfig`, `SplitStats`, plus the curve adapters `Bt2408Yrgb`, `ExtendedReinhardLuma`, `HableFilmic`, and the `LumaFn` closure wrapper.
 - **Experimental.** `experimental::AdaptiveTonemapper` (LUT fitter from an HDR/SDR pair), `experimental::StreamingTonemapper` (single-pass spatially-local tonemap), `experimental::ProfileToneCurve` (DNG camera-profile tone curve), `experimental::detect::detect_standard`. Feature-gated, semver-unstable.
 
@@ -76,10 +76,10 @@ The splitter emits raw f32 log2 gain; u8 quantization and gamma encoding are the
 
 | Family | Members |
 |---|---|
-| Stateless `ToneMapCurve` | `Reinhard`, `ExtendedReinhard`, `ReinhardJodie`, `TunedReinhard`, `Narkowicz`, `HableFilmic`, `AcesAp1`, `Agx(AgxLook::{Default, Punchy, Golden})`, `Bt2390`, `Clamp` |
-| ITU broadcast standards | `Bt2408Tonemapper` (BT.2408 Annex 5 PQ-domain Hermite, YRGB or MaxRGB), `Bt2446A` / `Bt2446B` / `Bt2446C` (BT.2446 Methods A, B, C) |
+| Stateless `ToneMapCurve` | `Narkowicz`, `HableFilmic`, `AcesAp1`, `Agx(AgxLook::{Default, Punchy, Golden})`, `Bt2390 { source_peak, target_peak }`, `Mobius { source_peak, knee }` (libplacebo's `mobius()`), `Clamp`. (`Reinhard`, `ExtendedReinhard`, `ReinhardJodie`, `TunedReinhard` are `#[deprecated]` — superseded by `zenpixels_convert::hdr::Bt2446A` per the 2026-06-22 shootout; queued for removal.) |
+| ITU broadcast standards | `Bt2408Tonemapper` (BT.2408 Annex 5 PQ-domain Hermite, YRGB or MaxRGB), `Bt2446B` / `Bt2446C` (BT.2446 Methods B and C). Method A lives in [`zenpixels_convert::hdr::Bt2446A`](https://lib.rs/crates/zenpixels-convert) — the canonical home for the production-best HDR→SDR curve. |
 | Filmic spline | `CompiledFilmicSpline` + `FilmicSplineConfig` (darktable/Blender rational spline with toe/linear/shoulder regions and per-pixel highlight desaturation) |
-| Luma curves for the splitter | `Bt2408Yrgb`, `ExtendedReinhardLuma`, `HableFilmic` (also re-exported as a stateless `ToneMapCurve` variant), and any `Bt2446{A,B,C}` / `CompiledFilmicSpline` (they implement `LumaToneMap` directly) |
+| Luma curves for the splitter | `Bt2408Yrgb`, `ExtendedReinhardLuma`, `HableFilmic` (also re-exported as a stateless `ToneMapCurve` variant), and any `Bt2446{B,C}` / `CompiledFilmicSpline` (they implement `LumaToneMap` directly) |
 
 Curves that need RGB→Y weights take them at construction. Use `LUMA_BT709`, `LUMA_BT2020`, or `LUMA_P3` from the crate root, picking the constant that matches the input primaries.
 

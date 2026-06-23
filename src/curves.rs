@@ -152,7 +152,7 @@ pub(crate) fn tuned_reinhard(luma: f32, content_max: f32, display_max: f32) -> f
 ///
 /// Cheap scene-linear approximation of ACES RRT+ODT. Verified bit-exact
 /// against Krzysztof Narkowicz's published formula (see
-/// [`tests/cross_reference.rs::narkowicz_matches_reference`]).
+/// `tests/cross_reference.rs::narkowicz_matches_reference`).
 ///
 /// # Input domain
 ///

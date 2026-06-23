@@ -209,7 +209,8 @@ pub fn soft_clip(rgb: [f32; 3]) -> [f32; 3] {
 /// boundary (very close to [`soft_clip`] but via max-channel scale, not
 /// sort-based interpolation). `knee = 1.0` is identity (no rolloff;
 /// out-of-gamut values pass through). Default in
-/// [`HdrToSdr`](crate::HdrToSdr) is `0.95`.
+/// [`zenpixels_convert::hdr::HdrToSdr`](https://docs.rs/zenpixels-convert)
+/// is `0.95`.
 ///
 /// # Examples
 ///
