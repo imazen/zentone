@@ -119,6 +119,10 @@ name = "hdr_tone_map_shootout_audited"
 required-features = ["hdr-shootout"]
 
 [[example]]
+name = "softcompress_knee_sweep"
+required-features = ["hdr-shootout"]
+
+[[example]]
 name = "shootout_p99999_only"
 required-features = ["hdr-shootout"]
 
@@ -157,6 +161,16 @@ required-features = ["experimental"]
 # "patch never used".
 [patch.crates-io]
 zenjpeg = { git = "https://github.com/imazen/zenjpeg" }
+# `zenpixels` and `zenpixels-convert` patches are needed locally so the
+# `hdr-shootout` example sees the same version of `zenpixels` through both
+# its direct dev-dep path and the transitive `zencodecs` graph. Without this,
+# `zencodec`/`zencodecs` resolve registry 0.2.14 while the dev-deps resolve
+# path 0.2.15+, producing two distinct `zenpixels::PixelBuffer` types and a
+# compile-time mismatch when consuming `DecodeOutput::into_buffer()` from
+# the shootout examples. Dev-only — `cargo package` already drops dev-deps,
+# so downstream consumers see no trace of these.
+zenpixels = { path = "../zenpixels/zenpixels" }
+zenpixels-convert = { path = "../zenpixels/zenpixels-convert" }
 ultrahdr-core = { git = "https://github.com/imazen/ultrahdr" }
 rav1d-safe = { git = "https://github.com/imazen/rav1d-safe" }
 heic = { git = "https://github.com/imazen/heic" }

@@ -4,3 +4,6 @@ perf.data*
 *.profraw
 .DS_Store
 .workongoing
+.workongoing.ts
+__pycache__/
+*.pyc
