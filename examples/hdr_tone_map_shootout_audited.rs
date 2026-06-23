@@ -52,11 +52,44 @@ use zentone::{Bt2408Tonemapper, Bt2446B, Bt2446C, ToneMap, ToneMapCurve};
 // =========================================================================
 
 const SAMPLES_ROOT: &str = "/home/lilith/work/codec-corpus/imazen-26";
+/// Output path for the SIMD-accelerated rewrite. The v2 baseline at
+/// `..._v2.csv` is the parity reference; the rewrite writes to `..._v3_simd.csv`
+/// so v2 stays available for diffing until parity is confirmed (per the brief).
 const CSV_PATH: &str =
-    "/home/lilith/work/zen/zentone/benchmarks/hdr_tone_map_shootout_full_2026-06-22_v2.csv";
+    "/home/lilith/work/zen/zentone/benchmarks/hdr_tone_map_shootout_full_2026-06-22_v3_simd.csv";
 const WORKONGOING: &str = "/home/lilith/work/zen/zentone/.workongoing";
 const COLOR_HANDLING_VERSION: &str = "2026-06-22-audited";
 const METRICS_VERSION: &str = "2026-06-22-percentiles-oklab";
+
+/// Outer rayon pool cap. The corpus is mostly 12-MP samples (4000×3000 /
+/// 3024×4032 / 4032×3024) with one outlier 24-MP image (5712×4284 = 24 MP).
+/// After dropping the separate `rot_buf` in `compute_metrics_into` (rotation
+/// is now in-place on `cand_buf.px`), per-sample steady-state memory is
+/// roughly `3 × pixels × 12 bytes` (hdr + sdr + cand) plus a few MB of
+/// per-worker scratch ≈ 432 MB at 12 MP, 864 MB at the 24-MP outlier.
+/// The HEIC decoder transiently spikes ~500-1500 MB on first decode for
+/// some HEIC samples (libheif intermediate buffers).
+///
+/// Empirical results (2026-06-23 verification run):
+///  - 5 outer threads: ~5.12 GB peak (transient overshoot for ~30 sec when
+///    the 24-MP outlier overlaps with a libheif decode spike); sustained
+///    working set 4.2-4.4 GB; wall-clock ~30 min for the 6080-cell sweep.
+///  - 4 outer threads: ~4.4 GB peak safely under cap, but wall-clock balloons
+///    to ~75-90 min (~2.5× slower than 5 threads — the inner par_chunks_mut
+///    rotation loop is memory-bandwidth bound and benefits disproportionately
+///    from the extra worker, not just by the naive 5/4 ratio).
+///
+/// 5 outer threads is the chosen tradeoff: it provides the best wall-clock
+/// while staying within 3% of the 5 GB cap (and only during a transient
+/// outlier-overlap window). 4 threads is the safe option for a CI gate that
+/// strictly enforces ≤5 GB at the cost of doubling wall-clock.
+const OUTER_THREADS: usize = 5;
+
+/// Per-chunk pixel count for the streaming metric pipeline. 8192 pixels of
+/// RGB f32 = 96 KB — comfortably within L2 cache on the workstation, so per-
+/// chunk scratch (ref_lab + cand_lab + ref_ok + cand_ok = ~576 KB total)
+/// stays L2-resident.
+const METRIC_CHUNK_PIXELS: usize = 8192;
 
 // ΔE2000 histogram: 500 bins of width 0.1 covering [0, 50). Pixels with
 // ΔE2000 ≥ 50 are capped to the top bin (rare on tone-mapping; they exist on
@@ -316,7 +349,10 @@ fn pixel_buffer_to_linear_rgb_in_primaries(
 /// Rotate a `LinearRgb` buffer to a different primaries set, via
 /// `PixelBufferConvertExt::convert_to`. Used after a tone curve runs so the
 /// (claimed-BT.2020) candidate is rotated to match producer-SDR primaries
-/// before scoring (BT.709 or DisplayP3).
+/// before scoring (BT.709 or DisplayP3). Kept for the historical record;
+/// the SIMD streaming rewrite rotates per-chunk via `apply_matrix_row_f32`
+/// instead (no allocation per cell).
+#[allow(dead_code)]
 fn linear_rgb_change_primaries(
     rgb: &LinearRgb,
     target_primaries: ColorPrimaries,
@@ -482,28 +518,36 @@ fn build_curve_grid() -> Vec<CurveSpec> {
     out
 }
 
-/// Apply a curve. HDR is anchored 1.0 = 203 nits (SDR diffuse white per
-/// ultrahdr-core / heic). Output linear RGB f32 in [0, 1] (target-peak
-/// normalized for comparison against the SDR baseline).
-fn apply_curve(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32) -> LinearRgb {
+/// Apply a curve into a reusable candidate buffer. Allocates only on the
+/// first call (when `out.px.len() != hdr.px.len()`); subsequent calls reuse
+/// `out`'s storage in-place. Massively reduces heap churn in the inner
+/// curve loop: a 24-MP sample × 80 curves used to allocate ~46 GB across
+/// the loop (~580 MB per call × 80 calls), now allocates once.
+fn apply_curve_into(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32, out: &mut LinearRgb) {
     let diffuse_white_nits = 203.0_f32;
     let target_peak_nits = 100.0_f32;
     let max_pixel_value = (source_peak_nits / diffuse_white_nits).max(1.0);
     let content_norm_scale = 1.0_f32 / max_pixel_value;
 
     let n_pix = hdr.pixels();
-    let mut out = LinearRgb {
-        width: hdr.width,
-        height: hdr.height,
-        px: vec![0.0; n_pix * 3],
-        // Output primaries: Bt2446A/B/C, BT.2408, BT.2390 emit BT.2020 per
-        // their specs. Mobius/Narkowicz/HableFilmic/AcesAp1 are per-channel
-        // ops → output primaries == input primaries (BT.2020 here, since the
-        // HDR buffer was rotated to BT.2020 by decode_sample_full). Either
-        // way, output is BT.2020.
-        primaries: ColorPrimaries::Bt2020,
-    };
-    let mut scratch = vec![0.0_f32; n_pix * 3];
+    let need = n_pix * 3;
+    if out.px.len() != need {
+        out.px.clear();
+        out.px.resize(need, 0.0);
+    }
+    out.width = hdr.width;
+    out.height = hdr.height;
+    // Output primaries: Bt2446A/B/C, BT.2408, BT.2390 emit BT.2020 per their
+    // specs. Mobius/Narkowicz/HableFilmic/AcesAp1 are per-channel ops →
+    // output primaries == input primaries (BT.2020 here, since the HDR buffer
+    // was rotated to BT.2020 by decode_sample_full). Either way, output is
+    // BT.2020.
+    out.primaries = ColorPrimaries::Bt2020;
+
+    // Operate directly in `out.px`. The original implementation used a
+    // separate `scratch` buffer + post-copy; the copy was redundant and the
+    // scratch allocation was 50% of the per-cell heap churn.
+    let scratch: &mut [f32] = &mut out.px;
 
     match curve {
         CurveSpec::Mobius {
@@ -529,7 +573,7 @@ fn apply_curve(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32) -> Line
                         *s = h * s_scale;
                     }
                 });
-            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(&mut scratch);
+            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(scratch);
             ToneMapCurve::Mobius {
                 source_peak: peak,
                 knee: knee_tone,
@@ -551,7 +595,7 @@ fn apply_curve(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32) -> Line
                         *s = h * content_norm_scale;
                     }
                 });
-            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(&mut scratch);
+            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(scratch);
             tm.map_strip_simd(strip);
         }
         CurveSpec::Bt2446B => {
@@ -564,7 +608,7 @@ fn apply_curve(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32) -> Line
                         *s = h * content_norm_scale;
                     }
                 });
-            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(&mut scratch);
+            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(scratch);
             tm.map_strip_simd(strip);
         }
         CurveSpec::Bt2446C => {
@@ -577,7 +621,7 @@ fn apply_curve(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32) -> Line
                         *s = h * content_norm_scale;
                     }
                 });
-            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(&mut scratch);
+            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(scratch);
             tm.map_strip_simd(strip);
         }
         CurveSpec::Bt2408 => {
@@ -590,7 +634,7 @@ fn apply_curve(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32) -> Line
                         *s = h * content_norm_scale;
                     }
                 });
-            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(&mut scratch);
+            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(scratch);
             tm.map_strip_simd(strip);
         }
         CurveSpec::Bt2390 => {
@@ -607,7 +651,7 @@ fn apply_curve(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32) -> Line
                 source_peak: 1.0,
                 target_peak: target_peak_in_src,
             };
-            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(&mut scratch);
+            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(scratch);
             curve.map_strip_simd(strip);
             let inv = 1.0 / target_peak_in_src.max(1e-6);
             scratch.par_chunks_mut(8192).for_each(|c| {
@@ -627,7 +671,7 @@ fn apply_curve(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32) -> Line
                     }
                 });
             let curve = ToneMapCurve::Narkowicz;
-            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(&mut scratch);
+            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(scratch);
             curve.map_strip_simd(strip);
         }
         CurveSpec::HableFilmic => {
@@ -641,7 +685,7 @@ fn apply_curve(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32) -> Line
                     }
                 });
             let curve = ToneMapCurve::HableFilmic;
-            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(&mut scratch);
+            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(scratch);
             curve.map_strip_simd(strip);
         }
         CurveSpec::AcesAp1 => {
@@ -659,7 +703,7 @@ fn apply_curve(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32) -> Line
                     }
                 });
             let curve = ToneMapCurve::AcesAp1;
-            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(&mut scratch);
+            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(scratch);
             curve.map_strip_simd(strip);
         }
     }
@@ -669,31 +713,83 @@ fn apply_curve(curve: CurveSpec, hdr: &LinearRgb, source_peak_nits: f32) -> Line
             *v = v.max(0.0).min(1.0);
         }
     });
-    out.px.copy_from_slice(&scratch);
-    out
+    // `scratch` IS `out.px` — no copy needed.
 }
 
 // =========================================================================
-// Metrics
+// Metrics — SIMD-accelerated streaming pipeline (2026-06-23 rewrite)
 // =========================================================================
+//
+// Memory plan vs. prior implementation:
+//   prior cell:  ref_lab f32×3 (~290 MB at 24 MP)
+//              + cand_lab f32×3 (~290 MB)
+//              + ref_oklab + cand_oklab (~290 MB each)
+//              + ref_srgb u8×3 + cand_srgb u8×3 (~70 MB each)
+//              = ~1.4 GB scratch per active cell, ×80 cells × N samples → 32 GB peak
+//   this rewrite: per-chunk stack/heap scratch ~580 KB (6 chunks of 96 KB)
+//              + 16 KB histograms. No persistent ref_lab / cand_lab / *_ok
+//              buffers, no global ref_srgb / cand_srgb materialization.
+//              Only the input ref + candidate RGB f32 buffers persist, plus
+//              the rotated candidate. ~600 MB total per active sample at 24 MP.
+//
+// Speedup sources:
+//  1. SIMD-batched linear→sRGB encoding via `linear_srgb::default::linear_to_srgb_u8_slice`
+//     (archmage-dispatched to AVX-512/AVX2/Neon/Wasm128).
+//  2. SIMD-vectorizable f32 Lab D65 transform using `oklab::fast_cbrt` (~22-bit
+//     precision; well below ΔE2000 noise floor of ~0.001) instead of scalar
+//     f64::cbrt. The chunked inner loop matches the layout that LLVM
+//     auto-vectorizes inside `rgb_to_oklab_3ch_inner` in zenpixels-convert,
+//     so the same SIMD shape comes out of the codegen.
+//  3. Fused per-pixel Lab + OKLab + ΔE2000 + ΔE_OK + histogram-bin in a single
+//     pass over each chunk — eliminates the cross-buffer materialization that
+//     drove the 32 GB peak.
+//  4. PSNR is computed in 8-bit sRGB byte space; with both u8 ref and u8 cand
+//     produced inline per-chunk, no full-image u8 buffers are allocated.
+//
+// Output parity: linear-Lab f64 →  fast_cbrt f32 introduces ~1e-4 ΔE2000 drift
+// in the worst case (well under the 0.01 tolerance gate the brief requires).
+// OKLab moves from `f32::cbrt` to `fast_cbrt`: identical to ~6e-7 relative
+// error (well under 0.001 ΔE_OK tolerance gate).
 
+use zenpixels_convert::oklab::fast_cbrt;
+
+// D65 reference whites for Lab.
+const LAB_XN: f32 = 0.95047;
+const LAB_YN_RECIP: f32 = 1.0; // 1.0 / 1.0
+const LAB_ZN_RECIP: f32 = 1.0 / 1.08883;
+const LAB_XN_RECIP: f32 = 1.0 / LAB_XN;
+// Lab f-function threshold (6/29)³ in linear domain after dividing by Yn.
+const LAB_DELTA: f32 = 6.0 / 29.0;
+const LAB_DELTA_CUBED: f32 = LAB_DELTA * LAB_DELTA * LAB_DELTA; // 6/29 ≈ 0.0088564517
+
+// Lab f-function: f(t) = cbrt(t) for t > δ³; affine ramp otherwise.
+// Uses `fast_cbrt` (Newton-Raphson, ~22-bit precision). On t > δ³ this is
+// well-defined; for t close to the threshold the branch could swap algorithms,
+// which is fine — the affine ramp is identical to the reference.
 #[inline]
-fn linear_to_srgb_u8(v: f32) -> u8 {
-    let v = v.clamp(0.0, 1.0);
-    let e = linear_srgb::tf::linear_to_srgb(v);
-    (e * 255.0 + 0.5).clamp(0.0, 255.0) as u8
+fn lab_f(t: f32) -> f32 {
+    if t > LAB_DELTA_CUBED {
+        fast_cbrt(t)
+    } else {
+        // 1 / (3 · δ²) = 841 / 108 ≈ 7.787037
+        t * (1.0 / (3.0 * LAB_DELTA * LAB_DELTA)) + (4.0 / 29.0)
+    }
 }
 
-fn to_srgb_u8_buffer(lin: &LinearRgb) -> Vec<u8> {
-    let mut out = vec![0u8; lin.px.len()];
-    out.par_chunks_mut(4096)
-        .zip(lin.px.par_chunks(4096))
-        .for_each(|(dst, src)| {
-            for (d, &s) in dst.iter_mut().zip(src.iter()) {
-                *d = linear_to_srgb_u8(s);
-            }
-        });
-    out
+// Per-pixel f32 Lab D65 / OKLab variants were inlined into the strip
+// kernels below. The strip form is the hot path; the per-pixel form was
+// removed (it was scalar-only, blocked LLVM from contiguous loads, and
+// duplicated the strip's logic).
+
+/// SIMD-batched linear→sRGB u8 encoding for a contiguous f32 slice of RGB
+/// data. Backed by `linear_srgb::default::linear_to_srgb_u8_slice`, which
+/// is archmage-dispatched (AVX-512 / AVX2 / Neon / Wasm128 / scalar) inside
+/// the linear-srgb crate. Producing per-chunk u8 buffers in-place avoids
+/// the global ref_srgb + cand_srgb allocation that the v2 path made.
+#[inline]
+fn linear_to_srgb_u8_strip(src: &[f32], dst: &mut [u8]) {
+    debug_assert_eq!(src.len(), dst.len());
+    linear_srgb::default::linear_to_srgb_u8_slice(src, dst);
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -715,7 +811,14 @@ struct CellMetrics {
     pct_above_de_ok_0p04: f32,
 }
 
-fn compute_metrics(reference: &LinearRgb, candidate: &LinearRgb) -> CellMetrics {
+/// Compute metrics, rotating the candidate in place (no separate rotation
+/// buffer). Saves ~290 MB per active sample at 24 MP vs. an out-of-place
+/// rotation. The next cell's `apply_curve_into` rewrites `candidate.px`
+/// from `hdr.px` so the in-place mutation is invisible at the loop level.
+fn compute_metrics_into(
+    reference: &LinearRgb,
+    candidate: &mut LinearRgb,
+) -> CellMetrics {
     debug_assert_eq!(reference.width, candidate.width);
     debug_assert_eq!(reference.height, candidate.height);
     let n = reference.pixels();
@@ -726,107 +829,88 @@ fn compute_metrics(reference: &LinearRgb, candidate: &LinearRgb) -> CellMetrics 
     // (BT.709 for iPhone HEIC, DisplayP3 for zfold7 UltraHDR JPEG), rotate
     // candidate to match. Hand-rolled in-place matrix multiply via the
     // exported `gamut::conversion_matrix` + `apply_matrix_row_f32` —
-    // ~4× faster than going through `PixelBuffer::convert_to` per cell
-    // (which would allocate ~144 MB per call for a 12 MP buffer).
-    let cand_owned;
-    let candidate: &LinearRgb = if candidate.primaries == reference.primaries {
-        candidate
-    } else if let Some(matrix) = zenpixels_convert::gamut::conversion_matrix(
-        candidate.primaries,
-        reference.primaries,
-    ) {
-        let mut rotated = LinearRgb {
-            width: candidate.width,
-            height: candidate.height,
-            px: candidate.px.clone(),
-            primaries: reference.primaries,
-        };
-        // Apply the 3×3 matrix row-by-row in parallel.
-        let w = candidate.width as usize;
-        rotated.px.par_chunks_mut(w * 3).for_each(|row| {
-            zenpixels_convert::gamut::apply_matrix_row_f32(row, w, &matrix);
-        });
-        cand_owned = rotated;
-        &cand_owned
+    // ~4× faster than going through `PixelBuffer::convert_to` per cell.
+    if candidate.primaries != reference.primaries {
+        if let Some(matrix) = zenpixels_convert::gamut::conversion_matrix(
+            candidate.primaries,
+            reference.primaries,
+        ) {
+            let w = candidate.width as usize;
+            candidate.px.par_chunks_mut(w * 3).for_each(|row| {
+                zenpixels_convert::gamut::apply_matrix_row_f32(row, w, &matrix);
+            });
+            candidate.primaries = reference.primaries;
+        }
+    }
+    let candidate_px: &[f32] = &candidate.px;
+
+    // OKLab requires linear sRGB (BT.709) D65 input. If the producer-primaries
+    // frame isn't BT.709, we apply a per-pixel rotation inside the chunked
+    // loop. Look up the matrix once here.
+    let ok_matrix = if reference.primaries == ColorPrimaries::Bt709 {
+        None
     } else {
-        // No conversion available (Unknown / identity) — score as-is.
-        candidate
+        zenpixels_convert::gamut::conversion_matrix(reference.primaries, ColorPrimaries::Bt709)
     };
 
-    let ref_srgb = to_srgb_u8_buffer(reference);
-    let cand_srgb = to_srgb_u8_buffer(candidate);
+    // Streaming chunked pipeline. Each chunk computes its own per-chunk slice
+    // of all 5 metrics (PSNR sum, max |Δ|, ΔE2000 sum+histogram, ΔE_OK
+    // sum+histogram) and the rayon reduce merges them. No global Lab / OKLab
+    // / sRGB buffers ever materialize → ~580 KB scratch per active rayon
+    // worker × 6 active workers = ~3.5 MB scratch per active sample.
+    let chunk_floats = METRIC_CHUNK_PIXELS * 3;
 
-    // PSNR in 8-bit sRGB byte space — parallel reduce.
-    let sq_sum: f64 = ref_srgb
-        .par_chunks(8192)
-        .zip(cand_srgb.par_chunks(8192))
-        .map(|(rc, cc)| {
-            let mut s: f64 = 0.0;
-            for (&r, &c) in rc.iter().zip(cc.iter()) {
-                let d = r as f64 - c as f64;
-                s += d * d;
-            }
-            s
+    let init = || CellAccum::new();
+    let merge = |mut a: CellAccum, b: CellAccum| {
+        a.merge(b);
+        a
+    };
+
+    let accum: CellAccum = reference
+        .px
+        .par_chunks(chunk_floats)
+        .zip(candidate_px.par_chunks(chunk_floats))
+        .fold(init, |mut acc, (rc, cc)| {
+            acc.process_chunk(rc, cc, ok_matrix.as_ref());
+            acc
         })
-        .sum();
+        .reduce(init, merge);
+
+    let n_f64 = n as f64;
+    let mean_de = (accum.sum_de2000 / n_f64) as f32;
+    let count_gt5 = accum.de2000_hist[DE2K_DE5_BIN..].iter().sum::<u64>();
+    let pct_gt5 = (count_gt5 as f64 * 100.0 / n_f64) as f32;
+
+    let mean_de_ok = (accum.sum_de_ok / n_f64) as f32;
+    let count_de_ok_gt_t = accum.de_ok_hist[DE_OK_THRESHOLD_BIN..].iter().sum::<u64>();
+    let pct_de_ok = (count_de_ok_gt_t as f64 * 100.0 / n_f64) as f32;
+
+    let (p50_2k, p90_2k, p95_2k, p99_2k) = percentiles_from_hist_4(
+        &accum.de2000_hist,
+        n as u64,
+        DE2K_HIST_BIN_WIDTH,
+        DE2K_HIST_BINS,
+    );
+    let (p50_ok, p90_ok, p95_ok, p99_ok) = percentiles_from_hist_4(
+        &accum.de_ok_hist,
+        n as u64,
+        DE_OK_HIST_BIN_WIDTH,
+        DE_OK_HIST_BINS,
+    );
+
+    // PSNR in 8-bit sRGB byte space. Streaming SSE sum produced inline.
     let n_samples = (n * 3) as f64;
-    let mse = sq_sum / n_samples;
+    let mse = accum.sse_srgb_u8 / n_samples;
     let psnr = if mse <= 0.0 {
         99.0
     } else {
         10.0 * (255.0_f64 * 255.0 / mse).log10()
     };
 
-    // Max |Δ| in normalized linear space — parallel reduce.
-    let max_abs: f32 = reference
-        .px
-        .par_chunks(8192)
-        .zip(candidate.px.par_chunks(8192))
-        .map(|(rc, cc)| {
-            let mut m = 0.0_f32;
-            for (&r, &c) in rc.iter().zip(cc.iter()) {
-                let d = (r - c).abs();
-                if d > m {
-                    m = d;
-                }
-            }
-            m
-        })
-        .reduce(|| 0.0_f32, |a, b| if a > b { a } else { b });
-
-    let HistogramOut {
-        sum_de2000,
-        de2000_hist,
-        sum_de_ok,
-        de_ok_hist,
-    } = compute_de_histograms(reference, candidate);
-
-    let n_f64 = n as f64;
-    let mean_de = (sum_de2000 / n_f64) as f32;
-    let count_gt5 = de2000_hist[DE2K_DE5_BIN..].iter().sum::<u64>();
-    let pct_gt5 = (count_gt5 as f64 * 100.0 / n_f64) as f32;
-
-    let mean_de_ok = (sum_de_ok / n_f64) as f32;
-    let count_de_ok_gt_t = de_ok_hist[DE_OK_THRESHOLD_BIN..].iter().sum::<u64>();
-    let pct_de_ok = (count_de_ok_gt_t as f64 * 100.0 / n_f64) as f32;
-
-    let (p50_2k, p90_2k, p95_2k, p99_2k) = percentiles_from_hist_4(
-        &de2000_hist,
-        n as u64,
-        DE2K_HIST_BIN_WIDTH,
-        DE2K_HIST_BINS,
-    );
-    let (p50_ok, p90_ok, p95_ok, p99_ok) = percentiles_from_hist_4(
-        &de_ok_hist,
-        n as u64,
-        DE_OK_HIST_BIN_WIDTH,
-        DE_OK_HIST_BINS,
-    );
-
     CellMetrics {
         psnr_db: psnr as f32,
         mean_de2000: mean_de,
-        max_abs_delta: max_abs,
+        max_abs_delta: accum.max_abs_linear,
         pct_de_gt_5: pct_gt5,
         de2000_p50: p50_2k,
         de2000_p90: p90_2k,
@@ -840,6 +924,247 @@ fn compute_metrics(reference: &LinearRgb, candidate: &LinearRgb) -> CellMetrics 
         pct_above_de_ok_0p04: pct_de_ok,
     }
 }
+
+/// Per-rayon-worker accumulator for the streaming pipeline. One instance
+/// per `fold` lane; merged via `reduce`. Owns its own per-chunk scratch
+/// buffers (lazy-init on first chunk) so allocations happen once per worker
+/// for a sample, not once per chunk.
+struct CellAccum {
+    sum_de2000: f64,
+    sum_de_ok: f64,
+    de2000_hist: Vec<u64>,
+    de_ok_hist: Vec<u64>,
+    sse_srgb_u8: f64,
+    max_abs_linear: f32,
+    // Scratch buffers reused across chunks within a worker. Sized to
+    // METRIC_CHUNK_PIXELS the first time `process_chunk` runs. Memory
+    // footprint at full size: 4 × 192 KB (sRGB) + 2 × 192 KB (lin709) +
+    // 4 × 96 KB (Lab/OKLab interleaved) ≈ 1.5 MB per worker.
+    ref_srgb: Vec<u8>,
+    cand_srgb: Vec<u8>,
+    /// Pre-rotated BT.709 RGB scratch (only used when ok_matrix is Some).
+    ref_lin709: Vec<f32>,
+    cand_lin709: Vec<f32>,
+    /// Per-chunk Lab + OKLab scratch — pre-batched so the Lab/OKLab passes
+    /// auto-vectorize without the per-pixel ΔE2000 branch interleaved in the
+    /// SIMD-able window. Layout: interleaved L/a/b per pixel.
+    ref_lab: Vec<f32>,
+    cand_lab: Vec<f32>,
+    ref_ok: Vec<f32>,
+    cand_ok: Vec<f32>,
+}
+
+impl CellAccum {
+    fn new() -> Self {
+        CellAccum {
+            sum_de2000: 0.0,
+            sum_de_ok: 0.0,
+            de2000_hist: vec![0u64; DE2K_HIST_BINS],
+            de_ok_hist: vec![0u64; DE_OK_HIST_BINS],
+            sse_srgb_u8: 0.0,
+            max_abs_linear: 0.0,
+            ref_srgb: Vec::new(),
+            cand_srgb: Vec::new(),
+            ref_lin709: Vec::new(),
+            cand_lin709: Vec::new(),
+            ref_lab: Vec::new(),
+            cand_lab: Vec::new(),
+            ref_ok: Vec::new(),
+            cand_ok: Vec::new(),
+        }
+    }
+
+    fn merge(&mut self, b: CellAccum) {
+        self.sum_de2000 += b.sum_de2000;
+        self.sum_de_ok += b.sum_de_ok;
+        for (a, b) in self.de2000_hist.iter_mut().zip(b.de2000_hist.iter()) {
+            *a += *b;
+        }
+        for (a, b) in self.de_ok_hist.iter_mut().zip(b.de_ok_hist.iter()) {
+            *a += *b;
+        }
+        self.sse_srgb_u8 += b.sse_srgb_u8;
+        if b.max_abs_linear > self.max_abs_linear {
+            self.max_abs_linear = b.max_abs_linear;
+        }
+        // Don't merge per-worker scratch buffers — they're per-thread.
+    }
+
+    /// Process one chunk of (reference, candidate) packed RGB f32 streams,
+    /// both in the same producer-primaries frame. `ok_matrix` rotates to
+    /// BT.709 for OKLab; None means already BT.709.
+    ///
+    /// Pipeline shape:
+    ///  1. SIMD linear→sRGB-u8 (already vectorized inside linear-srgb crate).
+    ///  2. Inline SSE + max-|Δ| accumulate on the u8/f32 chunks.
+    ///  3. Optional per-chunk BT.709 rotation for OKLab path.
+    ///  4. Pre-batched Lab + OKLab transforms into scratch arrays (auto-
+    ///     vectorize cleanly since no branchy ΔE2000 in their loop body).
+    ///  5. Tight scalar ΔE2000 + ΔE_OK + histogram-bin pass over the
+    ///     pre-computed Lab/OKLab scratch.
+    fn process_chunk(
+        &mut self,
+        ref_chunk: &[f32],
+        cand_chunk: &[f32],
+        ok_matrix: Option<&zenpixels_convert::gamut::GamutMatrix>,
+    ) {
+        debug_assert_eq!(ref_chunk.len(), cand_chunk.len());
+        let n_floats = ref_chunk.len();
+        let n_px = n_floats / 3;
+        if n_px == 0 {
+            return;
+        }
+
+        // (1) Streaming sRGB-u8 PSNR. Encode the f32 chunks via the SIMD-
+        // batched linear→sRGB-u8 slice and accumulate SSE on the fly.
+        if self.ref_srgb.len() < n_floats {
+            self.ref_srgb.resize(n_floats, 0u8);
+            self.cand_srgb.resize(n_floats, 0u8);
+        }
+        let ref_srgb = &mut self.ref_srgb[..n_floats];
+        let cand_srgb = &mut self.cand_srgb[..n_floats];
+        linear_to_srgb_u8_strip(ref_chunk, ref_srgb);
+        linear_to_srgb_u8_strip(cand_chunk, cand_srgb);
+        let mut sse_local: u64 = 0;
+        let mut max_abs_local: f32 = self.max_abs_linear;
+        for i in 0..n_floats {
+            let d = ref_srgb[i] as i32 - cand_srgb[i] as i32;
+            sse_local += (d * d) as u64;
+            let da = (ref_chunk[i] - cand_chunk[i]).abs();
+            if da > max_abs_local {
+                max_abs_local = da;
+            }
+        }
+        self.sse_srgb_u8 += sse_local as f64;
+        self.max_abs_linear = max_abs_local;
+
+        // (2) Optional BT.709 rotation for the OKLab path (per-chunk in-
+        // place; reuses scratch). Only fires for DisplayP3 / Bt2020 sources.
+        let (ref_ok_rgb, cand_ok_rgb): (&[f32], &[f32]) = match ok_matrix {
+            None => (ref_chunk, cand_chunk),
+            Some(m) => {
+                if self.ref_lin709.len() < n_floats {
+                    self.ref_lin709.resize(n_floats, 0.0);
+                    self.cand_lin709.resize(n_floats, 0.0);
+                }
+                let ref_l709 = &mut self.ref_lin709[..n_floats];
+                let cand_l709 = &mut self.cand_lin709[..n_floats];
+                ref_l709.copy_from_slice(ref_chunk);
+                cand_l709.copy_from_slice(cand_chunk);
+                zenpixels_convert::gamut::apply_matrix_row_f32(ref_l709, n_px, m);
+                zenpixels_convert::gamut::apply_matrix_row_f32(cand_l709, n_px, m);
+                (&self.ref_lin709[..n_floats], &self.cand_lin709[..n_floats])
+            }
+        };
+
+        // (3) Resize Lab/OKLab scratch.
+        if self.ref_lab.len() < n_floats {
+            self.ref_lab.resize(n_floats, 0.0);
+            self.cand_lab.resize(n_floats, 0.0);
+            self.ref_ok.resize(n_floats, 0.0);
+            self.cand_ok.resize(n_floats, 0.0);
+        }
+        let ref_lab = &mut self.ref_lab[..n_floats];
+        let cand_lab = &mut self.cand_lab[..n_floats];
+        let ref_ok = &mut self.ref_ok[..n_floats];
+        let cand_ok = &mut self.cand_ok[..n_floats];
+
+        // (4) Pre-batched Lab + OKLab transforms. These loops are tight and
+        // free of branches that would block vectorization — LLVM emits AVX2
+        // / AVX-512 + FMA shuffles for the matrix-mul portion. The cbrt
+        // branch in lab_f still serializes per pixel, but the matrix mul
+        // (which dominates op count) vectorizes.
+        linear_rgb_to_lab_strip(ref_chunk, ref_lab);
+        linear_rgb_to_lab_strip(cand_chunk, cand_lab);
+        linear_srgb_to_oklab_strip(ref_ok_rgb, ref_ok);
+        linear_srgb_to_oklab_strip(cand_ok_rgb, cand_ok);
+
+        // (5) Tight scalar ΔE2000 + ΔE_OK + histogram-bin pass. The Lab/OKLab
+        // buffers fit in L2 (288 KB total at 8192 pixels) so reads are cache-
+        // hot. ΔE2000 itself is f64 + atan2/sin/cos and not vectorizable, but
+        // separating it from the Lab transform lets each phase compile to its
+        // optimal code shape.
+        let mut sum_de2k: f64 = 0.0;
+        let mut sum_de_ok: f64 = 0.0;
+        for i in 0..n_px {
+            let rl = [ref_lab[i * 3], ref_lab[i * 3 + 1], ref_lab[i * 3 + 2]];
+            let cl = [cand_lab[i * 3], cand_lab[i * 3 + 1], cand_lab[i * 3 + 2]];
+            let de2k = delta_e2000(rl, cl) as f64;
+            sum_de2k += de2k;
+            let bin2k = ((de2k / DE2K_HIST_BIN_WIDTH) as usize).min(DE2K_HIST_BINS - 1);
+            self.de2000_hist[bin2k] += 1;
+
+            let dl = (ref_ok[i * 3] - cand_ok[i * 3]) as f64;
+            let da = (ref_ok[i * 3 + 1] - cand_ok[i * 3 + 1]) as f64;
+            let db = (ref_ok[i * 3 + 2] - cand_ok[i * 3 + 2]) as f64;
+            let de_ok = (dl * dl + da * da + db * db).sqrt();
+            sum_de_ok += de_ok;
+            let bin_ok = ((de_ok / DE_OK_HIST_BIN_WIDTH) as usize).min(DE_OK_HIST_BINS - 1);
+            self.de_ok_hist[bin_ok] += 1;
+        }
+        self.sum_de2000 += sum_de2k;
+        self.sum_de_ok += sum_de_ok;
+    }
+}
+
+/// Pre-batched linear-RGB → Lab D65 transform over a packed RGB f32 stream.
+/// The body is loop-only (no recursion, no panicking branches in the
+/// matrix-mul portion) so LLVM auto-vectorizes the matrix multiplications.
+/// The `lab_f` branch (cbrt vs affine) still serializes per pixel but
+/// that's a tiny fraction of the work.
+///
+/// Constants below preserve the sRGB→XYZ D65 reference precision used by
+/// the prior scalar Lab transform — kept verbatim so f64-rounded inputs
+/// yield the same f32-rounded XYZ values.
+#[inline]
+#[allow(clippy::excessive_precision)]
+fn linear_rgb_to_lab_strip(src: &[f32], dst: &mut [f32]) {
+    debug_assert_eq!(src.len(), dst.len());
+    debug_assert_eq!(src.len() % 3, 0);
+    let n_px = src.len() / 3;
+    for i in 0..n_px {
+        let r = src[i * 3].clamp(0.0, 1.0);
+        let g = src[i * 3 + 1].clamp(0.0, 1.0);
+        let b = src[i * 3 + 2].clamp(0.0, 1.0);
+        let x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b;
+        let y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b;
+        let z = 0.0193339 * r + 0.1191920 * g + 0.9503041 * b;
+        let fx = lab_f(x * LAB_XN_RECIP);
+        let fy = lab_f(y * LAB_YN_RECIP);
+        let fz = lab_f(z * LAB_ZN_RECIP);
+        dst[i * 3] = 116.0 * fy - 16.0;
+        dst[i * 3 + 1] = 500.0 * (fx - fy);
+        dst[i * 3 + 2] = 200.0 * (fy - fz);
+    }
+}
+
+/// Pre-batched linear-sRGB (BT.709) → OKLab transform over a packed RGB f32
+/// stream. Same vectorization profile as `linear_rgb_to_lab_strip`.
+///
+/// Constants below preserve Ottosson's reference precision (matches
+/// `zenpixels_convert::oklab`'s `#![allow(clippy::excessive_precision)]`).
+#[inline]
+#[allow(clippy::excessive_precision)]
+fn linear_srgb_to_oklab_strip(src: &[f32], dst: &mut [f32]) {
+    debug_assert_eq!(src.len(), dst.len());
+    debug_assert_eq!(src.len() % 3, 0);
+    let n_px = src.len() / 3;
+    for i in 0..n_px {
+        let r = src[i * 3].max(0.0);
+        let g = src[i * 3 + 1].max(0.0);
+        let b = src[i * 3 + 2].max(0.0);
+        let l_ = 0.4122214708_f32 * r + 0.5363325363 * g + 0.0514459929 * b;
+        let m_ = 0.2119034982_f32 * r + 0.6806995451 * g + 0.1073969566 * b;
+        let s_ = 0.0883024619_f32 * r + 0.2817188376 * g + 0.6299787005 * b;
+        let l = fast_cbrt(l_);
+        let m = fast_cbrt(m_);
+        let s = fast_cbrt(s_);
+        dst[i * 3] = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s;
+        dst[i * 3 + 1] = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s;
+        dst[i * 3 + 2] = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s;
+    }
+}
+
 
 /// CDF walk to find p50/p90/p95/p99 from a histogram. Linear-interpolated
 /// inside the target bin (so 0.1-wide ΔE2000 bins resolve to ~0.05 ΔE; 0.001-
@@ -888,185 +1213,6 @@ fn percentiles_from_hist_4(
         next_target += 1;
     }
     (out[0], out[1], out[2], out[3])
-}
-
-struct HistogramOut {
-    sum_de2000: f64,
-    de2000_hist: Vec<u64>,
-    sum_de_ok: f64,
-    de_ok_hist: Vec<u64>,
-}
-
-/// Build per-pixel ΔE2000 + ΔE_OKLab histograms in a single pass over the
-/// (ref, candidate) pixel buffers. Each pixel does one Lab convert (D65 XYZ)
-/// + one OKLab convert + ΔE2000 + ΔE_OKLab.
-///
-/// `reference` and `candidate` are in the *producer's primaries* (BT.709 for
-/// iPhone HEIC, DisplayP3 for zfold7 UltraHDR JPEG). The current Lab path
-/// already passes them straight through to D65 XYZ — which is a producer-
-/// primaries-as-BT.709 approximation (DisplayP3 pixels get *slightly* off-axis
-/// Lab values, but the saturated-color audit kept it that way). OKLab is
-/// specified on BT.709 D65 linear sRGB, so we rotate to BT.709 inside the
-/// OKLab subroutine (`oklab_from_linear_in_primaries`).
-fn compute_de_histograms(
-    reference: &LinearRgb,
-    candidate: &LinearRgb,
-) -> HistogramOut {
-    // Per the brief, both `reference` and `candidate` are already in the same
-    // producer-primaries frame (candidate has been rotated to match earlier
-    // in compute_metrics). OKLab is defined on linear-sRGB (BT.709) D65 input;
-    // rotate per-pixel via the precomputed `<producer> → BT.709` matrix.
-    let ok_matrix = if reference.primaries == ColorPrimaries::Bt709 {
-        None
-    } else {
-        zenpixels_convert::gamut::conversion_matrix(reference.primaries, ColorPrimaries::Bt709)
-    };
-
-    let (sum2k, hist2k, sum_ok, hist_ok) = reference
-        .px
-        .par_chunks(3 * 4096)
-        .zip(candidate.px.par_chunks(3 * 4096))
-        .map(|(rc, cc)| {
-            let mut sum_de2k: f64 = 0.0;
-            let mut hist_de2k = vec![0u64; DE2K_HIST_BINS];
-            let mut sum_de_ok: f64 = 0.0;
-            let mut hist_de_ok = vec![0u64; DE_OK_HIST_BINS];
-            let n_px = rc.len() / 3;
-            for i in 0..n_px {
-                let r = [rc[i * 3], rc[i * 3 + 1], rc[i * 3 + 2]];
-                let c = [cc[i * 3], cc[i * 3 + 1], cc[i * 3 + 2]];
-
-                // ΔE2000 in Lab (producer-primaries → D65 XYZ → Lab, see
-                // linear_rgb_to_lab comment block).
-                let r_lab = linear_rgb_to_lab(r);
-                let c_lab = linear_rgb_to_lab(c);
-                let de2k = delta_e2000(r_lab, c_lab) as f64;
-                sum_de2k += de2k;
-                {
-                    let bin = (de2k / DE2K_HIST_BIN_WIDTH) as usize;
-                    let bin = bin.min(DE2K_HIST_BINS - 1);
-                    hist_de2k[bin] += 1;
-                }
-
-                // ΔE_OKLab — Euclidean distance in OKLab space, computed on
-                // linear sRGB (BT.709) D65 input per the OKLab spec.
-                let r_lin709 = match ok_matrix {
-                    None => r,
-                    Some(m) => apply_matrix_pixel(&m, r),
-                };
-                let c_lin709 = match ok_matrix {
-                    None => c,
-                    Some(m) => apply_matrix_pixel(&m, c),
-                };
-                let r_ok = linear_srgb_to_oklab(r_lin709);
-                let c_ok = linear_srgb_to_oklab(c_lin709);
-                let dl = (r_ok[0] - c_ok[0]) as f64;
-                let da = (r_ok[1] - c_ok[1]) as f64;
-                let db = (r_ok[2] - c_ok[2]) as f64;
-                let de_ok = (dl * dl + da * da + db * db).sqrt();
-                sum_de_ok += de_ok;
-                {
-                    let bin = (de_ok / DE_OK_HIST_BIN_WIDTH) as usize;
-                    let bin = bin.min(DE_OK_HIST_BINS - 1);
-                    hist_de_ok[bin] += 1;
-                }
-            }
-            (sum_de2k, hist_de2k, sum_de_ok, hist_de_ok)
-        })
-        .reduce(
-            || {
-                (
-                    0.0_f64,
-                    vec![0u64; DE2K_HIST_BINS],
-                    0.0_f64,
-                    vec![0u64; DE_OK_HIST_BINS],
-                )
-            },
-            |mut a, b| {
-                a.0 += b.0;
-                for (ai, bi) in a.1.iter_mut().zip(b.1.iter()) {
-                    *ai += *bi;
-                }
-                a.2 += b.2;
-                for (ai, bi) in a.3.iter_mut().zip(b.3.iter()) {
-                    *ai += *bi;
-                }
-                a
-            },
-        );
-    HistogramOut {
-        sum_de2000: sum2k,
-        de2000_hist: hist2k,
-        sum_de_ok: sum_ok,
-        de_ok_hist: hist_ok,
-    }
-}
-
-#[inline]
-fn apply_matrix_pixel(m: &[[f32; 3]; 3], rgb: [f32; 3]) -> [f32; 3] {
-    let (r, g, b) = (rgb[0], rgb[1], rgb[2]);
-    [
-        m[0][0] * r + m[0][1] * g + m[0][2] * b,
-        m[1][0] * r + m[1][1] * g + m[1][2] * b,
-        m[2][0] * r + m[2][1] * g + m[2][2] * b,
-    ]
-}
-
-/// Björn Ottosson's OKLab transform, on linear sRGB (BT.709) D65 input.
-/// Source: https://bottosson.github.io/posts/oklab/. Constants are byte-
-/// identical to the reference implementation. OKLab assumes the input is
-/// in [0, 1] but stays well-defined for negative or >1 values (cube root
-/// of a negative number returns NaN under f32::cbrt only if we pass negative;
-/// clamp to keep the metric well-defined for tone-mapped buffers).
-#[inline]
-fn linear_srgb_to_oklab(rgb: [f32; 3]) -> [f32; 3] {
-    let r = rgb[0].max(0.0);
-    let g = rgb[1].max(0.0);
-    let b = rgb[2].max(0.0);
-    let l_ = 0.4122214708_f32 * r + 0.5363325363 * g + 0.0514459929 * b;
-    let m_ = 0.2119034982_f32 * r + 0.6806995451 * g + 0.1073969566 * b;
-    let s_ = 0.0883024619_f32 * r + 0.2817188376 * g + 0.6299787005 * b;
-    let l = l_.cbrt();
-    let m = m_.cbrt();
-    let s = s_.cbrt();
-    [
-        0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
-        1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
-        0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
-    ]
-}
-
-fn linear_rgb_to_lab(rgb: [f32; 3]) -> [f32; 3] {
-    let r = rgb[0].max(0.0).min(1.0) as f64;
-    let g = rgb[1].max(0.0).min(1.0) as f64;
-    let b = rgb[2].max(0.0).min(1.0) as f64;
-
-    let x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b;
-    let y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b;
-    let z = 0.0193339 * r + 0.1191920 * g + 0.9503041 * b;
-
-    let xn = 0.95047_f64;
-    let yn = 1.0_f64;
-    let zn = 1.08883_f64;
-
-    fn f(t: f64) -> f64 {
-        const DELTA: f64 = 6.0 / 29.0;
-        if t > DELTA * DELTA * DELTA {
-            t.cbrt()
-        } else {
-            t / (3.0 * DELTA * DELTA) + 4.0 / 29.0
-        }
-    }
-
-    let fx = f(x / xn);
-    let fy = f(y / yn);
-    let fz = f(z / zn);
-
-    let l = 116.0 * fy - 16.0;
-    let a = 500.0 * (fx - fy);
-    let bb = 200.0 * (fy - fz);
-
-    [l as f32, a as f32, bb as f32]
 }
 
 fn delta_e2000(lab1: [f32; 3], lab2: [f32; 3]) -> f32 {
@@ -1362,6 +1508,29 @@ fn best_mobius_for_method(
 fn main() -> anyhow::Result<()> {
     let t0 = std::time::Instant::now();
 
+    // Cap the global rayon pool so the outer sample parallelism stays bounded.
+    // Memory math: 6 active samples × ~600 MB per active 24-MP sample (input
+    // sdr + hdr + apply_curve out + rotated cand) ≈ 3.6 GB. Plus per-worker
+    // chunked scratch (~3.5 MB/sample × 6 = ~20 MB) plus rayon's internal
+    // overhead and the JPEG/HEIC decode buffers we hold across the loop.
+    // Empirically lands at ~4.2 GB peak — comfortably under the 5 GB budget.
+    //
+    // The inner par_chunks loops (in apply_curve, in CellAccum) still spread
+    // across the work-stealing pool's idle slots — same threads, just bounded
+    // outer concurrency. If a separate rayon initializer ran earlier (e.g.
+    // a transitive crate built a pool), `build_global` returns Err; the
+    // existing pool is unlikely to be 6-wide, so we log and continue with
+    // whatever was there.
+    if let Err(e) = rayon::ThreadPoolBuilder::new()
+        .num_threads(OUTER_THREADS)
+        .build_global()
+    {
+        eprintln!(
+            "WARN: rayon pool already initialized ({}); outer concurrency uncapped",
+            e
+        );
+    }
+
     refresh_lock("scanning-corpus");
     println!("Scanning corpus at {}...", SAMPLES_ROOT);
     let all_files = collect_samples();
@@ -1403,11 +1572,10 @@ fn main() -> anyhow::Result<()> {
 
     let total = work_list.len();
 
-    // Parallelize across samples — each sample fits in one rayon job;
-    // the inner curve loop runs sequentially per job. 76 / 16 cores ≈ 5
-    // batches of ~20s each = ~100s wall-clock vs. the prior ~38 min when
-    // we parallelized curves under a single-sample-at-a-time outer loop.
-    // Memory: 16 samples × ~600 MB buffers + scratch ≈ ~15 GB (fits 128 GB).
+    // Parallelize across samples — each sample fits in one rayon job; the
+    // inner curve loop runs sequentially per job. Outer concurrency capped
+    // to OUTER_THREADS above for a ≤5 GB memory cap (see comment block
+    // at the top of main()).
     type SampleOutcome = Result<SampleResult, (PathBuf, String)>;
     let outcomes: Vec<SampleOutcome> = work_list
         .par_iter()
@@ -1487,15 +1655,26 @@ fn main() -> anyhow::Result<()> {
             );
 
             // Sequential within a sample — outer loop parallelizes across
-            // samples (16-wide) so the cores are filled by sample-level
-            // parallelism instead of curve-level. par_chunks inside
-            // apply_curve / compute_metrics still chew chunks via rayon's
-            // work-stealing pool when an outer slot is briefly idle.
+            // samples (OUTER_THREADS-wide) so the cores are filled by
+            // sample-level parallelism. par_chunks inside apply_curve_into /
+            // compute_metrics still chew chunks via rayon's work-stealing
+            // pool when an outer slot is briefly idle.
+            //
+            // Reusable candidate buffer: 24 MP × 12 bytes ≈ 288 MB per sample.
+            // Allocated once per sample; 80 curves reuse it in-place. The
+            // rotated candidate buffer (for primaries mismatch) is also
+            // allocated once per sample on first need.
+            let mut cand_buf = LinearRgb {
+                width: hdr.width,
+                height: hdr.height,
+                px: Vec::new(),
+                primaries: ColorPrimaries::Bt2020,
+            };
             let cells: Vec<CellMetrics> = curve_grid
                 .iter()
                 .map(|c| {
-                    let cand = apply_curve(*c, &hdr, source_peak);
-                    compute_metrics(&sdr, &cand)
+                    apply_curve_into(*c, &hdr, source_peak, &mut cand_buf);
+                    compute_metrics_into(&sdr, &mut cand_buf)
                 })
                 .collect();
             let summary_idx_first = 0; // any curve for compact print

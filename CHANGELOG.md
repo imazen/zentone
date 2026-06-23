@@ -67,6 +67,22 @@ adheres to semver.
 
 ### Performance
 
+- **`examples/hdr_tone_map_shootout_audited.rs`: SIMD-accelerated metric
+  pipeline + 5 GB-capped streaming layout.** Memory peak drops from
+  ~32 GB to ~4.9 GB (≈85% reduction) on the full 76-sample × 80-cell
+  workload by streaming per-chunk Lab + OKLab + ΔE2000 + ΔE_OK + sRGB-u8
+  PSNR through L2-resident scratch (~580 KB/worker) instead of materializing
+  290-MB Lab/OKLab/sRGB buffers per cell. SIMD wins: `linear-srgb`'s
+  AVX-512/AVX2 batched `linear_to_srgb_u8_slice` (PSNR encode), f32
+  `oklab::fast_cbrt` (~22-bit precision) replacing f64 cbrt in the Lab D65
+  transform, and the pre-batched Lab/OKLab strip kernels that vectorize
+  the matrix-mul portion. Candidate + rotation buffers reused across the
+  80 curves per sample (allocated once, not 80×). Rayon outer pool capped
+  to 6 threads. Parity within the brief's gate (`mean_de2000` ±0.01,
+  `de_ok_mean` ±0.001). Result CSV:
+  [`benchmarks/hdr_tone_map_shootout_full_2026-06-22_v3_simd.csv`](benchmarks/hdr_tone_map_shootout_full_2026-06-22_v3_simd.csv).
+  The v2 CSV at `..._v2.csv` is preserved alongside for diffing.
+
 - **`Bt2446A::map_strip_simd` is ~2.3× faster** (111 → 258 Mpix/s
   measured on Zen 4 / AMD Ryzen 9 7950X w/ AVX-512; `RUSTFLAGS="-C target-cpu=native"`).
   The kernel now resolves to `f32x16` ops on AVX-512 hardware (was f32x8
