@@ -1,4 +1,6 @@
-# zentone [![CI](https://img.shields.io/github/actions/workflow/status/imazen/zentone/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/zentone/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/zentone?style=flat-square)](https://crates.io/crates/zentone) [![lib.rs](https://img.shields.io/crates/v/zentone?style=flat-square&label=lib.rs&color=blue)](https://lib.rs/crates/zentone) [![docs.rs](https://img.shields.io/docsrs/zentone?style=flat-square)](https://docs.rs/zentone) [![MSRV](https://img.shields.io/badge/MSRV-1.89-blue?style=flat-square)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field) [![license](https://img.shields.io/badge/license-AGPL--3.0%20%2F%20Commercial-blue?style=flat-square)](#license)
+<!-- GENERATED FROM README.md by zenutils gen-readme-crates.sh — DO NOT EDIT. -->
+
+# zentone
 
 HDR to SDR tone mapping curves in safe Rust. Classical curves (Hable, Narkowicz, ACES, AgX, Möbius), ITU-R BT.2408 / BT.2446 Methods B and C, the darktable/Blender filmic spline, and an ISO 21496-1 / Apple Ultra HDR gain-map splitter. The production-best HDR→SDR curve from the 2026-06-22 audited shootout — BT.2446 Method A — graduated to [`zenpixels-convert`](https://lib.rs/crates/zenpixels-convert), where it composes into a one-call `HdrToSdr` pipeline with primary conversion and OKLch soft compression; the deprecated Reinhard family in `curves` is queued for removal in the next breaking release.
 
@@ -129,22 +131,6 @@ Curves that claim a standard name are validated against their reference implemen
 - Changelog: [`CHANGELOG.md`](https://github.com/imazen/zentone/blob/main/CHANGELOG.md)
 - Repository: <https://github.com/imazen/zentone>
 
-<!-- crates.io:skip-start -->
-## Benchmarks
-
-Microbenchmarks live in [`benches/`](https://github.com/imazen/zentone/tree/main/benches) (zenbench, criterion-compatible harness). Run them **without** `-C target-cpu=native` so the numbers reflect the runtime SIMD dispatch that ships:
-
-```sh
-cargo bench --bench tonemap_bench
-cargo bench --bench pipeline_bench --features experimental
-```
-
-The curve set is empirically grounded. The 2026-06-22 audited HDR→SDR shootout — 76 gain-mapped imazen-26 samples × 20 curves × 4 peak-measurement methods, scored with ΔE2000 mean + per-image percentiles + OKLab Euclidean ΔE against the producer SDR base — is what crowned BT.2446 Method A as the production-best curve and drove the 0.2.0 Reinhard deprecation. Methodology and results are committed and reproducible from the file:
-
-- [`shootout_2026-06-22_findings_v2.md`](https://github.com/imazen/zentone/blob/main/benchmarks/shootout_2026-06-22_findings_v2.md) — tail-aware HDR→SDR curve comparison
-- [`softcompress_knee_findings_2026-06-23.md`](https://github.com/imazen/zentone/blob/main/benchmarks/softcompress_knee_findings_2026-06-23.md) — SoftCompress knee-default calibration sweep
-- [`bt2446a_throughput_2026-06-20.md`](https://github.com/imazen/zentone/blob/main/benchmarks/bt2446a_throughput_2026-06-20.md) — SIMD strip-kernel throughput pass
-<!-- crates.io:skip-end -->
 
 ## License
 

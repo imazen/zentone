@@ -13,6 +13,10 @@ adheres to semver.
 
 - Remove the `#[deprecated]` + `#[doc(hidden)]` Reinhard curve family from `curves::*` (`reinhard_simple`, `reinhard_extended`, `reinhard_jodie`) and the matching `ToneMapCurve::Reinhard`, `ToneMapCurve::ExtendedReinhard`, `ToneMapCurve::ReinhardJodie`, `ToneMapCurve::TunedReinhard` enum variants. Production HDR→SDR is `zenpixels_convert::hdr::Bt2446A`; see the 0.2.0 "Deprecated" section for the empirical basis.
 
+### Documentation
+
+- README overhaul: linked badge row with the dual-license (AGPL-3.0 / Commercial) badge, `## Quick start` (version `0.2`) with current-API examples, corrected Reinhard wording (the `ToneMapCurve::Reinhard*` variants are queued-for-removal, not attribute-`#[deprecated]` — only the free functions are), a `crates.io:skip` Benchmarks section, and the crosslink footer; split the crates.io README into a generated badge-free `README.crates.md` and set `readme = "README.crates.md"`.
+
 ## [0.2.0] - 2026-06-23
 
 This release relocates BT.2446 Method A — the production-best HDR→SDR curve per
