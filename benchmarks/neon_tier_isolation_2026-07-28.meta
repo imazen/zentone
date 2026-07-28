@@ -1,0 +1,35 @@
+# zentone SIMD tier isolation — BENCH ADDED BUT NOT RUN (crate does not build here)
+date: 2026-07-28
+host: Apple M4 Pro (12 core), macOS, aarch64
+
+## Status: NO MEASUREMENT
+
+benches/tier_isolation.rs was added for parity with the other zen crates
+(garb / linear-srgb / zenwebp / butteraugli / zenresize / fast-ssim2 / zensim /
+zenblend / heic / zenjpeg all got the same bench). It has NOT been run, because
+zentone does not build on this machine at all:
+
+  error: failed to get `polyfit` as a dependency of package `zentone v0.2.0`
+  Caused by: unable to update /Users/lilith/work/polyfit
+
+`Cargo.toml:81` declares `polyfit = { path = "../../polyfit" }`, and that
+sibling is not present here. This is PRE-EXISTING and unrelated to the bench:
+`cargo check` fails identically with the Cargo.toml change stashed. It is a hard
+dependency (not optional, not feature-gated), so no target in this crate can be
+built or benchmarked without that sibling checked out.
+
+So: NO NEON-vs-scalar numbers are claimed for zentone. The bench is committed
+so it runs for free on a machine that has the sibling; it follows the same
+verified pattern as the other ten, but it is unverified here and is labelled as
+such rather than being presented as coverage.
+
+## Note on the dependency itself
+
+A mandatory `path = "../../polyfit"` dependency means the crate is unbuildable
+from a bare checkout — CI, a fresh clone, or any machine without that exact
+sibling layout. That is the same class of problem the zen workspace already
+warns about for committed scripts ("NEVER hardcode a sibling-worktree path").
+Worth either publishing polyfit, vendoring it, or making it optional. Not
+changed here — altering a crate's dependency wiring is well outside a
+NEON-optimisation pass, and doing it blind on a machine that cannot build the
+result would be worse than leaving it.
