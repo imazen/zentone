@@ -56,3 +56,36 @@ inflated by measurement order, the same bias that produced a false 6%
 "regression" in linear-srgb earlier the same day. The 4.01x above is from the
 single-run measurement; no aarch64 tier special-case was added, because the
 apparent tier difference was not real.
+
+## Follow-up: ACES AP1 checked with the same reasoning — already optimal
+
+bt2390's signature (most expensive curve + 1.00x NEON-vs-scalar) was worth
+checking against the other 1.00x curve, `aces_ap1`. Its tier looked identical in
+kind: `aces_3_tier(_token, ...)` ignores the token and loops the scalar
+per-pixel `aces_ap1`.
+
+An SOA (planar) kernel was written for it — r/g/b gathered into f32x8 vectors,
+both 3x3 matrices and all three rational polynomials vectorised, operation
+order preserved exactly. It came out BIT-IDENTICAL to the per-pixel reference
+(0 differing lanes at w=3840/1920/641/7/3, RGB and RGBA) and delivered NOTHING:
+
+  before 6.18us     after 6.11us     (same harness, same run)
+
+1.1%, i.e. noise. Reverted.
+
+The existing code comment was correct and this measurement confirms it:
+
+  // ACES is a cross-channel matrix → per-pixel; the tier's target_feature
+  // context still lets LLVM auto-vectorize the rational polynomial.
+
+The 1.00x NEON-vs-scalar reading does NOT mean "no SIMD here". On AArch64 NEON
+is baseline, so the forced-scalar arm autovectorises too — 1.00x means the two
+arms compile to equivalent code, which for an already-autovectorised kernel is
+the expected result, not a gap. bt2390 was different because it had no row
+kernel at all and fell through to the per-pixel `map_rgb` path, paying an enum
+match and a recomputed `ks` per channel.
+
+So the 1.00x signature is necessary but not sufficient: check whether a row
+kernel EXISTS before concluding there is headroom. zentone's curves are now
+accounted for — agx 3.33x, hable 1.63x, narkowicz 1.22x (all with working
+kernels), bt2390 fixed 4.01x, aces_ap1 already optimal.
