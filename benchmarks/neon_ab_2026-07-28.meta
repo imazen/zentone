@@ -1,0 +1,58 @@
+# zentone NEON vs scalar on aarch64 — first measurement of this crate
+date:    2026-07-28
+host:    Apple M4 Pro (12 core), macOS, aarch64
+build:   release, NO -C target-cpu=native
+input:   3840-px RGB f32 row (the shape tonemap_bench uses), 4000 iters/arm
+
+## Result
+
+| curve         | NEON     | scalar   | ratio |
+|---------------|----------|----------|-------|
+| agx_default   | 14.11us  | 46.97us  | 3.33x |
+| hable_filmic  |  2.94us  |  4.79us  | 1.63x |
+| narkowicz     |  3.95us  |  4.81us  | 1.22x |
+| aces_ap1      |  4.38us  |  4.38us  | 1.00x |
+| bt2390        | 26.49us  | 26.30us  | 0.99x |
+| reinhard      |  5.72us  |  5.42us  | 0.95x |
+
+The pattern matches the rest of this sweep: SIMD pays where there is real
+arithmetic per pixel (AgX is log-space with transcendentals -> 3.33x; Hable is a
+higher-order polynomial -> 1.63x) and washes out on the cheap rational curves,
+where LLVM's autovectoriser already handles the scalar body (NEON is baseline on
+AArch64, so the "scalar" arm is autovectorised too).
+
+## Measurement caveat — do NOT read the sub-1.0x rows as regressions
+
+These numbers come from a hand-rolled `Instant` loop, not zenbench. That is the
+exact back-to-back-timing bias zenbench exists to kill — zentone's own
+Cargo.toml says so, in the `iw_mean_w` note where a first A/B read +2.8% and
+repeating it 3x gave fully overlapping ranges. So reinhard's 0.95x and bt2390's
+0.99x are AT PARITY as far as this harness can tell; they are not evidence of a
+regression, and nothing was changed on the strength of them. The 3.33x and
+1.63x are large enough to survive that bias.
+
+## Why a hand-rolled loop at all — three pre-existing breakages
+
+zentone does not build from a bare checkout, and its bench harness does not
+compile. None of this was introduced here:
+
+1. `Cargo.toml:81` `polyfit = { path = "../../polyfit" }` — a MANDATORY
+   dev-dependency on a sibling that is absent. Cargo resolves dev-deps for every
+   build, so nothing in the crate builds. It is used by exactly one
+   feature-gated example (`fit_pow_inv_24`), and cargo does not permit optional
+   dev-dependencies, so gating the example is not sufficient. The crates.io
+   `polyfit` 0.11.0 is a DIFFERENT crate (no `rational::RationalFit`), so a
+   version dep is not a drop-in.
+2. `zencodecs = { path = "../zenpipe/zencodecs" }` — resolves to a `zenjpeg
+   ^0.8.4` requirement that conflicts in this workspace.
+3. `benches/tonemap_bench.rs` does not compile: `gainforge 0.5.0`'s
+   `ColorProfile` does not match the type the call site expects (E0308).
+
+To get the measurement, (1) and (2) were temporarily commented out locally, the
+library built (it is fine), and the A/B run from a throwaway example. The
+Cargo.toml was restored byte-for-byte afterwards and the example deleted —
+nothing in this commit changes zentone's dependency wiring or its tool set.
+
+`benches/tier_isolation.rs` (committed earlier, correct but never runnable here)
+remains the right harness once the crate builds; it will produce these numbers
+with zenbench's paired statistics instead of a naive loop.
