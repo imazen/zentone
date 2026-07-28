@@ -782,6 +782,13 @@ impl ToneMap for ToneMapCurve {
                 crate::simd::aces_ap1_row(row, ch);
                 return;
             }
+            ToneMapCurve::Bt2390 {
+                source_peak,
+                target_peak,
+            } => {
+                crate::simd::bt2390_row(row, ch, *source_peak, *target_peak);
+                return;
+            }
             ToneMapCurve::Agx(look) => {
                 crate::simd::agx_row(row, ch, *look);
                 return;

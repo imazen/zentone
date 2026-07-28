@@ -27,6 +27,36 @@ pub(crate) fn reinhard_simple_row(row: &mut [f32], ch: usize) {
     }
 }
 
+/// BT.2390 EETF strip kernel.
+///
+/// Bt2390 was the ONLY curve in `ToneMapCurve::map_row` without a SIMD row
+/// path — it fell through to the per-pixel scalar loop. That made it the most
+/// expensive curve in the suite (26.49us for a 3840-px row vs AgX's 14.11us)
+/// while gaining nothing from SIMD (0.99x NEON-vs-scalar), because the per-pixel
+/// kernel recomputes `ks = (1.5*target/source - 0.5).clamp(0,1)` — a divide, an
+/// FMA and a clamp — on every channel, and branches on `e1 < ks`.
+///
+/// Here `ks` and the reciprocals are hoisted (they depend only on the curve
+/// parameters) and the knee is branchless, matching the shape the other
+/// `*_row` kernels already use.
+#[inline]
+pub(crate) fn bt2390_row(row: &mut [f32], ch: usize, source_peak: f32, target_peak: f32) {
+    // Identity case: the scalar kernel returns the input unchanged.
+    if source_peak <= target_peak {
+        return;
+    }
+    let p = Bt2390Params {
+        inv_source: 1.0 / source_peak,
+        ks: (1.5 * target_peak / source_peak - 0.5).clamp(0.0, 1.0),
+        out_scale: target_peak / source_peak,
+    };
+    match ch {
+        3 => incant!(bt2390_3_tier(row, &p), [v4, v3, neon, wasm128, scalar]),
+        4 => incant!(bt2390_4_tier(row, &p), [v4, v3, neon, wasm128, scalar]),
+        _ => {}
+    }
+}
+
 #[inline]
 pub(crate) fn narkowicz_row(row: &mut [f32], ch: usize) {
     match ch {
@@ -869,5 +899,82 @@ fn agx_4_tier(row: &mut [f32], params: Option<([f32; 3], [f32; 3], [f32; 3])>) {
         c[0] = out[0];
         c[1] = out[1];
         c[2] = out[2];
+    }
+}
+
+// ============================================================================
+// BT.2390 EETF — Hermite knee above KS, passthrough below. RGB and RGBA.
+// ============================================================================
+
+/// Loop-invariant BT.2390 terms, derived once per row from the curve params.
+pub(crate) struct Bt2390Params {
+    pub inv_source: f32,
+    pub ks: f32,
+    pub out_scale: f32,
+}
+
+/// BT.2390 EETF, vectorised, bit-identical to `curves::bt2390_tonemap`.
+///
+/// Same normalise+clamp, same Hermite basis with `p1 = 1` / `m1 = 0`, same
+/// final scale. The branch becomes a select — when `e1 < ks` the knee arm is
+/// discarded exactly as the branch discarded it (including the `ks == 1.0`
+/// case, where it is non-finite).
+///
+/// The per-channel maths is repeated in both tiers rather than factored into a
+/// helper: `Token`/`f32x8` only exist inside a `#[magetypes]` body.
+macro_rules! bt2390_body {
+    ($token:ident, $chunk:expr, $p:expr) => {{
+        let one = f32x8::splat($token, 1.0);
+        let two = f32x8::splat($token, 2.0);
+        let three = f32x8::splat($token, 3.0);
+        let neg_two = f32x8::splat($token, -2.0);
+        let ks = f32x8::splat($token, $p.ks);
+        let one_minus_ks = f32x8::splat($token, 1.0 - $p.ks);
+        let inv_one_minus_ks = f32x8::splat($token, 1.0 / (1.0 - $p.ks));
+        let inv_source = f32x8::splat($token, $p.inv_source);
+        let out_scale = f32x8::splat($token, $p.out_scale);
+
+        let e1 = (f32x8::load($token, $chunk) * inv_source).min(one);
+        let t = (e1 - ks) * inv_one_minus_ks;
+        let t2 = t * t;
+        let t3 = t2 * t;
+        let a = two * t3 - three * t2 + one;
+        let b = t3 - two * t2 + t;
+        let c = neg_two * t3 + three * t2;
+        let knee = a * ks + b * one_minus_ks + c;
+        let in_knee = e1.simd_lt(ks);
+        let e2 = f32x8::blend(in_knee, e1, knee);
+        e2 * out_scale
+    }};
+}
+
+#[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
+fn bt2390_3_tier(token: Token, row: &mut [f32], p: &Bt2390Params) {
+    let src_peak = 1.0 / p.inv_source;
+    let tgt_peak = p.out_scale * src_peak;
+    let (chunks, tail) = f32x8::partition_slice_mut(token, row);
+    for chunk in chunks.iter_mut() {
+        bt2390_body!(token, chunk, p).store(chunk);
+    }
+    for v in tail.iter_mut() {
+        *v = crate::curves::bt2390_tonemap((*v * p.inv_source).min(1.0), src_peak, tgt_peak);
+    }
+}
+
+#[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
+fn bt2390_4_tier(token: Token, row: &mut [f32], p: &Bt2390Params) {
+    let src_peak = 1.0 / p.inv_source;
+    let tgt_peak = p.out_scale * src_peak;
+    let (chunks, tail) = f32x8::partition_slice_mut(token, row);
+    for chunk in chunks.iter_mut() {
+        let alphas = [chunk[3], chunk[7]];
+        bt2390_body!(token, chunk, p).store(chunk);
+        chunk[3] = alphas[0];
+        chunk[7] = alphas[1];
+    }
+    for c in tail.chunks_exact_mut(4) {
+        for v in c.iter_mut().take(3) {
+            *v = crate::curves::bt2390_tonemap((*v * p.inv_source).min(1.0), src_peak, tgt_peak);
+        }
     }
 }
