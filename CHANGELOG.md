@@ -15,17 +15,30 @@ adheres to semver.
 
 ### Fixed
 
+- `StreamingTonemapper::new` (experimental) now checks its size arithmetic:
+  the adaptation-grid cell count (`u32`, which also bounds the grid's `u32`
+  cell indexing) and `width * channels * lookahead_rows` (`usize`) return
+  `Error::InvalidConfig` on overflow instead of a debug-assert panic or a
+  silently wrapped allocation size on 32-bit / wasm32 targets (#20, first
+  bullet). The `ToneMap::map_row` / `map_into` and gain-map `channels` /
+  length `panic!`s from the second bullet are unchanged: turning them into
+  `Result`s changes trait method signatures (a breaking change) or adds new
+  public `try_*` entry points, either of which needs an explicit API decision
+  — tracked in #20. The third bullet (stale `lib.rs` "0.2.0 strip-form only"
+  note) is already accurate: `pipeline` exposes only the `*_row_simd` forms.
 - `CompiledFilmicSpline` returned NaN on every channel for a huge negative
   channel over the floored luminance norm (`rgb / norm` overflowed to -Inf and
   the chrominance-preserving shift computed `Inf - Inf`): the ratios are now
   capped at `±f32::MAX / 4` in the scalar `map_rgb` and both halves of the
   SIMD strip kernel, which is a no-op for any ratio a real image can produce.
-  Fuzz-farm crash `fuzz_curves` #24, arm64 repro replayed locally on aarch64.
+  Fuzz-farm crash `fuzz_curves` #24, arm64 repro replayed locally on aarch64
+  (c7e161e).
 - `curves::aces_ap1` (and `ToneMapCurve::AcesAp1`) emitted -Inf when an AP1
   intermediate exceeded ≈1.84e19: the rational fit's `x²` term overflowed.
   Intermediates are now capped at 2⁶⁰, below f32 resolution of the fit's
   saturated tail, so output is bit-identical for every input that did not
-  overflow before. Second root cause behind #24 (same fuzz assert as #21).
+  overflow before. Second root cause behind #24 (same fuzz assert as #21)
+  (c7e161e).
 - `fuzz/fuzz_targets/fuzz_curves.rs` no longer references `Bt2446A` (moved to
   `zenpixels-convert` in 0.2.0) and builds again; its slot in the variant
   table now holds `Bt2446B` so the committed seeds keep targeting the same
@@ -33,12 +46,12 @@ adheres to semver.
   the new stable-toolchain replay harness `tests/fuzz_regression.rs`, which
   runs every `fuzz/regression/` seed on every `cargo test` (the #21 seed was
   previously not gated by anything). All 126,674 archived `fuzz_curves` farm
-  crash inputs (arm64 + x86_64) replay clean through it on aarch64.
+  crash inputs (arm64 + x86_64) replay clean through it on aarch64 (c7e161e).
 - Dev-dependency graph resolves again: the `[patch.crates-io]` git entries for
   `zenjpeg`, `ultrahdr-core`, and `heic` are pinned to the revs zenpipe's own
   lockfile uses (their unpinned `main` branches had drifted past the version
   requirements of the `zencodecs` path dev-dep, so `cargo test` could not
-  resolve at all on a fresh checkout).
+  resolve at all on a fresh checkout) (c7e161e).
 
 ### Documentation
 

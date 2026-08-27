@@ -163,11 +163,17 @@ struct AdaptationGrid {
 }
 
 impl AdaptationGrid {
-    fn new(image_width: u32, image_height: u32, cell_size: u32) -> Self {
+    /// Returns `None` when the cell grid would not fit in a `u32` cell
+    /// index (`grid_w * grid_h` overflows). The grid indexes cells with
+    /// `u32` arithmetic (`cell_y * width + cell_x`), so this is the bound
+    /// that keeps every later index computation in range, on every target
+    /// (zentone#20: the old `(width * height) as usize` was an unguarded
+    /// `u32` multiply — a debug panic or a release wrap for ≥ 65536² cells).
+    fn new(image_width: u32, image_height: u32, cell_size: u32) -> Option<Self> {
         let width = image_width.div_ceil(cell_size);
         let height = image_height.div_ceil(cell_size);
-        let num_cells = (width * height) as usize;
-        Self {
+        let num_cells = width.checked_mul(height)? as usize;
+        Some(Self {
             width,
             height,
             cell_size,
@@ -175,7 +181,7 @@ impl AdaptationGrid {
             params: vec![LocalParams::default(); num_cells],
             global_stats: CellStats::default(),
             rows_processed: 0,
-        }
+        })
     }
 
     fn add_row(&mut self, row_data: &[f32], y: u32, image_width: u32, channels: u8) {
@@ -349,9 +355,22 @@ impl StreamingTonemapper {
         if config.lookahead_rows == 0 {
             return Err(Error::InvalidConfig("lookahead_rows must be >= 1"));
         }
-        let grid = AdaptationGrid::new(width, height, config.cell_size);
-        let row_stride = width as usize * channels as usize;
-        let buffer_elements = row_stride * config.lookahead_rows as usize;
+        // Size arithmetic is checked so a hostile or absurd `width` /
+        // `height` / `lookahead_rows` surfaces as a typed error instead of a
+        // debug-assert panic or a silently wrapped allocation size (which on
+        // 32-bit / wasm32 targets can wrap to something small and "succeed").
+        let grid =
+            AdaptationGrid::new(width, height, config.cell_size).ok_or(Error::InvalidConfig(
+                "adaptation grid cell count (width/cell_size * height/cell_size) overflows u32",
+            ))?;
+        let row_stride = (width as usize)
+            .checked_mul(channels as usize)
+            .ok_or(Error::InvalidConfig("width * channels overflows usize"))?;
+        let buffer_elements = row_stride
+            .checked_mul(config.lookahead_rows as usize)
+            .ok_or(Error::InvalidConfig(
+                "width * channels * lookahead_rows overflows usize",
+            ))?;
         Ok(Self {
             config,
             width,
@@ -589,6 +608,56 @@ mod tests {
     #[test]
     fn new_rejects_bad_channels() {
         assert!(StreamingTonemapper::new(64, 64, 2, StreamingTonemapConfig::default()).is_err());
+    }
+
+    /// zentone#20: `grid_w * grid_h` was an unguarded `u32` multiply. A
+    /// 2³²-wide-and-tall image at `cell_size` 1 is 2⁶⁴ cells — it must come
+    /// back as a typed error, not a debug panic or a wrapped allocation.
+    #[test]
+    fn new_rejects_cell_grid_overflow() {
+        let cfg = StreamingTonemapConfig {
+            cell_size: 1,
+            ..StreamingTonemapConfig::default()
+        };
+        let err = match StreamingTonemapper::new(u32::MAX, u32::MAX, 3, cfg) {
+            Err(e) => e,
+            Ok(_) => panic!("2^64-cell grid must be rejected"),
+        };
+        assert!(
+            matches!(err, Error::InvalidConfig(msg) if msg.contains("grid")),
+            "{err:?}"
+        );
+        // Exactly at the boundary: 65536 × 65536 cells = 2³² overflows u32
+        // by one; 65536 × 65535 fits. Keep `cell_size` large so the row
+        // buffer stays tiny and the test does not actually allocate 2³² cells
+        // — the check happens before any allocation.
+        let big = StreamingTonemapConfig {
+            cell_size: u32::MAX,
+            ..StreamingTonemapConfig::default()
+        };
+        assert!(StreamingTonemapper::new(u32::MAX, 1, 3, big).is_ok());
+    }
+
+    /// zentone#20: `width * channels * lookahead_rows` was unguarded. With a
+    /// 1×1 cell grid (so the grid check passes) and the widest possible row,
+    /// `lookahead_rows = u32::MAX` overflows even a 64-bit `usize`
+    /// (2³² · 4 · 2³² = 2⁶⁶); on 32-bit targets `width * channels` alone
+    /// overflows. Either way: typed error, no wrap, no allocation.
+    #[test]
+    fn new_rejects_row_buffer_overflow() {
+        let cfg = StreamingTonemapConfig {
+            cell_size: u32::MAX,
+            lookahead_rows: u32::MAX,
+            ..StreamingTonemapConfig::default()
+        };
+        let err = match StreamingTonemapper::new(u32::MAX, 1, 4, cfg) {
+            Err(e) => e,
+            Ok(_) => panic!("2^66-element row buffer must be rejected"),
+        };
+        assert!(
+            matches!(err, Error::InvalidConfig(msg) if msg.contains("overflows usize")),
+            "{err:?}"
+        );
     }
 
     /// Drive push/pull until the image is consumed. Reuses a single
