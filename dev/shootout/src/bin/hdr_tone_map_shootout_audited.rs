@@ -24,8 +24,8 @@
 //!
 //! Run:
 //! ```text
-//! nice -n19 cargo run --release \
-//!   --example hdr_tone_map_shootout_audited --features hdr-shootout
+//! nice -n19 cargo run --manifest-path dev/shootout/Cargo.toml --release \
+//!   --bin hdr_tone_map_shootout_audited
 //! ```
 
 use std::collections::HashMap;
@@ -37,11 +37,11 @@ use rayon::prelude::*;
 use zencodecs::{DecodeRequest, OrientationHint};
 use zenpixels_convert::PixelBufferConvertExt;
 use zenpixels_convert::hdr::{CllMeasure, LightLevelMethod};
+use zenpixels_dev::ColorPrimaries;
 use zenpixels_dev::DiffuseWhite;
 use zenpixels_dev::buffer::PixelBuffer;
 use zenpixels_dev::descriptor::{ChannelLayout, ChannelType, PixelDescriptor, TransferFunction};
 use zenpixels_dev::hdr::ContentLightLevel;
-use zenpixels_dev::ColorPrimaries;
 
 use zenpixels_convert::hdr::Bt2446A;
 use zentone::gamut::soft_clip_knee_strip;
@@ -290,9 +290,7 @@ fn decode_sample_full(
 }
 
 /// Convert a PixelBuffer to tightly packed linear RGB f32 of the source's primaries.
-fn pixel_buffer_to_linear_rgb_preserve_primaries(
-    buf: &PixelBuffer,
-) -> anyhow::Result<LinearRgb> {
+fn pixel_buffer_to_linear_rgb_preserve_primaries(buf: &PixelBuffer) -> anyhow::Result<LinearRgb> {
     let src_desc = buf.descriptor();
     pixel_buffer_to_linear_rgb_in_primaries(buf, src_desc.primaries)
 }
@@ -815,10 +813,7 @@ struct CellMetrics {
 /// buffer). Saves ~290 MB per active sample at 24 MP vs. an out-of-place
 /// rotation. The next cell's `apply_curve_into` rewrites `candidate.px`
 /// from `hdr.px` so the in-place mutation is invisible at the loop level.
-fn compute_metrics_into(
-    reference: &LinearRgb,
-    candidate: &mut LinearRgb,
-) -> CellMetrics {
+fn compute_metrics_into(reference: &LinearRgb, candidate: &mut LinearRgb) -> CellMetrics {
     debug_assert_eq!(reference.width, candidate.width);
     debug_assert_eq!(reference.height, candidate.height);
     let n = reference.pixels();
@@ -831,10 +826,9 @@ fn compute_metrics_into(
     // exported `gamut::conversion_matrix` + `apply_matrix_row_f32` —
     // ~4× faster than going through `PixelBuffer::convert_to` per cell.
     if candidate.primaries != reference.primaries {
-        if let Some(matrix) = zenpixels_convert::gamut::conversion_matrix(
-            candidate.primaries,
-            reference.primaries,
-        ) {
+        if let Some(matrix) =
+            zenpixels_convert::gamut::conversion_matrix(candidate.primaries, reference.primaries)
+        {
             let w = candidate.width as usize;
             candidate.px.par_chunks_mut(w * 3).for_each(|row| {
                 zenpixels_convert::gamut::apply_matrix_row_f32(row, w, &matrix);
@@ -1165,7 +1159,6 @@ fn linear_srgb_to_oklab_strip(src: &[f32], dst: &mut [f32]) {
     }
 }
 
-
 /// CDF walk to find p50/p90/p95/p99 from a histogram. Linear-interpolated
 /// inside the target bin (so 0.1-wide ΔE2000 bins resolve to ~0.05 ΔE; 0.001-
 /// wide OKLab bins resolve to ~5e-4). Returns the four percentiles as f32.
@@ -1293,8 +1286,6 @@ fn delta_e2000(lab1: [f32; 3], lab2: [f32; 3]) -> f32 {
 
     (term_l * term_l + term_c * term_c + term_h * term_h + rt * term_c * term_h).sqrt() as f32
 }
-
-
 
 // =========================================================================
 // Aggregation + report
@@ -1499,7 +1490,6 @@ fn best_mobius_for_method(
         })
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
 }
-
 
 // =========================================================================
 // Main

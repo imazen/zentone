@@ -33,6 +33,32 @@ adheres to semver.
 
 ### Fixed
 
+- CI is green again for the first time since 2026-06-20. The root `Cargo.toml`
+  had grown `path = "../zenpixels/…"`, `../zenpipe/zencodecs` and `../../polyfit`
+  dev-dependencies plus `[patch.crates-io]` path entries for the dev-only
+  HDR→SDR shootout examples; those sibling checkouts do not exist on CI
+  runners, so every `cargo` invocation (msrv, no_std, i686, macOS-Intel,
+  Windows-ARM, lint) failed at manifest resolution. The ten shootout /
+  fitting drivers now live in the standalone, unpublished
+  `dev/shootout/` crate (`cargo run --manifest-path dev/shootout/Cargo.toml
+  --bin <name>`) together with their sibling path deps and patches; the root
+  manifest resolves from crates.io alone. `hdr-shootout` /
+  `__polyfit-tools` remain as no-op features so old invocations still parse.
+- `benches/tonemap_bench.rs` compiles again: the `moxcms` dev-dependency is
+  back to `^0.8.1` so it unifies with gainforge 0.5.0's `moxcms ^0.8` (the
+  bench hands `ColorProfile`s to gainforge; `>=0.9.0` from f32e091 split the
+  graph into two `moxcms` versions). gainforge 0.5.1 would move to 0.9 but
+  declares rust-version 1.93, above the crate's MSRV 1.89.
+- `benches/pipeline_bench.rs` no longer imports `zentone::Bt2446A`, which
+  moved to `zenpixels_convert::hdr` in bcad370; `benches/tier_isolation.rs`
+  defines `TIER_NAME` on every target and drops a dead `SimdToken` import.
+- Clippy on Rust 1.98 (`chunks_exact_to_as_chunks`) is handled: tests,
+  benches and the example use `as_chunks::<N>()`; the ~54 sites in the
+  library's SIMD row kernels are `#![allow]`ed at the crate root pending a
+  deliberate refactor of the `into_remainder()` loops. In-crate uses of the
+  deprecated Reinhard curves (detect tests, the scalar bench baseline) carry
+  an explicit `#[allow(deprecated)]`.
+
 - `StreamingTonemapper::new` (experimental) now checks its size arithmetic:
   the adaptation-grid cell count (`u32`, which also bounds the grid's `u32`
   cell indexing) and `width * channels * lookahead_rows` (`usize`) return
@@ -183,7 +209,7 @@ Downstream consumers swap the import from `zentone::Bt2446A` to
 
 ### Performance
 
-- **`examples/hdr_tone_map_shootout_audited.rs`: SIMD-accelerated metric
+- **`dev/shootout/src/bin/hdr_tone_map_shootout_audited.rs`: SIMD-accelerated metric
   pipeline + 5 GB-capped streaming layout.** Memory peak drops from
   ~32 GB to ~4.9 GB (≈85% reduction) on the full 76-sample × 80-cell
   workload by streaming per-chunk Lab + OKLab + ΔE2000 + ΔE_OK + sRGB-u8
@@ -222,7 +248,7 @@ Downstream consumers swap the import from `zentone::Bt2446A` to
   `Bt2446A::map_strip_simd`'s input transfer: tried, doesn't beat the
   baseline.** Investigation log: appended section to
   [`benchmarks/bt2446a_throughput_2026-06-20.md`](benchmarks/bt2446a_throughput_2026-06-20.md).
-  Reproducible fitting tool at `examples/fit_pow_inv_24.rs` (gated on the
+  Reproducible fitting tool at `dev/shootout/src/bin/fit_pow_inv_24.rs` (gated on the
   `__polyfit-tools` dev feature). Summary: a sqrt-substituted piecewise
   monomial of `√x` for `x^(1/2.4)` can hit 3.4e-4 max abs error on
   `[0, 12]` as a 2-piece (eps=0.07, deg 7 + deg 10), but the BT.2446-A
@@ -242,13 +268,13 @@ Downstream consumers swap the import from `zentone::Bt2446A` to
   scene mid-grey land at `x ≈ 0.18` (output ≈ 0.267) and pins the curve
   output at canonical input points (0.05 / 0.18 / 0.50 / 1.0 / 2.0) so future
   investigators don't re-derive these by hand. Also explains why
-  `examples/hdr_tone_map_shootout_full.rs` scored Narkowicz at ΔE2000 ≈ 22.4
+  `dev/shootout/src/bin/hdr_tone_map_shootout_full.rs` scored Narkowicz at ΔE2000 ≈ 22.4
   on producer-graded SDR (the shootout's `* 2.03` input scale over-exposes
   the curve by 2x; and Narkowicz's filmic look — deep toe, saturated shoulder
   — diverges from camera-ISP-graded SDR even when correctly exposed). The
   curve itself is bit-exact per the published formula
   (`tests/cross_reference.rs::narkowicz_matches_reference`); no code change.
-- `examples/hdr_tone_map_shootout_full.rs` (dev-only, `hdr-shootout` feature) — extended HDR→SDR
+- `dev/shootout/src/bin/hdr_tone_map_shootout_full.rs` (dev-only, `hdr-shootout` feature) — extended HDR→SDR
   shootout running on the 76-sample imazen-26 corpus subset that carries gain maps (UltraHDR JPEG +
   iPhone HEIC), against 3 source-peak measurement methods (`measure_max` / `measure_robust` /
   `measure_max_smoothed`) × 20 curve cells. CSV + bench markdown at

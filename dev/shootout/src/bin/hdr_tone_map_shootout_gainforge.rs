@@ -30,8 +30,8 @@
 //!
 //! Run:
 //! ```text
-//! nice -n19 cargo run -p zentone --release \
-//!   --example hdr_tone_map_shootout_gainforge --features hdr-shootout
+//! nice -n19 cargo run --manifest-path dev/shootout/Cargo.toml --release \
+//!   --bin hdr_tone_map_shootout_gainforge
 //! ```
 
 use std::collections::HashMap;
@@ -1289,10 +1289,10 @@ Runtime: {:.1}s ({:.1}min). gainforge version: 0.5.0 (`Itu2408` formerly `Rec240
     ));
 
     s.push_str("### Reproduce\n\n```bash\n");
-    s.push_str("nice -n19 cargo run -p zentone --release \\\n");
-    s.push_str("  --example hdr_tone_map_shootout_gainforge --features hdr-shootout\n```\n\n");
+    s.push_str("nice -n19 cargo run --manifest-path dev/shootout/Cargo.toml --release \\\n");
+    s.push_str("  --bin hdr_tone_map_shootout_gainforge\n```\n\n");
     s.push_str(&format!(
-        "Side-car CSV: `{}`.\nSource: `examples/hdr_tone_map_shootout_gainforge.rs`.\n",
+        "Side-car CSV: `{}`.\nSource: `dev/shootout/src/bin/hdr_tone_map_shootout_gainforge.rs`.\n",
         CSV_PATH
     ));
 

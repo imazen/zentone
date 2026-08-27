@@ -1,6 +1,6 @@
 # HDR→SDR Shootout Color-Handling Audit (2026-06-22)
 
-Audit of `examples/hdr_tone_map_shootout_full.rs` (the source that produced
+Audit of `dev/shootout/src/bin/hdr_tone_map_shootout_full.rs` (the source that produced
 `hdr_tone_map_shootout_full_2026-06-20.csv`) for color-profile correctness
 before regenerating the shootout with the recent Bt2446A fix and the new
 percentile-based peak method.
@@ -13,7 +13,7 @@ into f32 RGB **in source primaries** (line 222-260: `pixel_buffer_to_linear_rgb`
 sets the target descriptor to `(F32, Rgb, Linear, src_desc.primaries)` —
 linearizes the transfer but keeps the gamut as-is).
 
-Observed for 3 spot-check samples (via `examples/audit_primaries_dump.rs`):
+Observed for 3 spot-check samples (via `dev/shootout/src/bin/audit_primaries_dump.rs`):
 
 | Sample | SDR descriptor returned |
 |---|---|

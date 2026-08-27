@@ -196,6 +196,6 @@ _High-rel_spread recommended knee: **0.98** (p90 clip 0.0016, chroma compression
 
 - Clip is BOTH directions: any channel > 1.0 OR any channel < 0.0 counts (the BT.2020→BT.709 matrix can produce negative R/G/B for saturated BT.2020 primaries; the final clamp would zero them).
 
-- Driver: `examples/softcompress_knee_sweep.rs`. Outer threads capped at 5 for the ≤5 GB memory contract.
+- Driver: `dev/shootout/src/bin/softcompress_knee_sweep.rs`. Outer threads capped at 5 for the ≤5 GB memory contract.
 
 - Recommended default knee, if any: **0.96**

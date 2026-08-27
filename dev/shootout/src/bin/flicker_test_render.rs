@@ -28,8 +28,8 @@
 //!
 //! Run:
 //! ```text
-//! nice -n19 ionice -c3 cargo run -p zentone --release \
-//!     --example flicker_test_render --features hdr-shootout
+//! nice -n19 ionice -c3 cargo run --manifest-path dev/shootout/Cargo.toml --release \
+//!     --bin flicker_test_render
 //! ```
 
 use std::fs;
@@ -56,8 +56,7 @@ use zenpixels_dev::hdr::ContentLightLevel;
 const CORPUS_ROOT: &str = "/home/lilith/work/codec-corpus/imazen-26";
 const OUT_ROOT: &str = "/mnt/v/output/zentone/flicker-test";
 const WORKONGOING: &str = "/home/lilith/work/zen/zentone/.workongoing";
-const CSV_OUT: &str =
-    "/home/lilith/work/zen/zentone/benchmarks/percentile_sweep_2026-06-22.csv";
+const CSV_OUT: &str = "/home/lilith/work/zen/zentone/benchmarks/percentile_sweep_2026-06-22.csv";
 
 const DIFFUSE_WHITE_NITS: f32 = 203.0;
 const TARGET_PEAK_NITS: f32 = 100.0;
@@ -150,8 +149,7 @@ const SAMPLE_STEMS_76: &[&str] = &[
 /// back to the full 76-sample hardcoded list.
 fn load_stems() -> Vec<String> {
     if let Ok(path) = std::env::var("STEMS_FILE") {
-        let s = fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("STEMS_FILE={path}: {e}"));
+        let s = fs::read_to_string(&path).unwrap_or_else(|e| panic!("STEMS_FILE={path}: {e}"));
         return s
             .lines()
             .map(|l| l.trim())
@@ -174,7 +172,10 @@ fn refresh_lock(activity: &str) {
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
-    let _ = fs::write(WORKONGOING, format!("{iso} claude-flicker-test {activity}\n"));
+    let _ = fs::write(
+        WORKONGOING,
+        format!("{iso} claude-flicker-test {activity}\n"),
+    );
 }
 
 // =========================================================================
@@ -507,7 +508,11 @@ fn extract_container_peak(path: &Path) -> Option<(f32, String)> {
     let out = Command::new("exiftool")
         .args([
             "-ee",
-            "-G", "-a", "-s", "-c", "%.6f",
+            "-G",
+            "-a",
+            "-s",
+            "-c",
+            "%.6f",
             "-HDRGainMapHeadroom",
             "-HDRCapacityMax",
             "-MaxContentLightLevel",
@@ -674,9 +679,7 @@ fn write_per_sample_html(out_dir: &Path, rep: &SampleReport) -> anyhow::Result<(
     let path = out_dir.join("flicker.html");
     let mut variant_options = String::new();
     for (label, file) in &rep.variants {
-        variant_options.push_str(&format!(
-            "    <option value=\"{file}\">{label}</option>\n"
-        ));
+        variant_options.push_str(&format!("    <option value=\"{file}\">{label}</option>\n"));
     }
     let meta_line = match &rep.peak_metadata {
         Some((nits, src)) => format!("{nits:.0} nits (from {src})"),
@@ -1034,25 +1037,44 @@ fn process_sample(stem: &str, path: &Path) -> anyhow::Result<SampleReport> {
     // workers when nested under outer par_iter — net win is still large
     // because the SIMD tone-map kernel is the long pole.
     let renders: Vec<(&'static str, &'static str, f32)> = vec![
-        ("bt2446a max",         "bt2446a__max.png",       peaks.peak_max),
-        ("bt2446a robust",      "bt2446a__robust.png",    peaks.peak_robust),
-        ("bt2446a smoothed",    "bt2446a__smoothed.png",  peaks.peak_smoothed),
-        ("bt2446a blend25",     "bt2446a__blend25.png",   blend25),
-        ("bt2446a blend50",     "bt2446a__blend50.png",   blend50),
-        ("bt2446a blend75",     "bt2446a__blend75.png",   blend75),
-        ("bt2446a 1000nit",     "bt2446a__1000nit.png",   1000.0),
-        ("bt2446a p=99.995%",   "bt2446a__p99_995.png",   peaks.peak_p99_995),
-        ("bt2446a p=99.999%",   "bt2446a__p99_999.png",   peaks.peak_p99_999),
-        ("bt2446a p=99.9995%",  "bt2446a__p99_9995.png",  peaks.peak_p99_9995),
-        ("bt2446a p=99.9999%",  "bt2446a__p99_9999.png",  peaks.peak_p99_9999),
+        ("bt2446a max", "bt2446a__max.png", peaks.peak_max),
+        ("bt2446a robust", "bt2446a__robust.png", peaks.peak_robust),
+        (
+            "bt2446a smoothed",
+            "bt2446a__smoothed.png",
+            peaks.peak_smoothed,
+        ),
+        ("bt2446a blend25", "bt2446a__blend25.png", blend25),
+        ("bt2446a blend50", "bt2446a__blend50.png", blend50),
+        ("bt2446a blend75", "bt2446a__blend75.png", blend75),
+        ("bt2446a 1000nit", "bt2446a__1000nit.png", 1000.0),
+        (
+            "bt2446a p=99.995%",
+            "bt2446a__p99_995.png",
+            peaks.peak_p99_995,
+        ),
+        (
+            "bt2446a p=99.999%",
+            "bt2446a__p99_999.png",
+            peaks.peak_p99_999,
+        ),
+        (
+            "bt2446a p=99.9995%",
+            "bt2446a__p99_9995.png",
+            peaks.peak_p99_9995,
+        ),
+        (
+            "bt2446a p=99.9999%",
+            "bt2446a__p99_9999.png",
+            peaks.peak_p99_9999,
+        ),
     ];
 
     refresh_lock(&format!("render 11 variants {stem}"));
     renders.par_iter().try_for_each(|(label, file, peak)| {
         let mapped = apply_bt2446a(&hdr, *peak);
-        save_png(&mapped, &out_dir.join(file)).map_err(|e| {
-            anyhow::anyhow!("save {label} ({file}) for {stem}: {e}")
-        })
+        save_png(&mapped, &out_dir.join(file))
+            .map_err(|e| anyhow::anyhow!("save {label} ({file}) for {stem}: {e}"))
     })?;
 
     let mut variants: Vec<(String, String)> =
@@ -1127,7 +1149,11 @@ fn main() -> anyhow::Result<()> {
     let stems = load_stems();
     let (samples, missing) = resolve_paths(&stems);
     if !missing.is_empty() {
-        eprintln!("warning: {} stems not found under {}:", missing.len(), CORPUS_ROOT);
+        eprintln!(
+            "warning: {} stems not found under {}:",
+            missing.len(),
+            CORPUS_ROOT
+        );
         for m in &missing {
             eprintln!("  {m}");
         }
@@ -1201,13 +1227,34 @@ fn main() -> anyhow::Result<()> {
     let (p99_9999_p10, p99_9999_p50, p99_9999_p90) = percentiles(&reports, |r| r.peak_p99_9999);
     let (spr_p10, spr_p50, spr_p90) = percentiles(&reports, |r| r.rel_spread() * 100.0);
 
-    eprintln!("\nPeak distribution across {} samples (p10 / p50 / p90, in nits):", reports.len());
-    eprintln!("  peak_max       {:6.0} / {:6.0} / {:6.0}", max_p10, max_p50, max_p90);
-    eprintln!("  peak_robust    {:6.0} / {:6.0} / {:6.0}", rob_p10, rob_p50, rob_p90);
-    eprintln!("  peak_smoothed  {:6.0} / {:6.0} / {:6.0}", sm_p10, sm_p50, sm_p90);
-    eprintln!("  p99.999%       {:6.0} / {:6.0} / {:6.0}", p99_999_p10, p99_999_p50, p99_999_p90);
-    eprintln!("  p99.9999%      {:6.0} / {:6.0} / {:6.0}", p99_9999_p10, p99_9999_p50, p99_9999_p90);
-    eprintln!("  rel_spread %   {:6.1} / {:6.1} / {:6.1}", spr_p10, spr_p50, spr_p90);
+    eprintln!(
+        "\nPeak distribution across {} samples (p10 / p50 / p90, in nits):",
+        reports.len()
+    );
+    eprintln!(
+        "  peak_max       {:6.0} / {:6.0} / {:6.0}",
+        max_p10, max_p50, max_p90
+    );
+    eprintln!(
+        "  peak_robust    {:6.0} / {:6.0} / {:6.0}",
+        rob_p10, rob_p50, rob_p90
+    );
+    eprintln!(
+        "  peak_smoothed  {:6.0} / {:6.0} / {:6.0}",
+        sm_p10, sm_p50, sm_p90
+    );
+    eprintln!(
+        "  p99.999%       {:6.0} / {:6.0} / {:6.0}",
+        p99_999_p10, p99_999_p50, p99_999_p90
+    );
+    eprintln!(
+        "  p99.9999%      {:6.0} / {:6.0} / {:6.0}",
+        p99_9999_p10, p99_9999_p50, p99_9999_p90
+    );
+    eprintln!(
+        "  rel_spread %   {:6.1} / {:6.1} / {:6.1}",
+        spr_p10, spr_p50, spr_p90
+    );
 
     if !failures.is_empty() {
         eprintln!("\n{} sample failures:", failures.len());

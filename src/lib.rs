@@ -203,6 +203,12 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 #![allow(clippy::excessive_precision)]
+// Rust 1.98 clippy asks for `as_chunks::<N>()` at ~54 `chunks_exact(N)` sites,
+// most of them SIMD row kernels that also consume `into_remainder()`. Both forms
+// iterate identically; the rewrite is a real refactor of hot loops (tuple
+// destructure + explicit remainder handling) tracked as follow-up work rather
+// than done blind under `-D warnings`.
+#![allow(clippy::chunks_exact_to_as_chunks)]
 
 extern crate alloc;
 

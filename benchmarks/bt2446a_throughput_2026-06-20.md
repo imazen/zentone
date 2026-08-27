@@ -189,7 +189,7 @@ conclusion.
   refinement) and `ChebyshevFit::new` + `as_monomial()` for direct
   monomial conversion. Pulled in as a `dev-dependency` gated by the
   `__polyfit-tools` feature; runtime crate unaffected.
-- **Offline fitting tool**: `examples/fit_pow_inv_24.rs`. Sweeps four
+- **Offline fitting tool**: `dev/shootout/src/bin/fit_pow_inv_24.rs`. Sweeps four
   strategies — (A) plain monomial on `x`, (B) plain monomial on `√x`,
   (C) rational `P(√x)/Q(√x)` with `P(0)=0` constraint, (D) two-piece
   monomial on `√x`, (E) three-piece monomial on `√x` — at multiple
@@ -328,10 +328,9 @@ make the next person's life easier.
 
 ### Source
 
-- Offline fitting tool: `examples/fit_pow_inv_24.rs` (gated on
-  `--features __polyfit-tools`)
-- Polyfit dev-dep wiring: `Cargo.toml` `[dev-dependencies]` + the
-  `__polyfit-tools` feature
+- Offline fitting tool: `dev/shootout/src/bin/fit_pow_inv_24.rs` (run via
+  `cargo run --manifest-path dev/shootout/Cargo.toml --bin fit_pow_inv_24`)
+- Polyfit dep wiring: `dev/shootout/Cargo.toml` `[dependencies]`
 - Polyfit fork: `/home/lilith/work/polyfit` v0.11.0
 - The SIMD kernel `src/simd/curves.rs::bt2446a_tier` is **unchanged**
   from the prior `f32x16 + Estrin EOTF` perf pass.

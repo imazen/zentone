@@ -89,11 +89,11 @@ On 4 UltraHDR samples, **`hable_filmic` wins** on median ΔE2000 by a clear marg
 ## Reproduce
 
 ```bash
-nice -n19 cargo run -p zentone --release \
-  --example hdr_tone_map_shootout --features hdr-shootout
+nice -n19 cargo run --manifest-path dev/shootout/Cargo.toml --release \
+  --bin hdr_tone_map_shootout
 ```
 
 Sample inputs: `/mnt/v/input/gainmap-samples/{JPEG,AVIF}/*`.
 
 Per-sample × per-curve montages: `/mnt/v/output/zentone/shootout/<sample>__<curve_label>.png` (3 panels: producer SDR | our SDR | abs Δ×10).
-Source: `examples/hdr_tone_map_shootout.rs`.
+Source: `dev/shootout/src/bin/hdr_tone_map_shootout.rs`.

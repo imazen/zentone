@@ -369,7 +369,7 @@ fn full_frame_4k_row_monotonic_and_bounded() {
         // Check: no NaN/Inf, bounded output, monotonic luminance
         let mut last_lum = -1.0_f32;
         let mut mono_violations = 0_u32;
-        for (px, chunk) in row.chunks_exact(3).enumerate() {
+        for (px, chunk) in row.as_chunks::<3>().0.iter().enumerate() {
             for (i, c) in chunk.iter().enumerate() {
                 assert!(
                     c.is_finite(),

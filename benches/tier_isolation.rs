@@ -28,16 +28,18 @@ type TierToken = archmage::NeonToken;
 #[cfg(target_arch = "x86_64")]
 type TierToken = archmage::X64V3Token;
 
-#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 const TIER_NAME: &str = if cfg!(target_arch = "aarch64") {
     "neon"
-} else {
+} else if cfg!(target_arch = "x86_64") {
     "v3(avx2)"
+} else {
+    // No process-wide token to disable on other targets; `set_simd` reports
+    // false and the bench prints its skip message.
+    "none"
 };
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 fn set_simd(enabled: bool) -> bool {
-    use archmage::SimdToken;
     TierToken::dangerously_disable_token_process_wide(!enabled).is_ok()
 }
 

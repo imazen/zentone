@@ -51,15 +51,16 @@ experimental = []
 # (e.g. `gainmap::normalized_linear_to_hlg_buffer`) wrapping the dep-free
 # `&mut [f32]` row kernels. The core stays container-agnostic.
 zenpixels = ["dep:zenpixels"]
-# Dev-only: pulls zencodecs + zenpixels-convert hdr-experimental to run the
-# `hdr_tone_map_shootout` example against /mnt/v/input/gainmap-samples/.
-# Not part of the published API surface.
+# Retired dev-only gate. It used to select the HDR→SDR shootout examples,
+# which now live in the standalone `dev/shootout/` crate (path deps on sibling
+# checkouts that cannot resolve on CI or for downstream users). Kept as a
+# no-op so existing `--features hdr-shootout` invocations still parse; it was
+# never part of the published API surface.
 hdr-shootout = []
-# Internal dev-only knob (NOT public API; the `__` prefix marks it as such):
-# gates the offline `examples/fit_pow_inv_24.rs` polynomial-fitting tool.
-# Polyfit itself is a dev-dep, so published binaries are unaffected; the
-# feature exists only to keep the example off the normal `cargo test --examples`
-# path. Run with `--features __polyfit-tools` to invoke.
+# Retired dev-only gate (NOT public API; the `__` prefix marks it as such). It
+# used to select `examples/fit_pow_inv_24.rs`, now
+# `dev/shootout/src/bin/fit_pow_inv_24.rs`. Kept as a no-op for the same
+# reason as `hdr-shootout`.
 __polyfit-tools = []
 
 [dependencies]
@@ -71,32 +72,19 @@ magetypes = { version = "0.9.22", default-features = false }
 
 [dev-dependencies]
 gainforge = "0.5.0"
-moxcms = ">=0.9.0, <0.10"
+# `benches/tonemap_bench.rs` hands `moxcms::ColorProfile` values to gainforge,
+# so this instance MUST unify with gainforge's own moxcms. gainforge 0.5.0
+# (the newest release within our MSRV 1.89 — 0.5.1 declares rust-version
+# 1.93) requires `moxcms ^0.8`, so this range must admit 0.8.x; narrowing it
+# to `>=0.9.0` (commit f32e091) split the graph into two moxcms versions and
+# broke the bench with an `expected moxcms::profile::ColorProfile` mismatch.
+moxcms = "0.8.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 zensim = "0.2.6"
-# Offline coefficient fitting for `examples/fit_pow_inv_24.rs`. Default features
-# disabled — we only need `rational::RationalFit` + `ChebyshevFit`, not plotting
-# or random transforms. Pulled in always for dev (no runtime impact on the
-# published crate; dev-deps don't ship), gated on a feature only by the example.
-polyfit = { path = "../../polyfit", default-features = false }
-# `hdr_tone_map_shootout` example needs UltraHDR decode + CllMeasure +
-# strongly-typed PixelBuffer construction. These deps are dev-only so the
-# `published` library remains slim.
-anyhow = "1"
-bytemuck = { version = "1.25", default-features = false }
-rayon = "1.10"
-zencodecs = { path = "../zenpipe/zencodecs", default-features = false, features = ["jpeg", "jpeg-ultrahdr", "avif-decode", "heic-decode", "raw-decode", "raw-decode-gainmap", "std"] }
-# dev-deps: the `hdr-shootout` example needs the unpublished `Bt2446A` +
-# `hdr-experimental` feature gate that ships from the zenpixels repo on
-# `main`. Path-only (no `version = ...`) so `cargo package` doesn't try to
-# resolve them against crates.io — dev-deps without a version aren't
-# emitted into the published manifest, so downstream consumers see no
-# trace of these. The example only builds when `--features hdr-shootout`
-# is set, so the normal `cargo test` / docs.rs build path is unaffected.
-zenpixels-convert = { path = "../zenpixels/zenpixels-convert", default-features = false, features = ["std", "hdr-experimental", "rgb", "imgref"] }
-zenpixels-dev = { package = "zenpixels", path = "../zenpixels/zenpixels", default-features = false, features = ["std", "imgref"] }
-# Manual AVIF gain-map reconstruction needs ultrahdr-core directly.
-ultrahdr-core = { version = "0.5.0" }
+# Dev-only HDR→SDR shootout / offline-fitting drivers (and their unpublished
+# sibling-checkout deps + crates-io patches) live in `dev/shootout/`, NOT here:
+# a root-manifest path dep that only exists on one machine breaks every cargo
+# invocation on CI and for downstream `cargo package` consumers.
 
 # Native-only: benchmark dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
@@ -105,46 +93,6 @@ zenbench = { version = "0.1.6", features = ["criterion-compat"] }
 [[example]]
 name = "visual_compare"
 required-features = ["experimental"]
-
-[[example]]
-name = "fit_pow_inv_24"
-required-features = ["__polyfit-tools"]
-
-[[example]]
-name = "hdr_tone_map_shootout"
-required-features = ["hdr-shootout"]
-
-[[example]]
-name = "hdr_tone_map_shootout_full"
-required-features = ["hdr-shootout"]
-
-[[example]]
-name = "hdr_tone_map_shootout_audited"
-required-features = ["hdr-shootout"]
-
-[[example]]
-name = "softcompress_knee_sweep"
-required-features = ["hdr-shootout"]
-
-[[example]]
-name = "shootout_p99999_only"
-required-features = ["hdr-shootout"]
-
-[[example]]
-name = "hdr_tone_map_shootout_gainforge"
-required-features = ["hdr-shootout"]
-
-[[example]]
-name = "hdr_sdr_luminance_trace"
-required-features = ["hdr-shootout"]
-
-[[example]]
-name = "flicker_test_render"
-required-features = ["hdr-shootout"]
-
-[[example]]
-name = "audit_primaries_dump"
-required-features = ["hdr-shootout"]
 
 [[bench]]
 name = "tier_isolation"
@@ -159,36 +107,3 @@ harness = false
 name = "pipeline_bench"
 harness = false
 required-features = ["experimental"]
-
-# Cross-crate git overrides for the dev-only `hdr-shootout` example pull.
-# `zenpixels` and `zenpixels-convert` are now path deps in `[dev-dependencies]`
-# so they don't need a patch entry. The remaining patches expose APIs the
-# example needs that pre-date the latest crates.io publishes of the
-# transitive `zencodecs` graph (`zenjpeg`, `ultrahdr-core`, `rav1d-safe`,
-# `heic`). Patches never exercised by the example (zenpng, zenrav1e,
-# zenwebp, etc.) are intentionally omitted so cargo doesn't warn about
-# "patch never used".
-[patch.crates-io]
-# Pinned: zencodecs (path dev-dep) requires `zenjpeg ^0.8.4` with the
-# `recompress` feature. zenjpeg `main` bumped to 0.9.0 on 2026-07-28, so an
-# unpinned patch no longer satisfies `^0.8.4`, cargo falls back to crates.io
-# 0.8.4 (no `recompress`) and the whole dev-dep graph fails to resolve. Rev
-# 9835cf5 is zenjpeg 0.8.7 — the same rev zenpipe's own Cargo.lock pins.
-zenjpeg = { git = "https://github.com/imazen/zenjpeg", rev = "9835cf5ec8ee65e4d4c2eae55969599ef3878267" }
-# `zenpixels` and `zenpixels-convert` patches are needed locally so the
-# `hdr-shootout` example sees the same version of `zenpixels` through both
-# its direct dev-dep path and the transitive `zencodecs` graph. Without this,
-# `zencodec`/`zencodecs` resolve registry 0.2.14 while the dev-deps resolve
-# path 0.2.15+, producing two distinct `zenpixels::PixelBuffer` types and a
-# compile-time mismatch when consuming `DecodeOutput::into_buffer()` from
-# the shootout examples. Dev-only — `cargo package` already drops dev-deps,
-# so downstream consumers see no trace of these.
-zenpixels = { path = "../zenpixels/zenpixels" }
-zenpixels-convert = { path = "../zenpixels/zenpixels-convert" }
-# Pinned to the same revs zenpipe's Cargo.lock resolves (ultrahdr-core 0.5.0,
-# heic 0.2.0). Unpinned `main` of each drifted apart (ultrahdr `main` is 0.6.0,
-# which `^0.5.0` rejects, while heic `main` calls 0.6.0-only APIs), so a fresh
-# resolve of this dev-dep graph failed to compile `heic`.
-ultrahdr-core = { git = "https://github.com/imazen/ultrahdr", rev = "031d4a2070a522f82bd02aee712a2806a2c17bbd" }
-rav1d-safe = { git = "https://github.com/imazen/rav1d-safe" }
-heic = { git = "https://github.com/imazen/heic", rev = "3fe1110ce51b05f40580724f2c0beb7e5f043911" }

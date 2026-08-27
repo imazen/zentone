@@ -94,7 +94,7 @@ fn map_row_rgb_matches_map_rgb_all_configs() {
         tm.map_row(&mut via_row, 3);
 
         let mut via_manual = src.clone();
-        for chunk in via_manual.chunks_exact_mut(3) {
+        for chunk in via_manual.as_chunks_mut::<3>().0 {
             let out = tm.map_rgb([chunk[0], chunk[1], chunk[2]]);
             chunk[0] = out[0];
             chunk[1] = out[1];
@@ -135,7 +135,7 @@ fn map_row_rgba_matches_map_rgb_and_preserves_alpha_all_configs() {
         tm.map_row(&mut via_row, 4);
 
         let mut via_manual = src.clone();
-        for chunk in via_manual.chunks_exact_mut(4) {
+        for chunk in via_manual.as_chunks_mut::<4>().0 {
             let out = tm.map_rgb([chunk[0], chunk[1], chunk[2]]);
             chunk[0] = out[0];
             chunk[1] = out[1];
@@ -160,7 +160,7 @@ fn map_row_rgba_matches_map_rgb_and_preserves_alpha_all_configs() {
         }
 
         // Verify alpha preserved
-        for (i, pixel) in via_row.chunks_exact(4).enumerate() {
+        for (i, pixel) in via_row.as_chunks::<4>().0.iter().enumerate() {
             let expected_alpha = 0.25 + (i as f32 / 31.0) * 0.5;
             assert!(
                 (pixel[3] - expected_alpha).abs() < 1e-6,
@@ -215,7 +215,13 @@ fn map_into_rgba_copies_alpha_all_configs() {
         let mut dst = vec![0.99_f32; src.len()]; // pre-fill with wrong alpha
         tm.map_into(&src, &mut dst, 4);
 
-        for (i, (s, d)) in src.chunks_exact(4).zip(dst.chunks_exact(4)).enumerate() {
+        for (i, (s, d)) in src
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(dst.as_chunks::<4>().0.iter())
+            .enumerate()
+        {
             assert!(
                 (d[3] - s[3]).abs() < 1e-6,
                 "{name}: pixel {i} dst alpha {} != src alpha {}",
@@ -265,7 +271,7 @@ fn custom_pipeline_gamut_convert_and_soft_clip() {
     let mut tonemapped = bt2020_pixels.clone();
     tm.map_row(&mut tonemapped, 3);
 
-    for chunk in tonemapped.chunks_exact_mut(3) {
+    for chunk in tonemapped.as_chunks_mut::<3>().0 {
         let rgb = apply_matrix(&BT2020_TO_BT709, [chunk[0], chunk[1], chunk[2]]);
         let clipped = if is_out_of_gamut(rgb) {
             soft_clip(rgb)

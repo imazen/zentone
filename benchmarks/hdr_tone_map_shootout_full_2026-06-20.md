@@ -213,15 +213,15 @@ File naming: `<sample-stem>__<curve_label>__<peak_method>__<best|worst>.png`.
 
 ```bash
 nice -n19 cargo build -p zentone --release \
-  --example hdr_tone_map_shootout_full --features hdr-shootout
-nice -n19 cargo run -p zentone --release \
-  --example hdr_tone_map_shootout_full --features hdr-shootout
+  --bin hdr_tone_map_shootout_full
+nice -n19 cargo run --manifest-path dev/shootout/Cargo.toml --release \
+  --bin hdr_tone_map_shootout_full
 ```
 
 Sample inputs: `/home/lilith/work/codec-corpus/imazen-26/**/{*.jpg,*.jpeg,*.heic}`.
 Per-sample × per-cell montages (top-3 + bottom-3 per cell): `/mnt/v/output/zentone/shootout-full/...`.
 Full CSV: `/home/lilith/work/zen/zentone/benchmarks/hdr_tone_map_shootout_full_2026-06-20.csv`.
-Source: `examples/hdr_tone_map_shootout_full.rs`.
+Source: `dev/shootout/src/bin/hdr_tone_map_shootout_full.rs`.
 
 ---
 
@@ -308,12 +308,12 @@ For each curve family, median ΔE2000 under `measure_robust` per working color s
 ### Reproduce
 
 ```bash
-nice -n19 cargo run -p zentone --release \
-  --example hdr_tone_map_shootout_gainforge --features hdr-shootout
+nice -n19 cargo run --manifest-path dev/shootout/Cargo.toml --release \
+  --bin hdr_tone_map_shootout_gainforge
 ```
 
 Side-car CSV: `/home/lilith/work/zen/zentone/benchmarks/hdr_tone_map_shootout_full_2026-06-20_gainforge.csv`.
-Source: `examples/hdr_tone_map_shootout_gainforge.rs`.
+Source: `dev/shootout/src/bin/hdr_tone_map_shootout_gainforge.rs`.
 
 ---
 

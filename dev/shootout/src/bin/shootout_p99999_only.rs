@@ -17,8 +17,8 @@
 //!
 //! Run:
 //! ```text
-//! nice -n19 ionice -c3 cargo run -p zentone --release \
-//!   --example shootout_p99999_only --features hdr-shootout
+//! nice -n19 ionice -c3 cargo run --manifest-path dev/shootout/Cargo.toml --release \
+//!   --bin shootout_p99999_only
 //! ```
 //!
 //! Writes:
@@ -39,7 +39,6 @@ use zenpixels_dev::descriptor::{ChannelLayout, ChannelType, PixelDescriptor, Tra
 use zenpixels_dev::hdr::ContentLightLevel;
 
 use zenpixels_convert::hdr::Bt2446A;
-
 
 // =========================================================================
 // Paths / constants
@@ -66,8 +65,7 @@ fn target_percentile() -> f32 {
 /// Output CSV path — also env-overridable so a baseline rerun doesn't stomp
 /// the candidate CSV.
 fn csv_path() -> String {
-    std::env::var("SHOOTOUT_CSV_PATH")
-        .unwrap_or_else(|_| CSV_PATH.to_string())
+    std::env::var("SHOOTOUT_CSV_PATH").unwrap_or_else(|_| CSV_PATH.to_string())
 }
 
 /// Peak-method label written to the `peak_method` column.
@@ -666,7 +664,13 @@ fn main() -> anyhow::Result<()> {
         if idx % 5 == 0 {
             refresh_lock(&format!("sweep-{}-of-{}", idx + 1, total));
         }
-        println!("\n=== [{}/{}] {} ({}) ===", idx + 1, total, stem_raw, fmt_label);
+        println!(
+            "\n=== [{}/{}] {} ({}) ===",
+            idx + 1,
+            total,
+            stem_raw,
+            fmt_label
+        );
 
         let bytes = match fs::read(path) {
             Ok(b) => b,

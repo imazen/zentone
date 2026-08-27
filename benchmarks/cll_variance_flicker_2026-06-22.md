@@ -109,8 +109,8 @@ Per-sample HTML at `/mnt/v/output/zentone/flicker-test/<stem>/flicker.html`:
 ## Reproducing
 
 ```
-nice -n19 cargo run -p zentone --release \
-    --example flicker_test_render --features hdr-shootout
+nice -n19 cargo run --manifest-path dev/shootout/Cargo.toml --release \
+    --bin flicker_test_render
 ```
 
 Output at `/mnt/v/output/zentone/flicker-test/`. Re-run is idempotent;

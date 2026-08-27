@@ -311,7 +311,7 @@ fn to_srgb_u8(img: &[f32]) -> Vec<u8> {
 }
 
 fn to_rgb_triples(img: &[u8]) -> Vec<[u8; 3]> {
-    img.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()
+    img.as_chunks::<3>().0.to_vec()
 }
 
 fn save_png(path: &Path, data: &[u8], w: u32, h: u32) {

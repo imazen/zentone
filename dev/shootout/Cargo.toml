@@ -1,0 +1,81 @@
+# Dev-only HDR→SDR shootout / calibration tooling for zentone.
+#
+# This crate is deliberately NOT part of the published `zentone` package and
+# NOT a workspace member: it depends on unpublished sibling checkouts
+# (`../../../zenpixels`, `../../../zenpipe`, `../../../../polyfit`) via path
+# deps, which cannot resolve on CI runners or for downstream consumers. Keeping
+# them here — instead of in the root `Cargo.toml` — is what lets the root
+# crate's manifest resolve from crates.io alone.
+#
+# Run from the zentone repo root:
+#
+#   nice -n19 cargo run --manifest-path dev/shootout/Cargo.toml --release \
+#     --bin hdr_tone_map_shootout_audited
+#
+# Every binary under `src/bin/` corresponds to a former `examples/*.rs` that
+# used to build behind the root `hdr-shootout` / `__polyfit-tools` features.
+[package]
+name = "zentone-dev-shootout"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "AGPL-3.0-only OR LicenseRef-Imazen-Commercial"
+description = "Dev-only HDR→SDR shootout drivers and offline fitting tools for zentone (not published)"
+
+# Own workspace root so cargo never tries to attach this package to a parent
+# workspace.
+[workspace]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+zentone = { path = "../.." }
+
+# Sibling checkouts (unpublished APIs: `hdr-experimental` / `Bt2446A` on
+# zenpixels-convert main; `zencodecs` from the zenpipe repo).
+zencodecs = { path = "../../../zenpipe/zencodecs", default-features = false, features = ["jpeg", "jpeg-ultrahdr", "avif-decode", "heic-decode", "raw-decode", "raw-decode-gainmap", "std"] }
+zenpixels-convert = { path = "../../../zenpixels/zenpixels-convert", default-features = false, features = ["std", "hdr-experimental", "rgb", "imgref"] }
+zenpixels-dev = { package = "zenpixels", path = "../../../zenpixels/zenpixels", default-features = false, features = ["std", "imgref"] }
+# Offline coefficient fitting for `src/bin/fit_pow_inv_24.rs` — only
+# `rational::RationalFit` + `ChebyshevFit` are used, so default features
+# (plotting, random transforms) stay off.
+polyfit = { path = "../../../../polyfit", default-features = false }
+
+# Manual AVIF gain-map reconstruction needs ultrahdr-core directly.
+ultrahdr-core = { version = "0.5.0" }
+gainforge = "0.5.0"
+moxcms = ">=0.9.0, <0.10"
+zensim = "0.2.6"
+image = { version = "0.25", default-features = false, features = ["png"] }
+anyhow = "1"
+bytemuck = { version = "1.25", default-features = false }
+rayon = "1.10"
+
+# Cross-crate git overrides for the transitive `zencodecs` graph. They expose
+# APIs the drivers need that pre-date the latest crates.io publishes of
+# `zenjpeg`, `ultrahdr-core`, `rav1d-safe` and `heic`. Patches never exercised
+# by these binaries (zenpng, zenrav1e, zenwebp, ...) are intentionally omitted
+# so cargo doesn't warn about "patch never used".
+[patch.crates-io]
+# Pinned: zencodecs (path dep) requires `zenjpeg ^0.8.4` with the `recompress`
+# feature. zenjpeg `main` bumped to 0.9.0 on 2026-07-28, so an unpinned patch
+# no longer satisfies `^0.8.4`, cargo falls back to crates.io 0.8.4 (no
+# `recompress`) and the graph fails to resolve. Rev 9835cf5 is zenjpeg 0.8.7 —
+# the same rev zenpipe's own Cargo.lock pins.
+zenjpeg = { git = "https://github.com/imazen/zenjpeg", rev = "9835cf5ec8ee65e4d4c2eae55969599ef3878267" }
+# `zenpixels` / `zenpixels-convert` are patched so the drivers see the same
+# version of `zenpixels` through both the direct path dep and the transitive
+# `zencodecs` graph. Without this, `zencodec`/`zencodecs` resolve the registry
+# version while the direct deps resolve the path version, producing two
+# distinct `zenpixels::PixelBuffer` types and a compile-time mismatch when
+# consuming `DecodeOutput::into_buffer()`.
+zenpixels = { path = "../../../zenpixels/zenpixels" }
+zenpixels-convert = { path = "../../../zenpixels/zenpixels-convert" }
+# Pinned to the same revs zenpipe's Cargo.lock resolves (ultrahdr-core 0.5.0,
+# heic 0.2.0). Unpinned `main` of each drifted apart (ultrahdr `main` is 0.6.0,
+# which `^0.5.0` rejects, while heic `main` calls 0.6.0-only APIs), so a fresh
+# resolve of this graph failed to compile `heic`.
+ultrahdr-core = { git = "https://github.com/imazen/ultrahdr", rev = "031d4a2070a522f82bd02aee712a2806a2c17bbd" }
+rav1d-safe = { git = "https://github.com/imazen/rav1d-safe" }
+heic = { git = "https://github.com/imazen/heic", rev = "3fe1110ce51b05f40580724f2c0beb7e5f043911" }

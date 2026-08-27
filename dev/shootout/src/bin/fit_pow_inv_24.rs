@@ -7,7 +7,7 @@
 //! `x^(1/2.4)`" section) used this tool to verify that no polyfit-derived
 //! polynomial replacement is throughput-positive vs the baseline.
 //!
-//! Run with `cargo run --example fit_pow_inv_24 --features __polyfit-tools
+//! Run with `cargo run --manifest-path dev/shootout/Cargo.toml --bin fit_pow_inv_24
 //! --release`. The output is a block of `const [f32; N]` arrays meant to
 //! be pasted into `src/simd/curves.rs` if a future polyfit/magetypes update
 //! changes the precision/throughput balance.

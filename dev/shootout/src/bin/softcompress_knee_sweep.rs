@@ -19,8 +19,8 @@
 //!
 //! Run:
 //! ```text
-//! nice -n19 ionice -c3 cargo run --release \
-//!   --example softcompress_knee_sweep --features hdr-shootout
+//! nice -n19 ionice -c3 cargo run --manifest-path dev/shootout/Cargo.toml --release \
+//!   --bin softcompress_knee_sweep
 //! ```
 //!
 //! Output: `benchmarks/softcompress_knee_sweep_2026-06-23.csv`.
@@ -35,11 +35,11 @@ use zenpixels_convert::PixelBufferConvertExt;
 use zenpixels_convert::gamut as zgamut;
 use zenpixels_convert::hdr::{Bt2446A, CllMeasure, LightLevelMethod, SoftCompress};
 use zenpixels_convert::oklab as zoklab;
+use zenpixels_dev::ColorPrimaries;
 use zenpixels_dev::DiffuseWhite;
 use zenpixels_dev::buffer::PixelBuffer;
 use zenpixels_dev::descriptor::{ChannelLayout, ChannelType, PixelDescriptor, TransferFunction};
 use zenpixels_dev::hdr::ContentLightLevel;
-use zenpixels_dev::ColorPrimaries;
 
 // =========================================================================
 // Paths / constants
@@ -308,10 +308,11 @@ fn apply_softcompress_bt709(rgb: &mut [f32], knee: f32) {
     let m1 = zoklab::rgb_to_lms_matrix(ColorPrimaries::Bt709).unwrap();
     let m1_inv = zoklab::lms_to_rgb_matrix(ColorPrimaries::Bt709).unwrap();
     let compressor = SoftCompress::from_matrices(&m1, &m1_inv, knee);
-    rgb.par_chunks_mut(METRIC_CHUNK_PIXELS * 3).for_each(|chunk| {
-        let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(chunk);
-        compressor.apply_strip(strip);
-    });
+    rgb.par_chunks_mut(METRIC_CHUNK_PIXELS * 3)
+        .for_each(|chunk| {
+            let strip: &mut [[f32; 3]] = bytemuck::cast_slice_mut(chunk);
+            compressor.apply_strip(strip);
+        });
 }
 
 // =========================================================================
@@ -378,10 +379,7 @@ fn compute_clip_stats(rgb: &[f32]) -> (u64, [f32; 4]) {
 /// Compute OKLch C distribution vs. baseline. Returns (mean_compression_pct,
 /// peak_compression_pct). Mean is over pixels where baseline C > 1e-4
 /// (skipping achromatic).
-fn compute_chroma_compression(
-    baseline: &[f32],
-    candidate: &[f32],
-) -> (f64, f64, Vec<u64>, u64) {
+fn compute_chroma_compression(baseline: &[f32], candidate: &[f32]) -> (f64, f64, Vec<u64>, u64) {
     let m1 = zoklab::rgb_to_lms_matrix(ColorPrimaries::Bt709).unwrap();
     let chunk_floats = METRIC_CHUNK_PIXELS * 3;
 
@@ -423,8 +421,7 @@ fn compute_chroma_compression(
                     acc.2 += 1;
                     // Histogram chroma DELTA (positive when candidate < baseline).
                     let delta = (bc_chroma - cc_chroma).max(0.0) as f64;
-                    let bin = ((delta / CHROMA_HIST_BIN_WIDTH) as usize)
-                        .min(CHROMA_HIST_BINS - 1);
+                    let bin = ((delta / CHROMA_HIST_BIN_WIDTH) as usize).min(CHROMA_HIST_BINS - 1);
                     acc.3[bin] += 1;
                 }
             }
@@ -577,12 +574,7 @@ fn delta_e2000(lab1: [f32; 3], lab2: [f32; 3]) -> f32 {
 // Histogram → percentile (verbatim from audited shootout)
 // =========================================================================
 
-fn percentiles_from_hist_4(
-    hist: &[u64],
-    total: u64,
-    bin_width: f64,
-    nbins: usize,
-) -> [f32; 4] {
+fn percentiles_from_hist_4(hist: &[u64], total: u64, bin_width: f64, nbins: usize) -> [f32; 4] {
     if total == 0 {
         return [0.0, 0.0, 0.0, 0.0];
     }
@@ -635,10 +627,7 @@ struct SampleResult {
     cells: Vec<CellMetrics>,
 }
 
-fn run_sample(
-    path: &Path,
-    fmt_label: &str,
-) -> anyhow::Result<SampleResult> {
+fn run_sample(path: &Path, fmt_label: &str) -> anyhow::Result<SampleResult> {
     let bytes = fs::read(path)?;
     let hdr = decode_sample(&bytes)?;
     let hdr_max_raw = hdr.px.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -803,7 +792,10 @@ fn main() -> anyhow::Result<()> {
     refresh_lock("scanning-corpus");
     println!("Scanning corpus at {}...", SAMPLES_ROOT);
     let all_files = collect_samples();
-    println!("  Found {} candidate files (.jpg/.jpeg/.heic)", all_files.len());
+    println!(
+        "  Found {} candidate files (.jpg/.jpeg/.heic)",
+        all_files.len()
+    );
 
     let mut work_list: Vec<(PathBuf, String)> = Vec::new();
     for path in &all_files {
@@ -836,9 +828,13 @@ fn main() -> anyhow::Result<()> {
             if idx % 5 == 0 {
                 refresh_lock(&format!("knee-sweep-{}-of-{}", idx + 1, total));
             }
-            println!("=== [{}/{}] {} ({}) ===", idx + 1, total,
-                     path.file_name().unwrap_or_default().to_string_lossy(),
-                     fmt_label);
+            println!(
+                "=== [{}/{}] {} ({}) ===",
+                idx + 1,
+                total,
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                fmt_label
+            );
             match run_sample(path, fmt_label) {
                 Ok(r) => Ok(r),
                 Err(e) => {

@@ -1,7 +1,7 @@
 # Bt2446A: percentile p=0.99999 vs p=0.9999 (`measure_robust`)
 
 **Date:** 2026-06-22
-**Source code:** `examples/shootout_p99999_only.rs` (env-driven; both runs from the same binary)
+**Source code:** `dev/shootout/src/bin/shootout_p99999_only.rs` (env-driven; both runs from the same binary)
 **Corpus:** 76 gain-mapped samples from `/home/lilith/work/codec-corpus/imazen-26/`
 
 Both runs use the same Bt2446A pipeline as `hdr_tone_map_shootout_full.rs` and the same CIE2000 implementation (linear-RGB → CIE Lab D65 → CIE2000), so deltas measure ONLY the peak-percentile change.
@@ -136,9 +136,9 @@ Both runs use the same Bt2446A pipeline as `hdr_tone_map_shootout_full.rs` and t
 cd /home/lilith/work/zen/zentone
 # Baseline (p=0.9999, equivalent to measure_robust):
 SHOOTOUT_PERCENTILE=0.9999 SHOOTOUT_CSV_PATH=benchmarks/shootout_robust_2026-06-22.csv \
-  cargo run --release --example shootout_p99999_only --features hdr-shootout
+  cargo run --manifest-path dev/shootout/Cargo.toml --release --bin shootout_p99999_only
 # Candidate (p=0.99999):
-cargo run --release --example shootout_p99999_only --features hdr-shootout
+cargo run --manifest-path dev/shootout/Cargo.toml --release --bin shootout_p99999_only
 # Compare:
 python3 /tmp/build_comparison.py
 ```

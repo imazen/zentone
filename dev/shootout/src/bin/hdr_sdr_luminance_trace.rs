@@ -7,8 +7,8 @@
 //!
 //! Run:
 //! ```text
-//! nice -n19 cargo run --example hdr_sdr_luminance_trace --release \
-//!   --features hdr-shootout -- \
+//! nice -n19 cargo run --bin hdr_sdr_luminance_trace --release \
+//!   --manifest-path dev/shootout/Cargo.toml -- \
 //!   /home/lilith/work/codec-corpus/imazen-26/1400-lilith-nature/1542_nature_orange-lily-flower_belltown-seattle-washington_ip16pro_iso80-f1p8_img-9149_5712x4284.heic
 //! ```
 

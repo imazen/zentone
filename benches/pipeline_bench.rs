@@ -25,8 +25,8 @@ use zentone::hlg::{
 };
 use zentone::pipeline::{tonemap_pq_row_simd, tonemap_pq_to_srgb8_row_simd};
 use zentone::{
-    AgxLook, Bt2408Tonemapper, Bt2446A, Bt2446B, Bt2446C, CompiledFilmicSpline, ToneMap,
-    ToneMapCurve, TonemapScratch,
+    AgxLook, Bt2408Tonemapper, Bt2446B, Bt2446C, CompiledFilmicSpline, ToneMap, ToneMapCurve,
+    TonemapScratch,
 };
 
 // ---------------------------------------------------------------------------
@@ -165,12 +165,8 @@ fn bench_pr4_curves(suite: &mut Suite) {
             bench_curve_map_strip_pair(g, "bt2408", || Bt2408Tonemapper::new(4000.0, 1000.0), w);
         }
     });
-    suite.group("pr4_bt2446a", |g| {
-        for &w in &WIDTHS {
-            g.throughput(Throughput::Elements(w as u64));
-            bench_curve_map_strip_pair(g, "bt2446a", || Bt2446A::new(1000.0, 203.0), w);
-        }
-    });
+    // `Bt2446A` moved to `zenpixels_convert::hdr` (commit bcad370); it is no
+    // longer benchmarked here.
     suite.group("pr4_bt2446b", |g| {
         for &w in &WIDTHS {
             g.throughput(Throughput::Elements(w as u64));
@@ -378,6 +374,9 @@ fn bench_hlg_ootf_approx(suite: &mut Suite) {
 // from `zentone::curves`.
 // ---------------------------------------------------------------------------
 
+// The deprecated Reinhard curves stay in the scalar baseline on purpose: the
+// bench compares every curve family until they are removed.
+#[allow(deprecated)]
 fn pr1_scalar_loop(name: &str, row: &mut [f32]) {
     match name {
         "reinhard_simple" => {
@@ -396,7 +395,7 @@ fn pr1_scalar_loop(name: &str, row: &mut [f32]) {
             }
         }
         "aces_ap1" => {
-            for c in row.chunks_exact_mut(3) {
+            for c in row.as_chunks_mut::<3>().0 {
                 let o = zentone::curves::aces_ap1([c[0], c[1], c[2]]);
                 c[0] = o[0];
                 c[1] = o[1];
@@ -404,7 +403,7 @@ fn pr1_scalar_loop(name: &str, row: &mut [f32]) {
             }
         }
         "agx" => {
-            for c in row.chunks_exact_mut(3) {
+            for c in row.as_chunks_mut::<3>().0 {
                 let o = zentone::curves::agx_tonemap([c[0], c[1], c[2]], AgxLook::Default);
                 c[0] = o[0];
                 c[1] = o[1];

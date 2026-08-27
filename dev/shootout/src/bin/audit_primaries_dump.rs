@@ -7,8 +7,8 @@
 //!
 //! Run:
 //! ```text
-//! nice -n19 cargo run -p zentone --release \
-//!   --example audit_primaries_dump --features hdr-shootout
+//! nice -n19 cargo run --manifest-path dev/shootout/Cargo.toml --release \
+//!   --bin audit_primaries_dump
 //! ```
 
 use std::fs;

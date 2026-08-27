@@ -46,7 +46,7 @@ CSV (`2026-06-22-audited`); old rows lack this column.
 ## Audit findings (summary)
 
 Full audit: [`shootout_color_audit_2026-06-22.md`](./shootout_color_audit_2026-06-22.md).
-Spot-check via [`audit_primaries_dump.rs`](../examples/audit_primaries_dump.rs):
+Spot-check via [`audit_primaries_dump.rs`](../dev/shootout/src/bin/audit_primaries_dump.rs):
 
 | Codec | SDR primaries | HDR primaries (gain-map reconstruction) |
 |---|---|---|
@@ -345,8 +345,8 @@ A/B is the next test.)
 - **Wall-clock**: **2250 s ≈ 37.5 min** on Ryzen 9 7950X with 16 rayon
   threads (`RAYON_NUM_THREADS=16`, `nice -n19 ionice -c3`).
 - **Throughput**: ~30s/sample steady-state.
-- **Driver**: `examples/hdr_tone_map_shootout_audited.rs` (cargo
-  `--features hdr-shootout`)
+- **Driver**: `dev/shootout/src/bin/hdr_tone_map_shootout_audited.rs` (cargo
+  `--manifest-path dev/shootout/Cargo.toml --bin hdr_tone_map_shootout_audited`)
 - **CSV**: `benchmarks/hdr_tone_map_shootout_full_2026-06-22.csv`
 - **New column**: `color_handling_version = "2026-06-22-audited"` for
   merging with the 2026-06-20 baseline.
@@ -360,7 +360,7 @@ A/B is the next test.)
 
 ```bash
 nice -n19 ionice -c3 cargo build --release \
-  --example hdr_tone_map_shootout_audited --features hdr-shootout
+  --bin hdr_tone_map_shootout_audited
 RAYON_NUM_THREADS=16 nice -n19 ionice -c3 \
   ./target/release/examples/hdr_tone_map_shootout_audited
 

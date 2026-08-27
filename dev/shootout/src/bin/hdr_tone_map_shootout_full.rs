@@ -19,8 +19,8 @@
 //!
 //! Run:
 //! ```text
-//! nice -n19 cargo run -p zentone --release \
-//!   --example hdr_tone_map_shootout_full --features hdr-shootout
+//! nice -n19 cargo run --manifest-path dev/shootout/Cargo.toml --release \
+//!   --bin hdr_tone_map_shootout_full
 //! ```
 
 use std::collections::HashMap;
@@ -1457,10 +1457,10 @@ For each sample we:\n\
     // ==== Reproduce ====
     s.push_str("## Reproduce\n\n");
     s.push_str("```bash\n");
-    s.push_str("nice -n19 cargo build -p zentone --release \\\n");
-    s.push_str("  --example hdr_tone_map_shootout_full --features hdr-shootout\n");
-    s.push_str("nice -n19 cargo run -p zentone --release \\\n");
-    s.push_str("  --example hdr_tone_map_shootout_full --features hdr-shootout\n");
+    s.push_str("nice -n19 cargo build --manifest-path dev/shootout/Cargo.toml --release \\\n");
+    s.push_str("  --bin hdr_tone_map_shootout_full\n");
+    s.push_str("nice -n19 cargo run --manifest-path dev/shootout/Cargo.toml --release \\\n");
+    s.push_str("  --bin hdr_tone_map_shootout_full\n");
     s.push_str("```\n\n");
     s.push_str(
         "Sample inputs: `/home/lilith/work/codec-corpus/imazen-26/**/{*.jpg,*.jpeg,*.heic}`.\n",
@@ -1470,7 +1470,7 @@ For each sample we:\n\
         MONTAGES_DIR
     ));
     s.push_str(&format!("Full CSV: `{}`.\n", CSV_PATH));
-    s.push_str("Source: `examples/hdr_tone_map_shootout_full.rs`.\n");
+    s.push_str("Source: `dev/shootout/src/bin/hdr_tone_map_shootout_full.rs`.\n");
 
     fs::create_dir_all(Path::new(REPORT_PATH).parent().unwrap())?;
     fs::write(REPORT_PATH, s)?;

@@ -15,8 +15,8 @@
 //!
 //! Run:
 //! ```text
-//! nice -n19 cargo run -p zentone --release \
-//!   --example hdr_tone_map_shootout --features hdr-shootout
+//! nice -n19 cargo run --manifest-path dev/shootout/Cargo.toml --release \
+//!   --bin hdr_tone_map_shootout
 //! ```
 
 use std::fs;
@@ -1058,15 +1058,15 @@ SSIMULACRA2).\n\n",
     // --- Reproduce ---
     s.push_str("## Reproduce\n\n");
     s.push_str("```bash\n");
-    s.push_str("nice -n19 cargo run -p zentone --release \\\n");
-    s.push_str("  --example hdr_tone_map_shootout --features hdr-shootout\n");
+    s.push_str("nice -n19 cargo run --manifest-path dev/shootout/Cargo.toml --release \\\n");
+    s.push_str("  --bin hdr_tone_map_shootout\n");
     s.push_str("```\n\n");
     s.push_str("Sample inputs: `/mnt/v/input/gainmap-samples/{JPEG,AVIF}/*`.\n\n");
     s.push_str(&format!(
         "Per-sample × per-curve montages: `{}/<sample>__<curve_label>.png` (3 panels: producer SDR | our SDR | abs Δ×10).\n",
         MONTAGES_DIR
     ));
-    s.push_str("Source: `examples/hdr_tone_map_shootout.rs`.\n");
+    s.push_str("Source: `dev/shootout/src/bin/hdr_tone_map_shootout.rs`.\n");
 
     fs::create_dir_all(Path::new(REPORT_PATH).parent().unwrap())?;
     fs::write(REPORT_PATH, s)?;

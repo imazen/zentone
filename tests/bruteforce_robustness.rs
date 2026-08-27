@@ -177,7 +177,7 @@ fn map_row_edge_values_all_finite() {
         // RGBA path
         let mut row = row_rgba.clone();
         tm.map_row(&mut row, 4);
-        for (i, chunk) in row.chunks_exact(4).enumerate() {
+        for (i, chunk) in row.as_chunks::<4>().0.iter().enumerate() {
             for (ch, &v) in chunk.iter().take(3).enumerate() {
                 if v.is_nan() || v.is_infinite() {
                     failures.push(format!(

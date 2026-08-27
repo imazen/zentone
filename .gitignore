@@ -8,3 +8,5 @@ perf.data*
 __pycache__/
 *.pyc
 .jj/
+/dev/shootout/target
+/dev/shootout/Cargo.lock

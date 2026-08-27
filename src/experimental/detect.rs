@@ -178,6 +178,10 @@ mod tests {
             .collect()
     }
 
+    // Deliberately exercises the deprecated Reinhard curves: `detect_standard`
+    // must keep recognising them in third-party LUTs until they are removed in
+    // the next breaking release.
+    #[allow(deprecated)]
     #[test]
     fn detect_reinhard() {
         let lut = generate_lut(4.0, reinhard_simple);
@@ -204,6 +208,10 @@ mod tests {
         assert_eq!(result.unwrap().name, "HableFilmic");
     }
 
+    // Deliberately exercises the deprecated Reinhard curves: `detect_standard`
+    // must keep recognising them in third-party LUTs until they are removed in
+    // the next breaking release.
+    #[allow(deprecated)]
     #[test]
     fn detect_extended_reinhard() {
         let l_max = 4.0;
