@@ -169,7 +169,12 @@ required-features = ["experimental"]
 # zenwebp, etc.) are intentionally omitted so cargo doesn't warn about
 # "patch never used".
 [patch.crates-io]
-zenjpeg = { git = "https://github.com/imazen/zenjpeg" }
+# Pinned: zencodecs (path dev-dep) requires `zenjpeg ^0.8.4` with the
+# `recompress` feature. zenjpeg `main` bumped to 0.9.0 on 2026-07-28, so an
+# unpinned patch no longer satisfies `^0.8.4`, cargo falls back to crates.io
+# 0.8.4 (no `recompress`) and the whole dev-dep graph fails to resolve. Rev
+# 9835cf5 is zenjpeg 0.8.7 — the same rev zenpipe's own Cargo.lock pins.
+zenjpeg = { git = "https://github.com/imazen/zenjpeg", rev = "9835cf5ec8ee65e4d4c2eae55969599ef3878267" }
 # `zenpixels` and `zenpixels-convert` patches are needed locally so the
 # `hdr-shootout` example sees the same version of `zenpixels` through both
 # its direct dev-dep path and the transitive `zencodecs` graph. Without this,
@@ -180,6 +185,10 @@ zenjpeg = { git = "https://github.com/imazen/zenjpeg" }
 # so downstream consumers see no trace of these.
 zenpixels = { path = "../zenpixels/zenpixels" }
 zenpixels-convert = { path = "../zenpixels/zenpixels-convert" }
-ultrahdr-core = { git = "https://github.com/imazen/ultrahdr" }
+# Pinned to the same revs zenpipe's Cargo.lock resolves (ultrahdr-core 0.5.0,
+# heic 0.2.0). Unpinned `main` of each drifted apart (ultrahdr `main` is 0.6.0,
+# which `^0.5.0` rejects, while heic `main` calls 0.6.0-only APIs), so a fresh
+# resolve of this dev-dep graph failed to compile `heic`.
+ultrahdr-core = { git = "https://github.com/imazen/ultrahdr", rev = "031d4a2070a522f82bd02aee712a2806a2c17bbd" }
 rav1d-safe = { git = "https://github.com/imazen/rav1d-safe" }
-heic = { git = "https://github.com/imazen/heic" }
+heic = { git = "https://github.com/imazen/heic", rev = "3fe1110ce51b05f40580724f2c0beb7e5f043911" }

@@ -8,6 +8,20 @@
 use crate::math::{expf, log2f, powf, sqrtf};
 use crate::{LUMA_BT709, ToneMap};
 
+/// Magnitude cap on the per-channel chrominance ratios `rgb / norm`.
+///
+/// `norm` is floored at `1.525879e-05` (2⁻¹⁶), so a channel beyond ≈5e33
+/// divides to ±Inf. The "preserve chrominance" shift that follows subtracts
+/// the minimum ratio from every channel, and `+Inf - (-Inf)` is NaN — which
+/// `clamp` then passes straight through to the output (fuzz_curves crash
+/// zentone#24, input `[-1.71e38, 0, 6.6e35]`). Capping at `f32::MAX / 4`
+/// keeps the shifted ratios (≤ 2·limit) and the desaturation blend
+/// (`ratio·desat + (1 - desat)`, ≤ 2·limit) finite for every finite input,
+/// and is a no-op for any ratio a real image can produce. Shared by the
+/// scalar path and both halves of the SIMD strip kernel so they stay
+/// bit-identical.
+pub(crate) const FILMIC_RATIO_LIMIT: f32 = f32::MAX / 4.0;
+
 /// Filmic spline configuration parameters.
 ///
 /// The rational spline math follows darktable's `filmicrgb.c` (V3 path,
@@ -318,7 +332,14 @@ impl ToneMap for CompiledFilmicSpline {
     fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
         let mut norm = (rgb[0] * self.luma[0] + rgb[1] * self.luma[1] + rgb[2] * self.luma[2])
             .max(1.525879e-05);
-        let mut ratios = [rgb[0] / norm, rgb[1] / norm, rgb[2] / norm];
+        // Bound the chrominance ratios before the negative-shift so a huge
+        // channel over a floored `norm` cannot overflow to ±Inf and then turn
+        // into NaN (Inf - Inf) in the shift below. See `FILMIC_RATIO_LIMIT`.
+        let mut ratios = [
+            (rgb[0] / norm).clamp(-FILMIC_RATIO_LIMIT, FILMIC_RATIO_LIMIT),
+            (rgb[1] / norm).clamp(-FILMIC_RATIO_LIMIT, FILMIC_RATIO_LIMIT),
+            (rgb[2] / norm).clamp(-FILMIC_RATIO_LIMIT, FILMIC_RATIO_LIMIT),
+        ];
         let min_ratio = ratios[0].min(ratios[1]).min(ratios[2]);
         if min_ratio < 0.0 {
             ratios[0] -= min_ratio;
@@ -347,6 +368,52 @@ impl ToneMap for CompiledFilmicSpline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// zentone#24: a huge negative channel over the floored `norm` used to
+    /// divide to -Inf, and the chrominance shift then produced Inf - Inf = NaN
+    /// on every channel. Covers the scalar `map_rgb`, the SIMD strip kernel's
+    /// 8-wide main loop, and its scalar remainder — all three must agree and
+    /// all three must be finite.
+    #[test]
+    fn extreme_ratio_input_is_finite_and_simd_matches_scalar() {
+        let spline = CompiledFilmicSpline::new(&FilmicSplineConfig::default());
+        // The fuzz-farm repro pixel (fuzz/regression/..._zentone24), plus the
+        // mirrored case and both extremes on every channel.
+        let inputs: [[f32; 3]; 6] = [
+            [-1.714_704e38, 0.0, 6.646_139_6e35],
+            [6.646_139_6e35, 0.0, -1.714_704e38],
+            [f32::MAX, -f32::MAX, 0.0],
+            [-f32::MAX, f32::MAX, f32::MAX],
+            [0.0, 0.0, -f32::MAX],
+            [1.0e-30, -1.0e30, 1.0e30],
+        ];
+        for &rgb in &inputs {
+            let out = spline.map_rgb(rgb);
+            assert!(
+                out.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
+                "map_rgb({rgb:?}) = {out:?}"
+            );
+        }
+        // 9 pixels: one full 8-wide SIMD chunk plus a 1-pixel scalar remainder.
+        let mut strip = [[0.0f32; 3]; 9];
+        let mut expected = [[0.0f32; 3]; 9];
+        for i in 0..9 {
+            strip[i] = inputs[i % inputs.len()];
+            expected[i] = spline.map_rgb(strip[i]);
+        }
+        spline.map_strip_simd(&mut strip);
+        for (i, (got, want)) in strip.iter().zip(&expected).enumerate() {
+            assert!(got.iter().all(|v| v.is_finite()), "strip[{i}] = {got:?}");
+            for c in 0..3 {
+                assert!(
+                    (got[c] - want[c]).abs() <= 1e-5,
+                    "strip[{i}][{c}]: simd {} vs scalar {}",
+                    got[c],
+                    want[c]
+                );
+            }
+        }
+    }
 
     #[test]
     fn default_compiles() {

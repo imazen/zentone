@@ -13,6 +13,33 @@ adheres to semver.
 
 - Remove the `#[deprecated]` + `#[doc(hidden)]` Reinhard curve family from `curves::*` (`reinhard_simple`, `reinhard_extended`, `reinhard_jodie`) and the matching `ToneMapCurve::Reinhard`, `ToneMapCurve::ExtendedReinhard`, `ToneMapCurve::ReinhardJodie`, `ToneMapCurve::TunedReinhard` enum variants. Production HDR→SDR is `zenpixels_convert::hdr::Bt2446A`; see the 0.2.0 "Deprecated" section for the empirical basis.
 
+### Fixed
+
+- `CompiledFilmicSpline` returned NaN on every channel for a huge negative
+  channel over the floored luminance norm (`rgb / norm` overflowed to -Inf and
+  the chrominance-preserving shift computed `Inf - Inf`): the ratios are now
+  capped at `±f32::MAX / 4` in the scalar `map_rgb` and both halves of the
+  SIMD strip kernel, which is a no-op for any ratio a real image can produce.
+  Fuzz-farm crash `fuzz_curves` #24, arm64 repro replayed locally on aarch64.
+- `curves::aces_ap1` (and `ToneMapCurve::AcesAp1`) emitted -Inf when an AP1
+  intermediate exceeded ≈1.84e19: the rational fit's `x²` term overflowed.
+  Intermediates are now capped at 2⁶⁰, below f32 resolution of the fit's
+  saturated tail, so output is bit-identical for every input that did not
+  overflow before. Second root cause behind #24 (same fuzz assert as #21).
+- `fuzz/fuzz_targets/fuzz_curves.rs` no longer references `Bt2446A` (moved to
+  `zenpixels-convert` in 0.2.0) and builds again; its slot in the variant
+  table now holds `Bt2446B` so the committed seeds keep targeting the same
+  curves. The body moved to `fuzz_curves_core.rs`, shared via `include!` with
+  the new stable-toolchain replay harness `tests/fuzz_regression.rs`, which
+  runs every `fuzz/regression/` seed on every `cargo test` (the #21 seed was
+  previously not gated by anything). All 126,674 archived `fuzz_curves` farm
+  crash inputs (arm64 + x86_64) replay clean through it on aarch64.
+- Dev-dependency graph resolves again: the `[patch.crates-io]` git entries for
+  `zenjpeg`, `ultrahdr-core`, and `heic` are pinned to the revs zenpipe's own
+  lockfile uses (their unpinned `main` branches had drifted past the version
+  requirements of the `zencodecs` path dev-dep, so `cargo test` could not
+  resolve at all on a fresh checkout).
+
 ### Documentation
 
 - README overhaul: linked badge row with the dual-license (AGPL-3.0 / Commercial) badge, `## Quick start` (version `0.2`) with current-API examples, corrected Reinhard wording (the `ToneMapCurve::Reinhard*` variants are queued-for-removal, not attribute-`#[deprecated]` — only the free functions are), a `crates.io:skip` Benchmarks section, and the crosslink footer; split the crates.io README into a generated badge-free `README.crates.md` and set `readme = "README.crates.md"`.

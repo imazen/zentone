@@ -21,6 +21,7 @@
 //! path safely. Once magetypes adds the impl, every kernel here gains the
 //! v4 tier on the next bump with zero source changes.
 
+use crate::filmic_spline::FILMIC_RATIO_LIMIT;
 use crate::math::{expf, log2f, sqrtf};
 
 // ============================================================================
@@ -595,6 +596,8 @@ pub(crate) fn filmic_spline_tier(token: Token, row: &mut [[f32; 3]], p: &FilmicS
     let sat = f32x8::splat(token, p.saturation);
     let sat2 = f32x8::splat(token, 0.5 / sqrtf(p.saturation));
     let inv_ln2 = f32x8::splat(token, 1.0 / core::f32::consts::LN_2);
+    let ratio_lim = f32x8::splat(token, FILMIC_RATIO_LIMIT);
+    let neg_ratio_lim = f32x8::splat(token, -FILMIC_RATIO_LIMIT);
 
     let mut iter = row.chunks_exact_mut(8);
     for chunk in &mut iter {
@@ -612,9 +615,11 @@ pub(crate) fn filmic_spline_tier(token: Token, row: &mut [[f32; 3]], p: &FilmicS
 
         let norm0 = (lr * r + lg * g + lb * b).max(norm_floor);
         let inv_norm = one / norm0;
-        let mut rr = r * inv_norm;
-        let mut rg = g * inv_norm;
-        let mut rb = b * inv_norm;
+        // Same ±FILMIC_RATIO_LIMIT cap as the scalar path (zentone#24): keeps
+        // the negative-shift and the desaturation blend finite.
+        let mut rr = (r * inv_norm).max(neg_ratio_lim).min(ratio_lim);
+        let mut rg = (g * inv_norm).max(neg_ratio_lim).min(ratio_lim);
+        let mut rb = (b * inv_norm).max(neg_ratio_lim).min(ratio_lim);
         let min_ratio = rr.min(rg).min(rb);
         let neg_mask = min_ratio.simd_lt(zero);
         rr = f32x8::blend(neg_mask, rr - min_ratio, rr);
@@ -670,7 +675,11 @@ pub(crate) fn filmic_spline_tier(token: Token, row: &mut [[f32; 3]], p: &FilmicS
     for px in iter.into_remainder().iter_mut() {
         let mut norm =
             (px[0] * p.luma[0] + px[1] * p.luma[1] + px[2] * p.luma[2]).max(1.525879e-05);
-        let mut ratios = [px[0] / norm, px[1] / norm, px[2] / norm];
+        let mut ratios = [
+            (px[0] / norm).clamp(-FILMIC_RATIO_LIMIT, FILMIC_RATIO_LIMIT),
+            (px[1] / norm).clamp(-FILMIC_RATIO_LIMIT, FILMIC_RATIO_LIMIT),
+            (px[2] / norm).clamp(-FILMIC_RATIO_LIMIT, FILMIC_RATIO_LIMIT),
+        ];
         let min_ratio = ratios[0].min(ratios[1]).min(ratios[2]);
         if min_ratio < 0.0 {
             ratios[0] -= min_ratio;

@@ -7,3 +7,4 @@ perf.data*
 .workongoing.ts
 __pycache__/
 *.pyc
+.jj/

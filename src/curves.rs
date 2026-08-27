@@ -244,6 +244,10 @@ pub fn hable_filmic(v: f32) -> f32 {
     (partial(v * EXPOSURE_BIAS) * W_SCALE).min(1.0)
 }
 
+/// Magnitude cap on the ACES AP1 intermediates inside [`aces_ap1`] (2⁶⁰).
+/// See the comment in the function body.
+const ACES_AP1_LIMIT: f32 = 1_152_921_504_606_846_976.0;
+
 /// ACES AP1 filmic tone mapping (Krzysztof Narkowicz fit, RRT+ODT).
 ///
 /// **Near-black negativity:** The RRT's `−0.000090537` offset causes
@@ -252,9 +256,18 @@ pub fn hable_filmic(v: f32) -> f32 {
 /// pipeline requires non-negative output.
 #[allow(clippy::excessive_precision)]
 pub fn aces_ap1(rgb: [f32; 3]) -> [f32; 3] {
-    let a = 0.59719 * rgb[0] + 0.35458 * rgb[1] + 0.04823 * rgb[2];
-    let b = 0.07600 * rgb[0] + 0.90834 * rgb[1] + 0.01566 * rgb[2];
-    let c = 0.02840 * rgb[0] + 0.13383 * rgb[1] + 0.83777 * rgb[2];
+    // Cap the AP1 intermediates so the rational fit's `x²` terms cannot
+    // overflow f32 (|x| ≳ 1.84e19 → +Inf, and the odd-signed output matrix
+    // then emits -Inf; fuzz_curves crash zentone#24, input ≈ [-3.1e19, …]).
+    // The fit converges to 1/0.983729 as |x| → ∞ with relative deviation
+    // ~0.44/|x|, so at 2⁶⁰ the cap is below f32 resolution — bit-identical
+    // output for every input that did not overflow before.
+    let a = (0.59719 * rgb[0] + 0.35458 * rgb[1] + 0.04823 * rgb[2])
+        .clamp(-ACES_AP1_LIMIT, ACES_AP1_LIMIT);
+    let b = (0.07600 * rgb[0] + 0.90834 * rgb[1] + 0.01566 * rgb[2])
+        .clamp(-ACES_AP1_LIMIT, ACES_AP1_LIMIT);
+    let c = (0.02840 * rgb[0] + 0.13383 * rgb[1] + 0.83777 * rgb[2])
+        .clamp(-ACES_AP1_LIMIT, ACES_AP1_LIMIT);
     let ra = a * (a + 0.0245786) - 0.000090537;
     let rb = a * (a * 0.983729 + 0.4329510) + 0.238081;
     let ga = b * (b + 0.0245786) - 0.000090537;
@@ -890,6 +903,32 @@ mod tests {
             y_overexposed > 0.55,
             "x=0.50 over-exposes mid-grey (>0.55), got {y_overexposed}"
         );
+    }
+
+    /// zentone#24: the rational fit's x² terms overflowed for |AP1| ≳ 1.84e19
+    /// and the output matrix turned +Inf into -Inf.
+    #[test]
+    fn aces_ap1_extreme_input_is_finite() {
+        let inputs: [[f32; 3]; 6] = [
+            [-3.110_601e19, -7.670_192_6e15, -7.664_949_5e15],
+            [-3.112_891_8e19, 5.822_56e-39, 4.035_7e-41],
+            [f32::MAX, f32::MAX, f32::MAX],
+            [-f32::MAX, -f32::MAX, -f32::MAX],
+            [f32::MAX, -f32::MAX, 0.0],
+            [0.0, 1.0e20, -1.0e20],
+        ];
+        for &rgb in &inputs {
+            let out = aces_ap1(rgb);
+            assert!(
+                out.iter().all(|v| v.is_finite()),
+                "aces_ap1({rgb:?}) = {out:?}"
+            );
+        }
+        // The cap is invisible for ordinary HDR input: 1e6 is far below 2⁶⁰
+        // yet already deep in the fit's saturated tail.
+        let hi = aces_ap1([1.0e6, 1.0e6, 1.0e6]);
+        let hi2 = aces_ap1([1.0e12, 1.0e12, 1.0e12]);
+        assert_eq!(hi, hi2, "saturated tail must be flat: {hi:?} vs {hi2:?}");
     }
 
     #[test]
