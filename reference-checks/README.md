@@ -33,6 +33,7 @@ reference-checks/
 ├── libavif_apply_gain.cpp          libavif gain-map weight + apply
 ├── libplacebo_bt2390.cpp           libplacebo BT.2390 EETF
 ├── darktable_filmic.cpp            darktable filmic spline
+├── aces2_ocio_reference.py         ACES 2.0 stages via OpenColorIO >= 2.4 built-ins (Python)
 └── golden/
     ├── libultrahdr_reinhard.csv
     ├── libultrahdr_apply_gain.csv
@@ -42,8 +43,22 @@ reference-checks/
     ├── libultrahdr_hlg_ootf.csv
     ├── libavif_apply_gain.csv
     ├── libplacebo_bt2390.csv
-    └── darktable_filmic.csv
+    ├── darktable_filmic.csv
+    ├── aces2_ocio_jmh.csv                   RGB -> Hellwig JMh, four input primaries
+    ├── aces2_ocio_tonescale_compress.csv    JMh -> tonescaled + chroma-compressed JMh
+    ├── aces2_ocio_gamut_compress.csv        JMh -> gamut-compressed JMh
+    ├── aces2_ocio_output_transform.csv      AP0 -> display-linear RGB (forward)
+    └── aces2_ocio_output_transform_inv.csv  display-linear RGB -> AP0 (inverse)
 ```
+
+The ACES 2.0 goldens are the exception to the "C++ excerpt" rule: the
+reference there is the Academy's CTL (`aces-core/lib/Lib.Academy.*.ctl`),
+and OpenColorIO's ACES 2.0 fixed functions are a maintained port of it that
+exposes every stage. `aces2_ocio_reference.py` drives them through a raw
+OCIO config (`uv pip install opencolorio numpy`; deterministic sample set).
+The consuming tests live in `src/experimental/aces2.rs` (unit tests, so
+they can reach the private stage functions) and run with
+`cargo test --features experimental`.
 
 Each `.cpp` file starts with a header block recording:
 
@@ -66,6 +81,7 @@ Each `.cpp` file starts with a header block recording:
 | libavif | `avifGetGainMapWeight` + `avifApplyGainPixel` | upstream extraction | (see `libavif_apply_gain.cpp`) |
 | libplacebo | BT.2390 EETF (PQ + scene-linear) | upstream extraction | (see `libplacebo_bt2390.cpp`) |
 | darktable | filmic spline | upstream extraction | (see `darktable_filmic.cpp`) |
+| ACES 2.0 (via OpenColorIO 2.5.2) | `RGB_to_JMh`, tonescale + chroma compression, gamut compression, full output transform fwd/inv | `aces-core/lib/Lib.Academy.OutputTransform.ctl`, OCIO `ops/fixedfunction/ACES2/` | OCIO tag `v2.5.2` |
 
 ## Regenerating the golden files
 

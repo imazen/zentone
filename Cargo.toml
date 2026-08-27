@@ -42,8 +42,8 @@ avx512 = ["archmage/avx512", "magetypes/avx512"]
 # disable the baseline SIMD token (NEON on aarch64) and measure a real scalar
 # arm. Never enable in a published build.
 _dev = ["archmage/testable_dispatch"]
-# Experimental APIs: AdaptiveTonemapper, StreamingTonemapper, ProfileToneCurve,
-# detect::*. Light test coverage; API and output may change without semver bumps
+# Experimental APIs: Aces2OutputTransform, AdaptiveTonemapper, StreamingTonemapper,
+# ProfileToneCurve, detect::*. Light test coverage; API and output may change without semver bumps
 # until stabilized. (The ISO 21496-1 / Apple Ultra HDR gain-map splitter formerly
 # gated here graduated to the always-available `gainmap` module.)
 experimental = []

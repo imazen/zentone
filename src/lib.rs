@@ -36,9 +36,9 @@
 //!   implementations. Calls inside an inner loop should usually go through
 //!   the row form instead.
 //! - **Experimental.** Behind the `experimental` feature, semver-unstable.
-//!   Covers the streaming tonemapper, the adaptive LUT fitter, and the DNG
-//!   `ProfileToneCurve`. APIs may change without semver bumps until
-//!   stabilized.
+//!   Covers the ACES 2.0 Output Transform, the streaming tonemapper, the
+//!   adaptive LUT fitter, and the DNG `ProfileToneCurve`. APIs may change
+//!   without semver bumps until stabilized.
 //!
 //! As of 0.2.0, the pipeline ships SIMD strip-form APIs only — the old
 //! `&[f32]` + `channels: u8` forms are not present. See `CHANGELOG.md`
@@ -71,8 +71,9 @@
 //!   gain) splitter for ISO 21496-1 / Apple Ultra HDR encoders, plus
 //!   companion [`LumaToneMap`] curve impls (`Bt2408Yrgb`,
 //!   `ExtendedReinhardLuma`, [`HableFilmic`]) and PQ/HLG row helpers.
-//! - **Experimental** (behind the `experimental` feature) — adaptive LUT
-//!   fitting, single-pass streaming tonemap with local adaptation, DNG
+//! - **Experimental** (behind the `experimental` feature) — ACES 2.0 Output
+//!   Transform (Hellwig JMh tonescale + chroma + gamut compression), adaptive
+//!   LUT fitting, single-pass streaming tonemap with local adaptation, DNG
 //!   ProfileToneCurve.
 //!
 //! # Quick start
@@ -181,6 +182,11 @@
 //!
 //! Behind a feature flag because the APIs are still in flux:
 //!
+//! - `experimental::Aces2OutputTransform` — the ACES 2.0 Output Transform:
+//!   ACES2065-1 in, display-linear RGB in a chosen limiting gamut out, with
+//!   tonescale, chroma compression, and gamut compression in Hellwig 2022
+//!   JMh. Forward and inverse, held to OpenColorIO's built-in ACES 2.0
+//!   fixed functions. Scalar only (no SIMD strip kernel yet).
 //! - `experimental::AdaptiveTonemapper` — fits a LUT from an HDR/SDR pair.
 //! - `experimental::StreamingTonemapper` — single-pass spatially-local
 //!   tonemap with bounded-memory pull API.

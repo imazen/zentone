@@ -70,7 +70,7 @@ The splitter emits raw f32 log2 gain; u8 quantization and gamma encoding are the
 - **Per-pixel reference.** `ToneMap::map_rgb`, the named-curve scalar functions in `curves` (`filmic_narkowicz`, `hable_filmic`, `aces_ap1`, `agx_tonemap`, `bt2390_tonemap`, …), `gamut::apply_matrix`, `gamut::soft_clip`. Suitable for one-off use, doctests, and cross-checks against external implementations. Don't put these in inner loops.
 - **Stateful tonemappers.** `Bt2408Tonemapper`, `Bt2446B`, `Bt2446C`, `CompiledFilmicSpline`. Constructed once with `(content_peak_nits, display_peak_nits)` (or a `FilmicSplineConfig`); apply via the `ToneMap` trait. For BT.2446 Method A, use [`zenpixels_convert::hdr::Bt2446A`](https://lib.rs/crates/zenpixels-convert) — it graduated to the convert crate where it composes with CLL measurement and primary conversion.
 - **Gain map splitter.** `LumaGainMapSplitter`, `LumaToneMap`, `SplitConfig`, `SplitStats`, plus the curve adapters `Bt2408Yrgb`, `ExtendedReinhardLuma`, `HableFilmic`, and the `LumaFn` closure wrapper.
-- **Experimental.** `experimental::AdaptiveTonemapper` (LUT fitter from an HDR/SDR pair), `experimental::StreamingTonemapper` (single-pass spatially-local tonemap), `experimental::ProfileToneCurve` (DNG camera-profile tone curve), `experimental::detect::detect_standard`. Feature-gated, semver-unstable.
+- **Experimental.** `experimental::Aces2OutputTransform` (ACES 2.0 Output Transform — Hellwig JMh tonescale, chroma and gamut compression, forward + inverse, parity-tested against OpenColorIO's built-ins), `experimental::AdaptiveTonemapper` (LUT fitter from an HDR/SDR pair), `experimental::StreamingTonemapper` (single-pass spatially-local tonemap), `experimental::ProfileToneCurve` (DNG camera-profile tone curve), `experimental::detect::detect_standard`. Feature-gated, semver-unstable.
 
 ## Curves
 
@@ -105,7 +105,7 @@ SIMD dispatch goes through [`archmage`](https://docs.rs/archmage) and [`magetype
 
 - `std` (default) — passes through to `linear-srgb`, `archmage`, and `magetypes`.
 - `avx512` (default) — gates the AVX-512 (`v4`) magetypes tier in `archmage` and `magetypes`. Disable to fall back to AVX2 as the top tier.
-- `experimental` — opt-in. Adds `AdaptiveTonemapper`, `StreamingTonemapper`, `ProfileToneCurve`, and `detect_standard`. Light test coverage; APIs may change without semver bumps until stabilized.
+- `experimental` — opt-in. Adds `Aces2OutputTransform`, `AdaptiveTonemapper`, `StreamingTonemapper`, `ProfileToneCurve`, and `detect_standard`. Light test coverage; APIs may change without semver bumps until stabilized.
 
 ## Compatibility
 

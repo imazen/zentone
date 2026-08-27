@@ -11,11 +11,13 @@
 //! here has graduated to the stable [`crate::gainmap`] module — no
 //! `experimental` feature gate required.
 
+mod aces2;
 mod adaptive;
 pub mod detect;
 mod profile;
 mod streaming;
 
+pub use aces2::{Aces2Config, Aces2OutputTransform, Chromaticities};
 pub use adaptive::{AdaptiveTonemapper, FitConfig, FitStats};
 pub use profile::{ProfileLuminance, ProfilePerChannel, ProfileToneCurve};
 pub use streaming::{StreamingTonemapConfig, StreamingTonemapper};
