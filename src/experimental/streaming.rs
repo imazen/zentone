@@ -627,15 +627,20 @@ mod tests {
             matches!(err, Error::InvalidConfig(msg) if msg.contains("grid")),
             "{err:?}"
         );
-        // Exactly at the boundary: 65536 × 65536 cells = 2³² overflows u32
-        // by one; 65536 × 65535 fits. Keep `cell_size` large so the row
-        // buffer stays tiny and the test does not actually allocate 2³² cells
-        // — the check happens before any allocation.
-        let big = StreamingTonemapConfig {
-            cell_size: u32::MAX,
-            ..StreamingTonemapConfig::default()
-        };
-        assert!(StreamingTonemapper::new(u32::MAX, 1, 3, big).is_ok());
+        // Accept side: a 16k × 16k image at the default cell size is a
+        // 2048 × 2048 cell grid and a 16384 · 3 · 64-element row buffer
+        // (12 MiB) — large, but real. The exact `u32` boundary on the accept
+        // side (65536 × 65535 cells) cannot be exercised here: `new` allocates
+        // the cell tables, so a fitting-by-one grid would need 2³² cells, and
+        // any `width` wide enough to matter makes the row buffer
+        // (`width · channels · lookahead_rows`) exceed what a test may
+        // allocate. (An earlier version asserted `is_ok()` for
+        // `width = u32::MAX`, which is a 3 TiB row buffer — it only "passed"
+        // on hosts that overcommit `calloc`, aborted on Linux / wasm, and
+        // legitimately returned `Err` on 32-bit targets.)
+        assert!(
+            StreamingTonemapper::new(16384, 16384, 3, StreamingTonemapConfig::default()).is_ok()
+        );
     }
 
     /// zentone#20: `width * channels * lookahead_rows` was unguarded. With a
