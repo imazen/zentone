@@ -18,6 +18,7 @@
 
 mod aces2;
 mod aces2_display;
+mod aces2_simd;
 pub mod aces_encodings;
 mod adaptive;
 pub mod detect;

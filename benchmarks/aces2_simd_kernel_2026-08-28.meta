@@ -1,0 +1,40 @@
+# zentone: ACES 2.0 Output Transform strip kernel — 16x faster than per-pixel scalar
+date:   2026-08-28
+host:   Apple M4 Pro (12 core), macOS, aarch64 (NEON tier; f32x8 = 2 x f32x4)
+build:  release, NO -C target-cpu=native
+commit: (the commit adding src/experimental/aces2_simd.rs; see git log)
+cmd:    cargo bench --bench pipeline_bench --features experimental
+        (groups aces2_sdr_rec709 / aces2_hdr_rec2020; full log ~/tmp/zentone-bench-aces2.log)
+input:  PQ ramp strip fed to `pipeline::tonemap_pq_row_simd` with the transform
+        as the curve — "scalar" = trait default per-pixel `forward` via a
+        ScalarFallback wrapper, "simd" = `map_strip_simd` override
+        (`experimental::aces2_simd::aces2_forward_tier`). Same fused PQ outer
+        kernel on both sides, so the delta is the transform alone.
+
+## Results (zenbench, mean ± MAD)
+
+  group              width   scalar        simd        speedup   simd ns/px
+  aces2 100nit 709    256    234.2 µs     14.3 µs     16.4x     56
+  aces2 100nit 709   1024    925.1 µs     56.5 µs     16.4x     55
+  aces2 100nit 709   4096   3704.9 µs    224.6 µs     16.5x     55
+  aces2 1000nit 2020  256    214.0 µs     14.4 µs     14.9x     56
+  aces2 1000nit 2020 1024    852.5 µs     56.7 µs     15.0x     55
+  aces2 1000nit 2020 4096   3403.6 µs    226.6 µs     15.0x     55
+
+Scalar: ~0.83-0.91 µs per pixel (libm powf x ~14, atan2, sin, cos, sqrt,
+per-pixel hue-table search). SIMD: ~55 ns per pixel, flat across widths
+(no per-call fixed cost visible at 256 px: 14.3 µs / 256 = 56 ns).
+
+The remaining per-lane scalar work in the kernel is the hue-table gather
+(reach M lerp + interval search + cusp/gamma lerps) — 8 scalar lookups per
+chunk. It was left single-sourced with the scalar transform on purpose.
+
+## Accuracy
+
+SIMD vs scalar forward: worst 1.1e-4 normalised error (|d| / (1 + |want|))
+over the 4 golden configurations x (296 golden inputs + 1000 log-uniform
+random + 100 slightly-negative + 7 hostile) — pinned by
+`aces2_simd::tests::strip_matches_scalar` (bound 2e-4 abs + 2e-4 rel,
+worst <= 1.5e-4). The kernel also passes the OpenColorIO forward golden
+(1e-3 + 1e-3 rel) directly. Not bit-identical: magetypes pow_midp /
+log2_midp / exp2_midp plus in-kernel minimax atan2 / sincos replace libm.

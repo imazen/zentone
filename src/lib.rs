@@ -186,7 +186,8 @@
 //!   ACES2065-1 in, display-linear RGB in a chosen limiting gamut out, with
 //!   tonescale, chroma compression, and gamut compression in Hellwig 2022
 //!   JMh. Forward and inverse, held to OpenColorIO's built-in ACES 2.0
-//!   fixed functions. Scalar only (no SIMD strip kernel yet).
+//!   fixed functions. `map_strip_simd` runs an eight-lane kernel (AVX2 /
+//!   NEON / WASM SIMD), ~16× the per-pixel scalar path.
 //! - `experimental::Aces2DisplayTransform` — an `Output.Academy.*` preset:
 //!   the rendering plus the display encoding (peak clamp, D60-sim white
 //!   scaling, encoding primaries, sRGB / gamma 2.2 / 2.6 / BT.1886 / ST

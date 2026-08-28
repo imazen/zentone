@@ -32,8 +32,10 @@
 //! 360-entry nominal table rather than the 362-entry padded one.
 //!
 //! **Cost.** Per pixel: two CAM transforms (4 `pow`), the tonescale (2
-//! `pow`), and the compression math — scalar only in this first cut, no SIMD
-//! strip kernel. Construction builds three 360-entry hue tables by bisection
+//! `pow`), and the compression math. [`ToneMap::map_strip_simd`] dispatches
+//! the eight-lane kernel in `aces2_simd` (measured 16× the scalar path on
+//! NEON, `benchmarks/aces2_simd_kernel_2026-08-28.meta`); `forward` /
+//! `map_rgb` stay scalar. Construction builds three 360-entry hue tables by bisection
 //! (reach M, display cusp, upper-hull gamma), on the order of 10⁵ CAM
 //! evaluations; build one transform per output configuration and reuse it.
 
@@ -51,8 +53,8 @@ const L_A: f32 = 100.0;
 const Y_B: f32 = 20.0;
 /// Dim surround.
 const SURROUND: [f32; 3] = [0.9, 0.59, 0.9];
-const J_SCALE: f32 = 100.0;
-const CAM_NL_OFFSET: f32 = 0.2713 * 100.0;
+pub(super) const J_SCALE: f32 = 100.0;
+pub(super) const CAM_NL_OFFSET: f32 = 0.2713 * 100.0;
 const CAM_NL_SCALE: f32 = 4.0 * 100.0;
 
 // Chroma compression.
@@ -63,13 +65,13 @@ const CHROMA_EXPAND_FACT: f32 = 0.69;
 const CHROMA_EXPAND_THR: f32 = 0.5;
 
 // Gamut compression.
-const SMOOTH_CUSPS: f32 = 0.12;
+pub(super) const SMOOTH_CUSPS: f32 = 0.12;
 const SMOOTH_M: f32 = 0.27;
 const CUSP_MID_BLEND: f32 = 1.3;
 const FOCUS_GAIN_BLEND: f32 = 0.3;
 const FOCUS_DISTANCE: f32 = 1.35;
 const FOCUS_DISTANCE_SCALING: f32 = 1.75;
-const COMPRESSION_THRESHOLD: f32 = 0.75;
+pub(super) const COMPRESSION_THRESHOLD: f32 = 0.75;
 
 // Tables.
 const TABLE_SIZE: usize = 360;
@@ -312,16 +314,16 @@ fn wrap_to_360(h: f32) -> f32 {
 
 /// Pre-computed CAM matrices and constants for one set of primaries.
 #[derive(Debug, Clone, Copy)]
-struct JmhParams {
-    rgb_to_cam16_c: Mat3,
-    cam16_c_to_rgb: Mat3,
-    cone_response_to_aab: Mat3,
-    aab_to_cone_response: Mat3,
-    f_l_n: f32,
-    cz: f32,
-    inv_cz: f32,
-    a_w_j: f32,
-    inv_a_w_j: f32,
+pub(super) struct JmhParams {
+    pub(super) rgb_to_cam16_c: Mat3,
+    pub(super) cam16_c_to_rgb: Mat3,
+    pub(super) cone_response_to_aab: Mat3,
+    pub(super) aab_to_cone_response: Mat3,
+    pub(super) f_l_n: f32,
+    pub(super) cz: f32,
+    pub(super) inv_cz: f32,
+    pub(super) a_w_j: f32,
+    pub(super) inv_a_w_j: f32,
 }
 
 #[inline]
@@ -506,17 +508,17 @@ impl JmhParams {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy)]
-struct TsParams {
-    n: f32,
-    n_r: f32,
-    g: f32,
-    t_1: f32,
-    c_t: f32,
-    s_2: f32,
-    u_2: f32,
-    m_2: f32,
-    forward_limit: f32,
-    log_peak: f32,
+pub(super) struct TsParams {
+    pub(super) n: f32,
+    pub(super) n_r: f32,
+    pub(super) g: f32,
+    pub(super) t_1: f32,
+    pub(super) c_t: f32,
+    pub(super) s_2: f32,
+    pub(super) u_2: f32,
+    pub(super) m_2: f32,
+    pub(super) forward_limit: f32,
+    pub(super) log_peak: f32,
 }
 
 impl TsParams {
@@ -759,12 +761,12 @@ fn compute_focus_j(cusp_j: f32, mid_j: f32, limit_j_max: f32) -> f32 {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct HueDependentGamutParams {
-    jm_cusp: [f32; 2],
-    gamma_bottom_inv: f32,
-    gamma_top_inv: f32,
-    focus_j: f32,
-    analytical_threshold: f32,
+pub(super) struct HueDependentGamutParams {
+    pub(super) jm_cusp: [f32; 2],
+    pub(super) gamma_bottom_inv: f32,
+    pub(super) gamma_top_inv: f32,
+    pub(super) focus_j: f32,
+    pub(super) analytical_threshold: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -1194,21 +1196,21 @@ struct Tables {
 #[derive(Debug, Clone)]
 pub struct Aces2OutputTransform {
     peak_luminance: f32,
-    input_params: JmhParams,
-    limit_params: JmhParams,
-    ts: TsParams,
-    ap0_to_ap1: Mat3,
-    ap1_to_ap0: Mat3,
-    limit_j_max: f32,
-    model_gamma_inv: f32,
+    pub(super) input_params: JmhParams,
+    pub(super) limit_params: JmhParams,
+    pub(super) ts: TsParams,
+    pub(super) ap0_to_ap1: Mat3,
+    pub(super) ap1_to_ap0: Mat3,
+    pub(super) limit_j_max: f32,
+    pub(super) model_gamma_inv: f32,
     // Chroma compression.
-    sat: f32,
-    sat_thr: f32,
-    compr: f32,
-    chroma_compress_scale: f32,
+    pub(super) sat: f32,
+    pub(super) sat_thr: f32,
+    pub(super) compr: f32,
+    pub(super) chroma_compress_scale: f32,
     // Gamut compression.
     mid_j: f32,
-    focus_dist: f32,
+    pub(super) focus_dist: f32,
     lower_hull_gamma_inv: f32,
     hue_linearity_search_range: [i32; 2],
     tables: Box<Tables>,
@@ -1406,7 +1408,7 @@ impl Aces2OutputTransform {
 
     // -- stages ------------------------------------------------------------
 
-    fn clamp_ap0_to_ap1(&self, aces: [f32; 3]) -> [f32; 3] {
+    pub(super) fn clamp_ap0_to_ap1(&self, aces: [f32; 3]) -> [f32; 3] {
         let ap1 = mul_vm(aces, &self.ap0_to_ap1);
         let lim = self.ts.forward_limit;
         // `max` then `min` so NaN lands on the lower bound.
@@ -1420,7 +1422,7 @@ impl Aces2OutputTransform {
 
     /// Reach gamut M at `limit_j_max` for hue `h` (1° table, linear).
     #[inline]
-    fn reach_m_from_table(&self, h: f32) -> f32 {
+    pub(super) fn reach_m_from_table(&self, h: f32) -> f32 {
         let base = (h.max(0.0) as usize).min(TABLE_SIZE - 1);
         let t = h - base as f32;
         let i_lo = base + BASE_INDEX;
@@ -1529,7 +1531,7 @@ impl Aces2OutputTransform {
         i_hi.max(1)
     }
 
-    fn hue_dependent_gamut_params(&self, hue: f32) -> HueDependentGamutParams {
+    pub(super) fn hue_dependent_gamut_params(&self, hue: f32) -> HueDependentGamutParams {
         let i_hi = self.lookup_hue_interval(hue);
         let h_lo = self.tables.hues[i_hi - 1];
         let h_hi = self.tables.hues[i_hi];
@@ -1640,6 +1642,17 @@ impl ToneMap for Aces2OutputTransform {
     #[inline]
     fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
         self.forward(rgb)
+    }
+
+    /// Eight-pixel SIMD port of [`forward`](Self::forward)
+    /// (`aces2_simd::aces2_forward_tier`); agrees with the scalar path to
+    /// the tolerance documented there. The strip's tail (`len % 8`) goes
+    /// through `map_rgb`.
+    fn map_strip_simd(&self, strip: &mut [[f32; 3]]) {
+        archmage::incant!(
+            super::aces2_simd::aces2_forward_tier(strip, self),
+            [v3, neon, wasm128, scalar]
+        );
     }
 }
 

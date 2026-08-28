@@ -5,7 +5,8 @@
 //! 1. **Curve `map_strip_simd` overrides** (PR4) — compares the per-pixel
 //!    `for px { *px = self.map_rgb(*px); }` default against each curve's
 //!    SIMD override, both routed through `pipeline::tonemap_pq_row_simd` so
-//!    only the curve step differs.
+//!    only the curve step differs. The `aces2_*` groups do the same for the
+//!    ACES 2.0 Output Transform (`experimental::Aces2OutputTransform`).
 //! 2. **Building blocks** (PR2) — `apply_matrix_row_simd`, `soft_clip_row_simd`,
 //!    `hlg_ootf_row_simd`, `hlg_ootf_approx_row_simd` each vs a per-pixel
 //!    reference loop.
@@ -17,6 +18,7 @@
 
 use zenbench::prelude::*;
 
+use zentone::experimental::{Aces2Config, Aces2OutputTransform, Chromaticities};
 use zentone::gamut::{
     BT2020_TO_BT709, apply_matrix, apply_matrix_row_simd, soft_clip, soft_clip_row_simd,
 };
@@ -186,6 +188,42 @@ fn bench_pr4_curves(suite: &mut Suite) {
                 g,
                 "filmic",
                 || CompiledFilmicSpline::for_hdr_peak(1000.0),
+                w,
+            );
+        }
+    });
+}
+
+// ACES 2.0 Output Transform: the scalar per-pixel `forward` (via
+// `ScalarFallback`) against the eight-lane `map_strip_simd` kernel in
+// `experimental::aces2_simd`, on the same fused PQ outer kernel. The PQ
+// strip is fed to the transform as if it were ACES2065-1; only timing
+// matters here, not the picture.
+fn bench_aces2(suite: &mut Suite) {
+    suite.group("aces2_sdr_rec709", |g| {
+        for &w in &WIDTHS {
+            g.throughput(Throughput::Elements(w as u64));
+            bench_curve_map_strip_pair(
+                g,
+                "aces2_100nit_rec709",
+                || Aces2OutputTransform::new(Aces2Config::default()).unwrap(),
+                w,
+            );
+        }
+    });
+    suite.group("aces2_hdr_rec2020", |g| {
+        for &w in &WIDTHS {
+            g.throughput(Throughput::Elements(w as u64));
+            bench_curve_map_strip_pair(
+                g,
+                "aces2_1000nit_rec2020",
+                || {
+                    Aces2OutputTransform::new(Aces2Config {
+                        peak_luminance: 1000.0,
+                        limiting_primaries: Chromaticities::REC2020,
+                    })
+                    .unwrap()
+                },
                 w,
             );
         }
@@ -459,6 +497,7 @@ fn bench_pr1_curves(suite: &mut Suite) {
 
 zenbench::main!(
     bench_pr4_curves,
+    bench_aces2,
     bench_e2e_pq_to_srgb8,
     bench_apply_matrix,
     bench_soft_clip,

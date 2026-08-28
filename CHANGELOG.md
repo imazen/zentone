@@ -28,7 +28,14 @@ adheres to semver.
   `reference-checks/aces2_ocio_reference.py`): JMh to 2e-3, tonescale/chroma
   and gamut stages to 5e-3, the full forward transform to 1e-3 (+1e-3 rel),
   the inverse to 2e-2 of pixel magnitude at its ill-conditioned extremes.
-  Scalar per-pixel only — no SIMD strip kernel; see #14 for the remaining scope.
+  `map_strip_simd` dispatches an eight-lane kernel (`aces2_simd`, AVX2 /
+  NEON / WASM SIMD / scalar tiers) that ports every stage lane-parallel
+  with masks for the CTL branches and scalar per-lane hue-table gathers;
+  measured 16× the per-pixel scalar path on Apple M4 Pro NEON (55 ns/px vs
+  0.9 µs/px, `benchmarks/aces2_simd_kernel_2026-08-28.meta`), pinned to
+  the scalar `forward` at 2e-4 (worst measured 1.1e-4) and to the
+  OpenColorIO forward golden directly. `benches/pipeline_bench.rs` gains
+  `aces2_sdr_rec709` / `aces2_hdr_rec2020` scalar-vs-SIMD groups.
 - `experimental::Aces2DisplayTransform` + `Aces2DisplayEncoding` +
   `DisplayEotf` — the display-encoding half of the ACES 2.0 output presets
   (`Lib.Academy.DisplayEncoding.ctl` and the `aces-output` `Output.Academy.*`
