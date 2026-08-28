@@ -55,6 +55,12 @@ pub struct Bt2446B {
     /// Log compression parameters above breakpoint.
     log_scale: f32,
     log_offset: f32,
+    /// `ln(breakpoint)`, so the log branch is `ln(y) - ln(breakpoint)` rather
+    /// than `ln(y / breakpoint)`: the quotient overflows to +Inf once
+    /// `y > breakpoint * f32::MAX` (a 4e37 channel does it at the default
+    /// 4000/100-nit breakpoint of 0.0195), and `ln(+Inf)` turned the
+    /// luminance ratio infinite and a zero channel into NaN (zentone#25/#26).
+    ln_breakpoint: f32,
 }
 
 impl Bt2446B {
@@ -87,32 +93,58 @@ impl Bt2446B {
             gain,
             log_scale,
             log_offset,
+            ln_breakpoint: libm::logf(breakpoint),
         }
     }
 }
 
+/// One pixel of Method B; the scalar reference shared by `map_rgb` and the
+/// SIMD kernel's remainder loop. Total for every finite input.
+#[inline]
+pub(crate) fn bt2446b_scalar(
+    rgb: [f32; 3],
+    breakpoint: f32,
+    gain: f32,
+    log_scale: f32,
+    log_offset: f32,
+    ln_breakpoint: f32,
+) -> [f32; 3] {
+    // BT.2020 luminance. `min(f32::MAX)` keeps three huge finite channels
+    // from summing to +Inf, which would make the ratio below Inf/Inf = NaN.
+    let y = (0.2627 * rgb[0] + 0.6780 * rgb[1] + 0.0593 * rgb[2]).min(f32::MAX);
+    if y <= 0.0 {
+        return [0.0, 0.0, 0.0];
+    }
+
+    // Tone map luminance. See `ln_breakpoint` for why the log branch is a
+    // difference of logs and not `ln(y / breakpoint)`.
+    let y_sdr = if y < breakpoint {
+        gain * y
+    } else {
+        log_scale * (libm::logf(y) - ln_breakpoint) + log_offset
+    };
+
+    // Scale all channels by the luminance ratio. `y_sdr` is finite for every
+    // finite `y > 0`, so `ratio` is finite; a channel product may still reach
+    // +Inf, which the clamp maps to 1.0.
+    let ratio = y_sdr / y;
+    [
+        (rgb[0] * ratio).clamp(0.0, 1.0),
+        (rgb[1] * ratio).clamp(0.0, 1.0),
+        (rgb[2] * ratio).clamp(0.0, 1.0),
+    ]
+}
+
 impl ToneMap for Bt2446B {
     fn map_rgb(&self, rgb: [f32; 3]) -> [f32; 3] {
-        // BT.2020 luminance
-        let y = 0.2627 * rgb[0] + 0.6780 * rgb[1] + 0.0593 * rgb[2];
-        if y <= 0.0 {
-            return [0.0, 0.0, 0.0];
-        }
-
-        // Tone map luminance
-        let y_sdr = if y < self.breakpoint {
-            self.gain * y
-        } else {
-            self.log_scale * libm::logf(y / self.breakpoint) + self.log_offset
-        };
-
-        // Scale all channels by the luminance ratio
-        let ratio = y_sdr / y;
-        [
-            (rgb[0] * ratio).clamp(0.0, 1.0),
-            (rgb[1] * ratio).clamp(0.0, 1.0),
-            (rgb[2] * ratio).clamp(0.0, 1.0),
-        ]
+        bt2446b_scalar(
+            rgb,
+            self.breakpoint,
+            self.gain,
+            self.log_scale,
+            self.log_offset,
+            self.ln_breakpoint,
+        )
     }
 
     fn map_strip_simd(&self, strip: &mut [[f32; 3]]) {
@@ -123,6 +155,7 @@ impl ToneMap for Bt2446B {
                 self.gain,
                 self.log_scale,
                 self.log_offset,
+                self.ln_breakpoint,
             ),
             [v3, neon, wasm128, scalar]
         );
@@ -132,6 +165,50 @@ impl ToneMap for Bt2446B {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
+
+    /// zentone#25 (`map_rgb`) / #26 (`map_row`): the farm's inputs. Before
+    /// the `ln(y) - ln(breakpoint)` rewrite, `y / breakpoint` overflowed to
+    /// +Inf, `ln` passed it through, the ratio became Inf and `0 * Inf` NaN.
+    #[test]
+    fn huge_finite_input_stays_finite_scalar_and_simd() {
+        let tm = Bt2446B::new(4000.0, 100.0);
+        let cases: [[f32; 3]; 6] = [
+            [0.0, 4.254141e37, 1.677935e-38],
+            [0.0, 4.28676e37, 8.4570174e37],
+            [f32::MAX, f32::MAX, f32::MAX],
+            [f32::MAX, 0.0, 0.0],
+            [1e30, -1e30, 1e-30],
+            [3.0e38, -2.9e38, 0.0],
+        ];
+        for rgb in cases {
+            let out = tm.map_rgb(rgb);
+            assert!(
+                out.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
+                "map_rgb {rgb:?} -> {out:?}"
+            );
+        }
+        // A strip long enough to cover the eight-lane SIMD body AND the
+        // scalar remainder, all pixels extreme.
+        let mut strip: Vec<f32> = cases.iter().cycle().take(19).flatten().copied().collect();
+        let reference: Vec<f32> = cases
+            .iter()
+            .cycle()
+            .take(19)
+            .flat_map(|rgb| tm.map_rgb(*rgb))
+            .collect();
+        tm.map_row(&mut strip, 3);
+        for (i, (&got, &want)) in strip.iter().zip(&reference).enumerate() {
+            assert!(
+                got.is_finite() && (0.0..=1.0).contains(&got),
+                "map_row index {i}: {got}"
+            );
+            assert!(
+                (got - want).abs() <= 2e-3,
+                "map_row index {i}: simd {got} vs scalar {want}"
+            );
+        }
+    }
 
     #[test]
     fn black_to_black() {

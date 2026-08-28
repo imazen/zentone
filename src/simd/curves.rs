@@ -307,6 +307,7 @@ pub(crate) fn bt2446b_tier(
     gain: f32,
     log_scale: f32,
     log_offset: f32,
+    ln_breakpoint: f32,
 ) {
     let zero = f32x8::zero(token);
     let one = f32x8::splat(token, 1.0);
@@ -314,11 +315,15 @@ pub(crate) fn bt2446b_tier(
     let lg = f32x8::splat(token, LG_2020);
     let lb = f32x8::splat(token, LB_2020);
     let bp = f32x8::splat(token, breakpoint);
-    let inv_bp = f32x8::splat(token, 1.0 / breakpoint);
+    // ln(y / bp) = (log2(y) - log2(bp)) * ln 2. Dividing first overflowed to
+    // +Inf for y > bp * f32::MAX and made every channel NaN or 1.0
+    // (zentone#25/#26); the log-domain difference cannot overflow.
+    let log2_bp = f32x8::splat(token, ln_breakpoint / core::f32::consts::LN_2);
     let gain_v = f32x8::splat(token, gain);
     let log_scale_v = f32x8::splat(token, log_scale);
     let log_offset_v = f32x8::splat(token, log_offset);
     let pos_eps = f32x8::splat(token, f32::MIN_POSITIVE);
+    let fmax = f32x8::splat(token, f32::MAX);
     let ln2 = f32x8::splat(token, core::f32::consts::LN_2);
 
     let mut iter = row.chunks_exact_mut(8);
@@ -334,12 +339,13 @@ pub(crate) fn bt2446b_tier(
         let r = f32x8::load(token, &ra);
         let g = f32x8::load(token, &ga);
         let b = f32x8::load(token, &ba);
-        let y = lr * r + lg * g + lb * b;
+        // `min(fmax)`: three huge finite channels must not sum to +Inf
+        // (Inf / Inf = NaN in the ratio below).
+        let y = (lr * r + lg * g + lb * b).min(fmax);
         let y_safe = y.max(pos_eps);
 
         let lo_branch = gain_v * y;
-        let log_arg = (y_safe * inv_bp).max(pos_eps);
-        let ln_v = log_arg.log2_midp() * ln2;
+        let ln_v = (y_safe.log2_midp() - log2_bp) * ln2;
         let hi_branch = log_scale_v * ln_v + log_offset_v;
         let below = y.simd_lt(bp);
         let y_sdr = f32x8::blend(below, lo_branch, hi_branch);
@@ -360,20 +366,14 @@ pub(crate) fn bt2446b_tier(
         }
     }
     for px in iter.into_remainder().iter_mut() {
-        let y = LR_2020 * px[0] + LG_2020 * px[1] + LB_2020 * px[2];
-        if y <= 0.0 {
-            *px = [0.0, 0.0, 0.0];
-            continue;
-        }
-        let y_sdr = if y < breakpoint {
-            gain * y
-        } else {
-            log_scale * libm::logf(y / breakpoint) + log_offset
-        };
-        let ratio = y_sdr / y;
-        px[0] = (px[0] * ratio).clamp(0.0, 1.0);
-        px[1] = (px[1] * ratio).clamp(0.0, 1.0);
-        px[2] = (px[2] * ratio).clamp(0.0, 1.0);
+        *px = crate::bt2446b::bt2446b_scalar(
+            *px,
+            breakpoint,
+            gain,
+            log_scale,
+            log_offset,
+            ln_breakpoint,
+        );
     }
 }
 

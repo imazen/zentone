@@ -89,7 +89,16 @@ fn fuzz_curves_regression_seeds_do_not_panic() {
             "ZENTONE_FUZZ_CRASH_DIR={} is empty",
             extra.display()
         );
+        // A farm pile holds thousands of inputs for a handful of causes. Replay
+        // every one (catching the failure instead of stopping at the first) and
+        // report a histogram keyed on entry point + curve variant, with one
+        // example file per bucket — that is what turns 18,000 artifacts into
+        // "Bt2446B, map_rgb and map_row" (zentone#25/#26).
+        let quiet: Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync> = Box::new(|_| {});
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(quiet);
         let mut n = 0usize;
+        let mut failures: Vec<(String, String)> = Vec::new();
         for f in &files {
             // Skip the farm's sidecar metadata; replay everything else.
             let name = f.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -97,13 +106,83 @@ fn fuzz_curves_regression_seeds_do_not_panic() {
                 continue;
             }
             let data = fs::read(f).expect("read crash file");
-            run_fuzz_curves(&data);
+            if let Err(payload) = std::panic::catch_unwind(|| run_fuzz_curves(&data)) {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                    .unwrap_or_else(|| "<non-string panic payload>".to_string());
+                failures.push((f.display().to_string(), msg));
+            }
             n += 1;
         }
+        std::panic::set_hook(prev_hook);
         eprintln!(
             "replayed {n} external crash inputs from {} (plus {replayed} committed seeds)",
             extra.display()
         );
+        if !failures.is_empty() {
+            let mut hist: std::collections::BTreeMap<String, (usize, String, String)> =
+                std::collections::BTreeMap::new();
+            for (file, msg) in &failures {
+                // "map_rgb produced non-finite output: variant 12, in [...]" ->
+                // key "map_rgb / variant 12"
+                let entry = msg.split_whitespace().next().unwrap_or("?").to_string();
+                let variant = msg
+                    .split("variant ")
+                    .nth(1)
+                    .and_then(|r| r.split(|c: char| !c.is_ascii_digit()).next())
+                    .unwrap_or("?");
+                let key = format!("{entry} / variant {variant}");
+                let e = hist
+                    .entry(key)
+                    .or_insert_with(|| (0, file.clone(), msg.clone()));
+                e.0 += 1;
+            }
+            eprintln!("{} of {n} external inputs failed:", failures.len());
+            for (key, (count, file, msg)) in &hist {
+                eprintln!("  {count:>7}  {key}\n           e.g. {file}\n           {msg}");
+            }
+            panic!(
+                "{} of {n} external inputs from {} produced a panic / non-finite output (histogram above)",
+                failures.len(),
+                extra.display()
+            );
+        }
+    }
+}
+
+/// The #25/#26 seeds select `Bt2446B` (`data[0] % 14 == 12`) — slot 12 has
+/// held Bt2446B since Bt2446A moved to zenpixels-convert — and their first
+/// pixel is the exact luminance that overflowed `y / breakpoint` to +Inf.
+#[test]
+fn zentone25_seeds_target_bt2446b() {
+    for name in [
+        "fuzz_curves_bt2446b_log_overflow_zentone25",
+        "fuzz_curves_bt2446b_log_overflow_row_zentone26",
+    ] {
+        let data = fs::read(regression_dir().join(name)).expect("read seed");
+        assert_eq!(FUZZ_CURVE_VARIANTS, 14, "variant table modulus changed");
+        assert_eq!(
+            data[0] % FUZZ_CURVE_VARIANTS,
+            12,
+            "{name} no longer selects Bt2446B"
+        );
+        // The fuzz body zeroes non-finite lanes before mapping; mirror it so the
+        // pin exercises the pixel the farm did (#26's first pixel has NaN lanes
+        // in the raw bytes; its overflow sits at index 63 of map_row).
+        let curve = fuzz_curve_for_variant(12);
+        let px = |i: usize| {
+            let v = f32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
+            if v.is_finite() { v } else { 0.0 }
+        };
+        let rgb = [px(1), px(5), px(9)];
+        let out = curve.map_rgb(rgb);
+        assert!(
+            out.iter().all(|v| v.is_finite()),
+            "{name}: in {rgb:?} -> out {out:?}"
+        );
+        run_fuzz_curves(&data);
     }
 }
 

@@ -6,6 +6,21 @@ adheres to semver.
 
 ## [Unreleased]
 
+### Fixed
+- `Bt2446B` returned NaN (or a spurious 1.0) for huge finite input: the log
+  branch computed `ln(y / breakpoint)`, and for `y > breakpoint * f32::MAX`
+  (a 4e37 channel at the default 4000/100-nit breakpoint of 0.0195) the
+  quotient overflowed to +Inf, the luminance ratio became Inf, and
+  `0 * Inf` NaN — in both the scalar `map_rgb` and the eight-lane
+  `map_row` kernel (`y * inv_bp` there). Both now take the log-domain
+  difference `ln(y) - ln(breakpoint)`, and the luminance sum is capped at
+  `f32::MAX` so three huge channels cannot reach Inf/Inf. Fuzz-farm piles
+  zentone#25 (1,024 inputs) and #26 (17,344) replay clean; two seeds are
+  committed (`fuzz/regression/fuzz_curves_bt2446b_log_overflow_*`), and
+  `tests/fuzz_regression.rs` now tallies every failure in a
+  `ZENTONE_FUZZ_CRASH_DIR` pile per entry point and curve variant instead
+  of stopping at the first.
+
 ### QUEUED BREAKING CHANGES
 
 <!-- Breaking changes that will ship together in the next major (or minor for 0.x) release.
