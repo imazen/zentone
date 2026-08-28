@@ -62,9 +62,18 @@ reference there is the Academy's CTL (`aces-core/lib/Lib.Academy.*.ctl`),
 and OpenColorIO's ACES 2.0 fixed functions are a maintained port of it that
 exposes every stage. `aces2_ocio_reference.py` drives them through a raw
 OCIO config (`uv pip install opencolorio numpy`; deterministic sample set).
-The consuming tests live in `src/experimental/aces2.rs` (unit tests, so
+`aces_ocio_encodings_reference.py` does the same for the pieces around the
+rendering: the display-encoding presets (OCIO's `ACES-OUTPUT - … _2.0`
+builtins composed with its `DISPLAY - …` builtins), ACEScct / ACEScc,
+the ACES 1.3 Reference Gamut Compression fixed function and the ASC CDL.
+The consuming tests live in `src/experimental/aces2.rs`,
+`aces2_display.rs`, `aces2_simd.rs` and `aces_encodings.rs` (unit tests, so
 they can reach the private stage functions) and run with
-`cargo test --features experimental`.
+`cargo test --features experimental`. Known reference limits: OCIO's HLG
+display is LUT-based and decodes code values below ~0.005 differently from
+the CTL formula (the inverse test skips those three rows), and OCIO's
+output-transform fixed function omits the CTL's AP1 clamp (the forward
+tests compare in-AP1 rows only).
 
 Each `.cpp` file starts with a header block recording:
 
