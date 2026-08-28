@@ -14,7 +14,9 @@
 //!   → JMh → display-linear RGB in the limiting primaries, 1.0 = 100 cd/m²
 //! ```
 //!
-//! Display encoding (sRGB / BT.1886 / PQ / HLG OETFs) is out of scope here —
+//! Display encoding (peak clamp, white scaling, encoding primaries, sRGB /
+//! BT.1886 / gamma / PQ / HLG inverse EOTFs) lives in the sibling
+//! [`Aces2DisplayTransform`](super::Aces2DisplayTransform) wrapper —
 //! zentone's `pipeline` and `linear-srgb` handle that. The transform also
 //! exposes [`Aces2OutputTransform::inverse`] (display-linear → AP0), which
 //! matches the CTL `outputTransform_inv`.
@@ -148,14 +150,38 @@ impl Chromaticities {
         blue: [0.131, 0.046],
         white: [0.3127, 0.3290],
     };
+    /// Rec.709 primaries with the ACES (~D60) creative white — the
+    /// `Rec709-D60` limiting gamut of the "D60 sim" output presets.
+    pub const REC709_D60: Self = Self {
+        white: [0.32168, 0.33767],
+        ..Self::REC709
+    };
+    /// P3 primaries with the ACES (~D60) creative white (`P3-D60`).
+    pub const P3_D60: Self = Self {
+        white: [0.32168, 0.33767],
+        ..Self::P3_D65
+    };
+    /// Rec.2020 primaries with the ACES (~D60) creative white (`Rec2100-D60`).
+    pub const REC2020_D60: Self = Self {
+        white: [0.32168, 0.33767],
+        ..Self::REC2020
+    };
+    /// CIE XYZ as an RGB space with an equal-energy ("E") white — the
+    /// encoding primaries of the DCDM (X'Y'Z') presets.
+    pub const XYZ_E: Self = Self {
+        red: [1.0, 0.0],
+        green: [0.0, 1.0],
+        blue: [0.0, 0.0],
+        white: [1.0 / 3.0, 1.0 / 3.0],
+    };
 }
 
-type Mat3 = [[f32; 3]; 3];
+pub(super) type Mat3 = [[f32; 3]; 3];
 
 const IDENTITY: Mat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
 #[inline]
-fn mul_vm(v: [f32; 3], m: &Mat3) -> [f32; 3] {
+pub(super) fn mul_vm(v: [f32; 3], m: &Mat3) -> [f32; 3] {
     [
         v[0] * m[0][0] + v[1] * m[1][0] + v[2] * m[2][0],
         v[0] * m[0][1] + v[1] * m[1][1] + v[2] * m[2][1],
@@ -163,7 +189,7 @@ fn mul_vm(v: [f32; 3], m: &Mat3) -> [f32; 3] {
     ]
 }
 
-fn mul_mm(a: &Mat3, b: &Mat3) -> Mat3 {
+pub(super) fn mul_mm(a: &Mat3, b: &Mat3) -> Mat3 {
     let mut r = [[0.0f32; 3]; 3];
     for (i, row) in r.iter_mut().enumerate() {
         for (j, cell) in row.iter_mut().enumerate() {
@@ -191,7 +217,7 @@ fn scale_diagonal(m: &Mat3, v: [f32; 3]) -> Mat3 {
     r
 }
 
-fn invert(m: &Mat3) -> Option<Mat3> {
+pub(super) fn invert(m: &Mat3) -> Option<Mat3> {
     let c00 = m[1][1] * m[2][2] - m[1][2] * m[2][1];
     let c01 = m[1][2] * m[2][0] - m[1][0] * m[2][2];
     let c02 = m[1][0] * m[2][1] - m[1][1] * m[2][0];
@@ -220,7 +246,7 @@ fn invert(m: &Mat3) -> Option<Mat3> {
 }
 
 /// `RGBtoXYZ_f33(C, Y)` from `Lib.Academy.Utilities.ctl`.
-fn rgb_to_xyz_matrix(c: &Chromaticities, y: f32) -> Mat3 {
+pub(super) fn rgb_to_xyz_matrix(c: &Chromaticities, y: f32) -> Mat3 {
     let x = c.white[0] * y / c.white[1];
     let z = (1.0 - c.white[0] - c.white[1]) * y / c.white[1];
     let d = c.red[0] * (c.blue[1] - c.green[1])
@@ -257,7 +283,7 @@ fn rgb_to_xyz_matrix(c: &Chromaticities, y: f32) -> Mat3 {
     ]
 }
 
-fn xyz_to_rgb_matrix(c: &Chromaticities, y: f32) -> Option<Mat3> {
+pub(super) fn xyz_to_rgb_matrix(c: &Chromaticities, y: f32) -> Option<Mat3> {
     invert(&rgb_to_xyz_matrix(c, y))
 }
 

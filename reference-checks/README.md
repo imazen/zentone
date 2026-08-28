@@ -34,6 +34,7 @@ reference-checks/
 ├── libplacebo_bt2390.cpp           libplacebo BT.2390 EETF
 ├── darktable_filmic.cpp            darktable filmic spline
 ├── aces2_ocio_reference.py         ACES 2.0 stages via OpenColorIO >= 2.4 built-ins (Python)
+├── aces_ocio_encodings_reference.py ACES display encodings, ACEScct/cc, RGC, CDL via OpenColorIO (Python)
 └── golden/
     ├── libultrahdr_reinhard.csv
     ├── libultrahdr_apply_gain.csv
@@ -48,7 +49,12 @@ reference-checks/
     ├── aces2_ocio_tonescale_compress.csv    JMh -> tonescaled + chroma-compressed JMh
     ├── aces2_ocio_gamut_compress.csv        JMh -> gamut-compressed JMh
     ├── aces2_ocio_output_transform.csv      AP0 -> display-linear RGB (forward)
-    └── aces2_ocio_output_transform_inv.csv  display-linear RGB -> AP0 (inverse)
+    ├── aces2_ocio_output_transform_inv.csv  display-linear RGB -> AP0 (inverse)
+    ├── aces2_ocio_display_encoding.csv      AP0 -> display code values, 9 presets (OT + display encoding)
+    ├── aces2_ocio_display_encoding_inv.csv  display code values -> AP0 (inverse presets)
+    ├── aces_ocio_acescct.csv                ACEScct / ACEScc log encodings
+    ├── aces_ocio_rgc13.csv                  ACES 1.3 Reference Gamut Compression fwd/inv
+    └── aces_ocio_cdl.csv                    ASC CDL (ASC + no-clamp styles) fwd/inv
 ```
 
 The ACES 2.0 goldens are the exception to the "C++ excerpt" rule: the
@@ -82,6 +88,8 @@ Each `.cpp` file starts with a header block recording:
 | libplacebo | BT.2390 EETF (PQ + scene-linear) | upstream extraction | (see `libplacebo_bt2390.cpp`) |
 | darktable | filmic spline | upstream extraction | (see `darktable_filmic.cpp`) |
 | ACES 2.0 (via OpenColorIO 2.5.2) | `RGB_to_JMh`, tonescale + chroma compression, gamut compression, full output transform fwd/inv | `aces-core/lib/Lib.Academy.OutputTransform.ctl`, OCIO `ops/fixedfunction/ACES2/` | OCIO tag `v2.5.2` |
+| ACES display encodings (via OpenColorIO 2.5.2) | `Output.Academy.*` presets: peak clamp, D60 white scaling, encoding primaries, sRGB / gamma 2.2 / 2.6 / BT.1886 / ST 2084 / HLG inverse EOTFs, fwd/inv | `aces-core/lib/Lib.Academy.DisplayEncoding.ctl`, `aces-output/*.ctl`, OCIO `ACES-OUTPUT - … _2.0` + `DISPLAY - CIE-XYZ-D65_to_…` builtins | OCIO tag `v2.5.2` |
+| ACEScct / ACEScc, ACES 1.3 RGC, ASC CDL (via OpenColorIO 2.5.2) | log encode/decode, `FIXED_FUNCTION_ACES_GAMUT_COMP_13`, `CDLTransform` ASC + no-clamp | S-2016-001, S-2014-003, `LMT.Academy.ReferenceGamutCompress.ctl`, ASC CDL v1.2 | OCIO tag `v2.5.2` |
 
 ## Regenerating the golden files
 

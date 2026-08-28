@@ -187,6 +187,13 @@
 //!   tonescale, chroma compression, and gamut compression in Hellwig 2022
 //!   JMh. Forward and inverse, held to OpenColorIO's built-in ACES 2.0
 //!   fixed functions. Scalar only (no SIMD strip kernel yet).
+//! - `experimental::Aces2DisplayTransform` — an `Output.Academy.*` preset:
+//!   the rendering plus the display encoding (peak clamp, D60-sim white
+//!   scaling, encoding primaries, sRGB / gamma 2.2 / 2.6 / BT.1886 / ST
+//!   2084 / HLG inverse EOTF), forward and inverse, with the preset's ACES
+//!   transform ID.
+//! - `experimental::aces` — ACEScct / ACEScc log encodings, the ASC CDL, and
+//!   ACES 1.3 Reference Gamut Compression.
 //! - `experimental::AdaptiveTonemapper` — fits a LUT from an HDR/SDR pair.
 //! - `experimental::StreamingTonemapper` — single-pass spatially-local
 //!   tonemap with bounded-memory pull API.
