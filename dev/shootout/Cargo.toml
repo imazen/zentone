@@ -37,10 +37,30 @@ zentone = { path = "../.." }
 zencodecs = { path = "../../../zenpipe/zencodecs", default-features = false, features = ["jpeg", "jpeg-ultrahdr", "avif-decode", "heic-decode", "raw-decode", "raw-decode-gainmap", "std"] }
 zenpixels-convert = { path = "../../../zenpixels/zenpixels-convert", default-features = false, features = ["std", "hdr-experimental", "rgb", "imgref"] }
 zenpixels-dev = { package = "zenpixels", path = "../../../zenpixels/zenpixels", default-features = false, features = ["std", "imgref"] }
-# Offline coefficient fitting for `src/bin/fit_pow_inv_24.rs` — only
-# `rational::RationalFit` + `ChebyshevFit` are used, so default features
-# (plotting, random transforms) stay off.
+# Offline coefficient fitting for `src/bin/fit_pow_inv_24.rs`.
+#
+# KNOWN BROKEN, and not by anything in this repo: polyfit upstream has REMOVED
+# the whole `rational` module. `fit_pow_inv_24.rs` imports seven types from it
+# (`RationalFit`, `RationalFitOptions`, `Constraint`, `ConstraintMode`,
+# `ErrorWeighting`, `F32ScoreMetric`, `F32SearchConfig`, `F32SearchResult`) and
+# none of them exist any more — `ChebyshevFit` survived, but as a crate-root
+# type alias (`polyfit::ChebyshevFit`), not under `rational`. So that ONE bin
+# does not compile:
+#     error[E0432]: unresolved import `polyfit::rational`
+# The other bins are unaffected; check them directly, e.g.
+#     cargo check --manifest-path dev/shootout/Cargo.toml \
+#         --bin hdr_tone_map_shootout_audited
+# polyfit is a path dep on a sibling checkout, so there is no rev to pin it
+# back to from here, and rewriting the fit to a different basis would change
+# what the tool computes. Left failing and documented rather than deleted,
+# #[ignore]d, or quietly excluded.
 polyfit = { path = "../../../../polyfit", default-features = false }
+# `linear_srgb::tf` / `linear_srgb::default` are called by
+# `src/bin/hdr_tone_map_shootout_{full,audited}.rs` but were never declared:
+#     error[E0433]: cannot find module or crate `linear_srgb`
+# 0.6.12 is the version zenpipe's Cargo.lock resolves, so the shootout and the
+# zencodecs it path-deps into share one copy.
+linear-srgb = "0.6.12"
 
 # Manual AVIF gain-map reconstruction needs ultrahdr-core directly.
 ultrahdr-core = { version = "0.5.0" }
@@ -54,16 +74,18 @@ rayon = "1.10"
 
 # Cross-crate git overrides for the transitive `zencodecs` graph. They expose
 # APIs the drivers need that pre-date the latest crates.io publishes of
-# `zenjpeg`, `ultrahdr-core`, `rav1d-safe` and `heic`. Patches never exercised
+# `zenjpeg`, `ultrahdr-core`, `zenavif` and `heic`. Patches never exercised
 # by these binaries (zenpng, zenrav1e, zenwebp, ...) are intentionally omitted
 # so cargo doesn't warn about "patch never used".
 [patch.crates-io]
-# Pinned: zencodecs (path dep) requires `zenjpeg ^0.8.4` with the `recompress`
-# feature. zenjpeg `main` bumped to 0.9.0 on 2026-07-28, so an unpinned patch
-# no longer satisfies `^0.8.4`, cargo falls back to crates.io 0.8.4 (no
-# `recompress`) and the graph fails to resolve. Rev 9835cf5 is zenjpeg 0.8.7 —
-# the same rev zenpipe's own Cargo.lock pins.
-zenjpeg = { git = "https://github.com/imazen/zenjpeg", rev = "9835cf5ec8ee65e4d4c2eae55969599ef3878267" }
+# Pinned to the rev zenpipe's own Cargo.lock resolves, which is what keeps this
+# table in step with the `zencodecs` it path-deps into. The rev has to move when
+# that requirement moves: it was 9835cf5 (0.8.7) for `zenjpeg ^0.8.4`, and
+# zencodecs has since gone to `^0.9.0`, which 0.8.7 does not satisfy — a fresh
+# resolve died with "failed to select a version for the requirement
+# `zenjpeg = ^0.9.0` … candidate versions found which didn't match: 0.8.7".
+# e7c53d2e is zenjpeg 0.9.0.
+zenjpeg = { git = "https://github.com/imazen/zenjpeg", rev = "e7c53d2e36914989585791b504a957064e0e8d91" }
 # `zenpixels` / `zenpixels-convert` are patched so the drivers see the same
 # version of `zenpixels` through both the direct path dep and the transitive
 # `zencodecs` graph. Without this, `zencodec`/`zencodecs` resolve the registry
@@ -77,5 +99,45 @@ zenpixels-convert = { path = "../../../zenpixels/zenpixels-convert" }
 # which `^0.5.0` rejects, while heic `main` calls 0.6.0-only APIs), so a fresh
 # resolve of this graph failed to compile `heic`.
 ultrahdr-core = { git = "https://github.com/imazen/ultrahdr", rev = "031d4a2070a522f82bd02aee712a2806a2c17bbd" }
-rav1d-safe = { git = "https://github.com/imazen/rav1d-safe" }
+# zenavif: REQUIRED, and rev-pinned. `zencodecs/avif-decode` requires
+# `zenavif ^0.1.7`, crates.io 0.1.7 is YANKED and 0.1.6 does not satisfy the
+# requirement, so without this entry the graph does not resolve at all — it
+# died with "failed to select a version for the requirement `zenavif = ^0.1.7`
+# … version 0.1.7 is yanked" before any of the pins below could matter. The
+# rev is the one that decides which DECODER this harness measures through:
+# zenavif's own manifest carries a git-rev dep on rav1d-safe, so whatever
+# zenavif rev lands here fixes the rav1d-safe rev too. e4b3820 pins
+# rav1d-safe 66f58fa6, the rev zenavif, ravif and zenmetrics all settled on.
+#
+# WHAT FLOATS IF YOU DELETE `rev` HERE: every `cargo` invocation re-resolves
+# imazen/zenavif to whatever `main` is at that moment, and with it the decoder
+# underneath. This is a MEASUREMENT harness — its numbers are only comparable
+# across runs if the decoder is held fixed, and the range zenavif has moved
+# across since 2026-08 contains a decoder correctness change big enough to
+# move them: the aarch64 NEON conformance campaign of 2026-08-07/08 took
+# rav1d-safe from 302/766 to 766/766 against dav1d's published MD5 vectors,
+# i.e. before it the decoder produced wrong pixels on 464 of 766. A silent
+# decoder change under a harness is worse than a stale pin, because nothing
+# in the output records that it happened. Keep the rev; move it deliberately.
+zenavif = { git = "https://github.com/imazen/zenavif", rev = "e4b3820d24e20edd23c1ab490dedd9674ccf9f00" }
+# NO rav1d-safe ENTRY HERE, DELIBERATELY. There used to be an unpinned
+# `rav1d-safe = { git = "https://github.com/imazen/rav1d-safe" }` on this line.
+# It was a DEAD PATCH: nothing in this graph requires rav1d-safe from
+# crates.io. The only depender is zenavif, which reaches it through a git-rev
+# dep on its own dep line, and `[patch.crates-io]` substitutes registry
+# sources only — so the entry selected nothing.
+#
+# Measured, not reasoned: pointing that entry at a DIFFERENT rev (140f9145)
+# still resolved rav1d-safe 0.6.0 at 66f58fa6 — the rev the zenavif pin above
+# carries — and cargo emitted
+#   warning: patch `rav1d-safe v0.6.0 (…?rev=140f9145…)` was not used in the
+#   crate graph
+# with a matching `[[patch.unused]]` block in the generated lock. A dead patch
+# is worse than no patch: it reads as if this repo pins its own decoder when
+# the decoder is actually decided elsewhere. The pin has ONE owner — zenavif —
+# and this harness inherits it. Re-add an entry here only if some crate in
+# this graph ever depends on rav1d-safe from the REGISTRY. The agreement check
+# that catches an unpinned, disagreeing or newly-dead entry lives in zenpipe
+# (`just check-pins` there, i.e. `scripts/check-decoder-pins.py`); point it at
+# this repo with `--root /path/to/zentone` to audit these manifests too.
 heic = { git = "https://github.com/imazen/heic", rev = "3fe1110ce51b05f40580724f2c0beb7e5f043911" }

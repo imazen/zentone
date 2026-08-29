@@ -7,6 +7,58 @@ adheres to semver.
 ## [Unreleased]
 
 ### Fixed
+- **`dev/shootout` resolves again, and its AVIF decoder is pinned instead of
+  floating.** Dev-only tooling; nothing in the published `zentone` crate is
+  affected. The harness had rotted unnoticed because no CI job and no `just`
+  recipe builds it, and its `Cargo.lock` is gitignored, so nothing held its
+  graph.
+  - **It did not resolve at all.** `cargo metadata` died on
+    ``failed to select a version for the requirement `zenavif = "^0.1.7"` …
+    version 0.1.7 is yanked`` — `zencodecs/avif-decode` requires `^0.1.7`,
+    crates.io 0.1.7 is yanked, and 0.1.6 does not satisfy it. Fixed by adding
+    the rev-pinned `zenavif` git patch the table was missing (it mirrors
+    zenpipe's root table, which has had one).
+  - Behind that, a second failure: ``failed to select a version for the
+    requirement `zenjpeg = "^0.9.0"` … candidate versions found which didn't
+    match: 0.8.7``. The `zenjpeg` patch was pinned at 9835cf5 (0.8.7) for a
+    `^0.8.4` requirement that `zencodecs` has since moved to `^0.9.0`. Now
+    e7c53d2e (0.9.0), the rev zenpipe's own `Cargo.lock` resolves.
+  - **The `rav1d-safe` patch entry was DEAD and is removed, not pinned.** It
+    was unpinned (`git` with no `rev`), so on paper it floated; in fact it
+    selected nothing, because `[patch.crates-io]` substitutes registry sources
+    only and the sole depender — zenavif — reaches rav1d-safe through a
+    git-rev dep on its own dep line. Measured: pointing the entry at a
+    *different* rev (140f9145) still resolved rav1d-safe at 66f58fa6 and cargo
+    emitted ``warning: patch `rav1d-safe v0.6.0 (…?rev=140f9145…)` was not used
+    in the crate graph`` plus a `[[patch.unused]]` block. The pin now has one
+    owner — the `zenavif` rev — and this harness inherits it.
+  - Net effect: rav1d-safe resolves to **66f58fa6**, the rev zenavif, ravif and
+    zenmetrics all settled on, from a single source with no unused patches.
+    Previously the intent was "whatever `imazen/rav1d-safe` main is at resolve
+    time". That range matters for a measurement harness: the aarch64 NEON
+    conformance campaign of 2026-08-07/08 took rav1d-safe from **302/766 to
+    766/766** against dav1d's published MD5 vectors.
+  - **Verified the pin does not move the harness's numbers**: the delta from
+    the float target (rav1d-safe `main`, 01b1ad0) back to 66f58fa6 is five
+    commits, and its entire non-comment diff is two clippy refactors in a
+    diagnostic probe, a compile-time `align_of` assertion block, and a
+    `#[cfg(test)]` helper with test-only call sites. No decode-path arithmetic
+    changed. `hdr_tone_map_shootout_audited` and `hdr_tone_map_shootout_full`
+    now `cargo check` clean through the pinned decoder.
+  - Also added the `linear-srgb = "0.6.12"` dependency those two bins call but
+    never declared (`error[E0433]: cannot find module or crate `linear_srgb``).
+
+### Known Bugs
+- **`dev/shootout`'s `fit_pow_inv_24` bin does not compile**, and not because
+  of anything in this repo: polyfit upstream removed its entire `rational`
+  module, and that bin imports seven types from it (`RationalFit`,
+  `RationalFitOptions`, `Constraint`, `ConstraintMode`, `ErrorWeighting`,
+  `F32ScoreMetric`, `F32SearchConfig`, `F32SearchResult`). `ChebyshevFit`
+  survived as a crate-root alias; the rest are gone. polyfit is a path dep on a
+  sibling checkout, so there is no rev to pin back to, and re-basing the fit
+  would change what the tool computes. Left failing and documented rather than
+  deleted or excluded; the other bins are checked directly by name.
+
 - `Bt2446B` returned NaN (or a spurious 1.0) for huge finite input: the log
   branch computed `ln(y / breakpoint)`, and for `y > breakpoint * f32::MAX`
   (a 4e37 channel at the default 4000/100-nit breakpoint of 0.0195) the
