@@ -106,8 +106,27 @@ ultrahdr-core = { git = "https://github.com/imazen/ultrahdr", rev = "031d4a2070a
 # … version 0.1.7 is yanked" before any of the pins below could matter. The
 # rev is the one that decides which DECODER this harness measures through:
 # zenavif's own manifest carries a git-rev dep on rav1d-safe, so whatever
-# zenavif rev lands here fixes the rav1d-safe rev too. e4b3820 pins
-# rav1d-safe 66f58fa6, the rev zenavif, ravif and zenmetrics all settled on.
+# zenavif rev lands here fixes the rav1d-safe rev too. 11033c95 selects
+# rav1d-safe 140f9145.
+#
+# WHY 11033c95 AND NOT THE WORKSPACE-WIDE 66f58fa6. zenavif, ravif and
+# zenmetrics have aligned on rav1d-safe 66f58fa6; zenpipe deliberately has not,
+# because AVIF decode was MEASURED to panic there — rav1d-safe's own bounds-map
+# guard fires on aarch64 (`filmgrain_arm.rs:1628` takes a 122880 B
+# picture-plane reservation against a 3840 B measured ceiling while tile
+# threading is active), then `Option::unwrap()` on `None` in `thread_task.rs`
+# as the workers unwind. Tracked as rav1d-safe#526. Two reasons this harness
+# follows zenpipe rather than the rest of the workspace:
+#   1. it decodes AVIF through the very same stack, so it would be exposed to
+#      the same panic on film-grain content;
+#   2. it path-deps into `../../../zenpipe/zencodecs`, whose `zenavif-parse`
+#      dep line carries a rev of its own. A DIFFERENT rev here does not merely
+#      disagree — cargo treats `git+URL` and `git+URL?rev=X` as different
+#      sources, so two copies of the imazen/zenavif workspace would land in one
+#      graph. It happens to resolve today only because `avif-encode` is off and
+#      zencodecs' zenavif-parse is therefore not activated; turning that
+#      feature on with mismatched revs would collide.
+# Move both repos together when rav1d-safe#526 closes.
 #
 # WHAT FLOATS IF YOU DELETE `rev` HERE: every `cargo` invocation re-resolves
 # imazen/zenavif to whatever `main` is at that moment, and with it the decoder
@@ -119,7 +138,7 @@ ultrahdr-core = { git = "https://github.com/imazen/ultrahdr", rev = "031d4a2070a
 # i.e. before it the decoder produced wrong pixels on 464 of 766. A silent
 # decoder change under a harness is worse than a stale pin, because nothing
 # in the output records that it happened. Keep the rev; move it deliberately.
-zenavif = { git = "https://github.com/imazen/zenavif", rev = "e4b3820d24e20edd23c1ab490dedd9674ccf9f00" }
+zenavif = { git = "https://github.com/imazen/zenavif", rev = "11033c957df69dcf37a6820032ed2a64f2f6f213" }
 # NO rav1d-safe ENTRY HERE, DELIBERATELY. There used to be an unpinned
 # `rav1d-safe = { git = "https://github.com/imazen/rav1d-safe" }` on this line.
 # It was a DEAD PATCH: nothing in this graph requires rav1d-safe from
@@ -127,9 +146,10 @@ zenavif = { git = "https://github.com/imazen/zenavif", rev = "e4b3820d24e20edd23
 # dep on its own dep line, and `[patch.crates-io]` substitutes registry
 # sources only — so the entry selected nothing.
 #
-# Measured, not reasoned: pointing that entry at a DIFFERENT rev (140f9145)
-# still resolved rav1d-safe 0.6.0 at 66f58fa6 — the rev the zenavif pin above
-# carries — and cargo emitted
+# Measured, not reasoned: with the zenavif pin above briefly set to e4b3820
+# (which carries rav1d-safe 66f58fa6), pointing this entry at a DIFFERENT rev
+# (140f9145) still resolved rav1d-safe 0.6.0 at 66f58fa6 — i.e. the zenavif pin
+# won and this entry was ignored — and cargo emitted
 #   warning: patch `rav1d-safe v0.6.0 (…?rev=140f9145…)` was not used in the
 #   crate graph
 # with a matching `[[patch.unused]]` block in the generated lock. A dead patch

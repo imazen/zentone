@@ -32,19 +32,36 @@ adheres to semver.
     emitted ``warning: patch `rav1d-safe v0.6.0 (…?rev=140f9145…)` was not used
     in the crate graph`` plus a `[[patch.unused]]` block. The pin now has one
     owner — the `zenavif` rev — and this harness inherits it.
-  - Net effect: rav1d-safe resolves to **66f58fa6**, the rev zenavif, ravif and
-    zenmetrics all settled on, from a single source with no unused patches.
-    Previously the intent was "whatever `imazen/rav1d-safe` main is at resolve
-    time". That range matters for a measurement harness: the aarch64 NEON
-    conformance campaign of 2026-08-07/08 took rav1d-safe from **302/766 to
-    766/766** against dav1d's published MD5 vectors.
-  - **Verified the pin does not move the harness's numbers**: the delta from
-    the float target (rav1d-safe `main`, 01b1ad0) back to 66f58fa6 is five
-    commits, and its entire non-comment diff is two clippy refactors in a
+  - Net effect: the decoder resolves from a single source with no unused
+    patches — **zenavif `11033c95` → rav1d-safe `140f9145`**. Previously the
+    intent was "whatever `imazen/rav1d-safe` main is at resolve time". That
+    range matters for a measurement harness: the aarch64 NEON conformance
+    campaign of 2026-08-07/08 took rav1d-safe from **302/766 to 766/766**
+    against dav1d's published MD5 vectors, and `140f9145` (2026-08-11) is on
+    the correct side of it.
+  - **Not `66f58fa6`, which zenavif / ravif / zenmetrics aligned on** — this
+    harness follows zenpipe, which held back deliberately. AVIF decode was
+    measured to panic at `66f58fa6`: rav1d-safe's own bounds-map guard fires on
+    aarch64 (`filmgrain_arm.rs:1628` reserves 122880 B against a 3840 B
+    ceiling under tile threading), then `Option::unwrap()` on `None` in
+    `thread_task.rs` during unwind. Filed as **rav1d-safe#526**. Two reasons to
+    follow zenpipe rather than the workspace: this harness decodes through the
+    same stack and would meet the same panic on film-grain content; and it
+    path-deps into `zenpipe/zencodecs`, whose `zenavif-parse` dep line carries
+    its own rev — a *different* rev here puts two copies of the imazen/zenavif
+    workspace in one graph, since cargo treats `git+URL` and `git+URL?rev=X` as
+    different sources. Move both repos together when #526 closes.
+  - **Verified**: `hdr_tone_map_shootout_audited` and
+    `hdr_tone_map_shootout_full` `cargo check` clean through the pinned
+    decoder, and the resolved graph holds exactly one zenavif and one
+    zenavif-parse. Separately, pinning *forward* to the float target would not
+    have moved the harness's numbers either: `66f58fa6 → main (01b1ad0)` is
+    five commits whose entire non-comment diff is two clippy refactors in a
     diagnostic probe, a compile-time `align_of` assertion block, and a
-    `#[cfg(test)]` helper with test-only call sites. No decode-path arithmetic
-    changed. `hdr_tone_map_shootout_audited` and `hdr_tone_map_shootout_full`
-    now `cargo check` clean through the pinned decoder.
+    `#[cfg(test)]` helper with test-only call sites — no decode-path
+    arithmetic.
+  - Agreement is checkable: `python3 ../zenpipe/scripts/check-decoder-pins.py
+    --root . --expect https://github.com/imazen/zenavif=11033c95…` passes.
   - Also added the `linear-srgb = "0.6.12"` dependency those two bins call but
     never declared (`error[E0433]: cannot find module or crate `linear_srgb``).
 
