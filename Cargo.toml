@@ -65,7 +65,7 @@ __polyfit-tools = []
 
 [dependencies]
 linear-srgb = { version = "0.6.12", default-features = false, features = ["transfer"] }
-zenpixels = { version = "0.2.14", optional = true, default-features = false }
+zenpixels = { version = ">=0.2.14, <0.4.0", optional = true, default-features = false }
 libm = { version = "0.2", default-features = false }
 archmage = { version = "0.9.22", default-features = false, features = ["macros"] }
 magetypes = { version = "0.9.22", default-features = false }

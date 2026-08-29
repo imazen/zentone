@@ -6,6 +6,21 @@ adheres to semver.
 
 ## [Unreleased]
 
+### Changed
+- **`zenpixels` requirement now spans the published minor and the next one**:
+  `">=0.2.14, <0.4.0"` (was `"0.2.14"`). For a `0.x` crate Cargo treats the minor
+  as the major, so the plain requirement meant `^0.2.14` = `>=0.2.14, <0.3.0` and
+  a `zenpixels 0.3.0` release would have been invisible until this manifest was
+  hand-edited. The floor is unchanged and nothing newer is published, so
+  resolution is identical — `cargo metadata --all-features` still resolves
+  exactly one `zenpixels`. `dev/shootout`'s `path =` deps and its
+  `[patch.crates-io]` table are untouched; that patch exists for exactly the
+  reason this widening does — its own comment notes that two `zenpixels` in one
+  graph give "distinct `zenpixels::PixelBuffer` types and a compile-time
+  mismatch", which is what a partially-widened consumer set would reintroduce at
+  the next minor bump. The standing current-plus-next rule is documented in the
+  zencodec repo's `CLAUDE.md`.
+
 ### Fixed
 - **`dev/shootout` resolves again, and its AVIF decoder is pinned instead of
   floating.** Dev-only tooling; nothing in the published `zentone` crate is
