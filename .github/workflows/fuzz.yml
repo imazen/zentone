@@ -1,0 +1,82 @@
+name: Fuzz
+
+# A BUILD gate, not a fuzzing campaign. It compiles every fuzz target on every
+# push so API drift fails CI the day it happens.
+#
+# Why it exists: `fuzz/` is a standalone Cargo package with its own lockfile,
+# and this repo's root manifest has no `[workspace]` table, so nothing under
+# `fuzz/` is reachable from any root-level cargo invocation. ci.yml's `cargo
+# test` / `cargo clippy --all-targets` never compiled the five targets in
+# `fuzz/fuzz_targets/` — they could rot against a `zentone` API change and CI
+# would stay green. A workspace-wide audit on 2026-08-29 found 35 such
+# uncompiled targets across 11 repos; zenpipe's eleven had been broken for
+# roughly seven weeks before anyone noticed. zentone's five did still compile
+# when this gate was added, which is when it is cheapest to add.
+#
+# Why `cargo check` and not `cargo fuzz build`: `cargo fuzz` needs a nightly
+# toolchain plus `-Zsanitizer=address`, and fully codegens the dependency graph
+# with sanitizer-coverage instrumentation for every target. `cargo check`
+# catches the same class of rot — the drift actually found across the audited
+# repos was all E0063/E0308/E0599 or outright resolution failure — on stable,
+# in a fraction of the time. Actual fuzzing stays a hand-run activity.
+#
+# Why there is no seed-replay job here: `tests/fuzz_regression.rs` replays the
+# committed `fuzz/regression/` seeds through the shared `fuzz_curves_core.rs`
+# body on the stable toolchain, and ci.yml already runs `cargo test` on four
+# platforms — so the seeds gate every push through that job. A second job
+# running the same test would only add queue contention. That harness already
+# refuses to pass vacuously (it asserts the directory exists and is non-empty,
+# and pins the #21 seed to its curve variant), so it cannot quietly stop
+# gating.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Superseded runs waste runner queue; only the newest commit per ref matters.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Linux only, deliberately: the targets are `#![no_main]` libFuzzer bins that
+  # only ever run under `cargo fuzz` on Linux. Compiling them on Windows/macOS
+  # would gate nothing these targets can actually exercise, and ci.yml already
+  # covers the library itself across its four-platform matrix.
+  targets:
+    name: Fuzz targets compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+
+      # No sibling checkouts and no manifest rewriting. Verified with
+      # `cargo metadata` on 2026-08-29: the resolved graph is 29 packages, every
+      # one either from crates.io or the in-repo `path = ".."` — nothing outside
+      # this checkout. That is also why this job deliberately does NOT route
+      # through a setup action that pathes manifests: the failure this gate
+      # exists to catch is a fuzz manifest that has gone stale, and rewriting
+      # the manifest under test would mask exactly that.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: fuzz-targets
+          workspaces: fuzz
+
+      # No `--locked`: a stale committed lock would keep resolving happily while
+      # the API it targets moved on, which is the drift this gate exists to see.
+      # `fuzz/Cargo.lock` stays committed for reproducible hand-fuzzing; CI is
+      # allowed to re-resolve on top of it.
+      #
+      # `--all-targets` matters here: `fuzz/Cargo.toml` declares every target as
+      # a `[[bin]]` with `test = false`, so a plain `cargo check` would build
+      # them but `--all-targets` is what keeps this honest if a future target
+      # arrives with tests or benches attached.
+      - name: cargo check --all-targets
+        working-directory: fuzz
+        run: cargo check --all-targets

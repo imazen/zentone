@@ -30,6 +30,18 @@ adheres to semver.
 
 ### Added
 
+- CI: a `Fuzz` workflow that compile-gates the `fuzz/` package on every push and
+  PR. `fuzz/` is a standalone package with its own lockfile and the root
+  manifest has no `[workspace]` table, so no root-level cargo invocation — not
+  ci.yml's `cargo test`, not `cargo clippy --all-targets` — ever reached its
+  five targets; they could rot against a `zentone` API change with CI still
+  green. The gate runs `cargo check --all-targets` on stable rather than
+  `cargo fuzz build` (nightly + per-target sanitizer codegen), because the rot
+  this catches is plain type or resolution error. Seed replay is deliberately
+  not duplicated here: `tests/fuzz_regression.rs` already runs under ci.yml's
+  four-platform `cargo test`. The five targets did still compile when the gate
+  was added.
+
 - `experimental::Aces2OutputTransform` — the ACES 2.0 Output Transform ported
   from the Academy's reference CTL (`Lib.Academy.OutputTransform.ctl` /
   `Tonescale.ctl`): Hellwig 2022 JMh CAM, parametric tonescale, in-gamut
