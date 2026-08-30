@@ -72,7 +72,7 @@ The splitter emits raw f32 log2 gain; u8 quantization and gamma encoding are the
 - **Per-pixel reference.** `ToneMap::map_rgb`, the named-curve scalar functions in `curves` (`filmic_narkowicz`, `hable_filmic`, `aces_ap1`, `agx_tonemap`, `bt2390_tonemap`, …), `gamut::apply_matrix`, `gamut::soft_clip`. Suitable for one-off use, doctests, and cross-checks against external implementations. Don't put these in inner loops.
 - **Stateful tonemappers.** `Bt2408Tonemapper`, `Bt2446B`, `Bt2446C`, `CompiledFilmicSpline`. Constructed once with `(content_peak_nits, display_peak_nits)` (or a `FilmicSplineConfig`); apply via the `ToneMap` trait. For BT.2446 Method A, use [`zenpixels_convert::hdr::Bt2446A`](https://lib.rs/crates/zenpixels-convert) — it graduated to the convert crate where it composes with CLL measurement and primary conversion.
 - **Gain map splitter.** `LumaGainMapSplitter`, `LumaToneMap`, `SplitConfig`, `SplitStats`, plus the curve adapters `Bt2408Yrgb`, `ExtendedReinhardLuma`, `HableFilmic`, and the `LumaFn` closure wrapper.
-- **Experimental.** `experimental::AdaptiveTonemapper` (LUT fitter from an HDR/SDR pair), `experimental::StreamingTonemapper` (single-pass spatially-local tonemap), `experimental::ProfileToneCurve` (DNG camera-profile tone curve), `experimental::detect::detect_standard`. Feature-gated, semver-unstable.
+- **Experimental.** `experimental::Aces2OutputTransform` (ACES 2.0 Output Transform — Hellwig JMh tonescale, chroma and gamut compression, forward + inverse, parity-tested against OpenColorIO's built-ins, with an eight-lane SIMD strip kernel), `experimental::Aces2DisplayTransform` (the `Output.Academy.*` presets: the rendering plus sRGB / BT.1886 / gamma / PQ / HLG / DCDM display encoding, D60-sim white scaling, ACES transform IDs), `experimental::aces` (ACEScct / ACEScc, ASC CDL, ACES 1.3 Reference Gamut Compression), `experimental::AdaptiveTonemapper` (LUT fitter from an HDR/SDR pair), `experimental::StreamingTonemapper` (single-pass spatially-local tonemap), `experimental::ProfileToneCurve` (DNG camera-profile tone curve), `experimental::detect::detect_standard`. Feature-gated, semver-unstable.
 
 ## Curves
 
@@ -107,7 +107,7 @@ SIMD dispatch goes through [`archmage`](https://docs.rs/archmage) and [`magetype
 
 - `std` (default) — passes through to `linear-srgb`, `archmage`, and `magetypes`.
 - `avx512` (default) — gates the AVX-512 (`v4`) magetypes tier in `archmage` and `magetypes`. Disable to fall back to AVX2 as the top tier.
-- `experimental` — opt-in. Adds `AdaptiveTonemapper`, `StreamingTonemapper`, `ProfileToneCurve`, and `detect_standard`. Light test coverage; APIs may change without semver bumps until stabilized.
+- `experimental` — opt-in. Adds `Aces2OutputTransform`, `AdaptiveTonemapper`, `StreamingTonemapper`, `ProfileToneCurve`, and `detect_standard`. Light test coverage; APIs may change without semver bumps until stabilized.
 
 ## Compatibility
 
@@ -121,7 +121,7 @@ Curves that claim a standard name are validated against their reference implemen
 ## Limitations
 
 - **No transfer-function support beyond what the pipelines need.** sRGB / PQ / HLG decode and encode live in [`linear-srgb`](https://lib.rs/crates/linear-srgb). zentone's `pipeline` module composes them for the PQ→sRGB and HLG→sRGB cases; for other combinations, do the linearization yourself and feed linear-light f32 in.
-- **No perceptual gamut mapping.** The pipeline applies a hue-preserving `soft_clip` after the BT.2020→BT.709 matrix, which preserves channel ratios for out-of-gamut highlights. Hellwig 2022 JMh / ACES 2.0 perceptual compression is not implemented ([#14](https://github.com/imazen/zentone/issues/14)).
+- **No perceptual gamut mapping in the fused pipeline.** `pipeline` applies a hue-preserving `soft_clip` after the BT.2020→BT.709 matrix, which preserves channel ratios for out-of-gamut highlights. Hellwig 2022 JMh perceptual compression exists as the ACES 2.0 Output Transform (`experimental::Aces2OutputTransform`, usable as the curve of any `pipeline` kernel via `ToneMap`) but the pipeline's own gamut step is still the soft clip ([#14](https://github.com/imazen/zentone/issues/14)).
 - **Gain map encode/decode container handling.** zentone produces and consumes raw f32 log2 gain; ISO 21496-1 / Ultra HDR container math (MPF, XMP, gamma encoding, u8 quantization) lives in [`ultrahdr-core`](https://lib.rs/crates/ultrahdr-core).
 - **No pixel-format conversion.** Inputs are `&mut [f32]` or packed `&[[f32; 3]]` / `&[[f32; 4]]`. For u8/u16/planar buffers, convert first via `zenpixels-convert` or your own pipeline.
 
@@ -140,21 +140,22 @@ Curves that claim a standard name are validated against their reference implemen
 
 | | |
 |:--|:--|
-| **Codecs** ¹ | [zenjpeg] · [zenpng] · [zenwebp] · [zengif] · [zenavif] · [zenjxl] · [zenbitmaps] · [heic] · [zentiff] · [zenpdf] · [zensvg] · [zenjp2] · [zenraw] · [ultrahdr] |
-| Codec internals | [zenjxl-decoder] · [jxl-encoder] · [zenrav1e] · [rav1d-safe] · [zenavif-parse] · [zenavif-serialize] |
+| **Codecs** ¹ | [zenjpeg] · [zenpng] · [zenwebp] · [zengif] · [zenavif] · [zenjxl] · [zenjxl-decoder] · [jxl-encoder] · [zenbitmaps] · [heic] · [zentiff] · [zenpdf] · [zensvg] · [zenjp2] · [zenraw] · [ultrahdr] |
+| Codec internals | [zenrav1e] · [rav1d-safe] · [zenravif] · [zenavif-parse] · [zenavif-serialize] |
 | Compression | [zenflate] · [zenzop] · [zenzstd] |
 | Processing | [zenresize] · [zenquant] · [zenblend] · [zenfilters] · [zensally] · **zentone** |
-| Pixels & color | [zenpixels] · [zenpixels-convert] · [linear-srgb] · [garb] |
+| Pixels & color | [zenpixels] · [zenpixels-convert] · [linear-srgb] · [garb] · [zenyuv] |
 | Pipeline & framework | [zenpipe] · [zencodec] · [zencodecs] · [zenlayout] · [zennode] · [zenwasm] · [zentract] |
 | Metrics | [zensim] · [fast-ssim2] · [butteraugli] · [zenmetrics] · [resamplescope-rs] |
-| Pickers & ML | [zenanalyze] · [zenpredict] · [zenpicker] |
+| Pickers & ML | [zenanalyze] · [zenpredict] · [zenpicker] · [zenanalyze-api] |
+| Test corpora | [codec-corpus] · [imazen-26] |
 | Products | [Imageflow] image engine ([.NET][imageflow-dotnet] · [Node][imageflow-node] · [Go][imageflow-go]) · [Imageflow Server] · [ImageResizer] (C#) |
 
 <sub>¹ pure-Rust, `#![forbid(unsafe_code)]` codecs, as of 2026</sub>
 
 ### General Rust awesomeness
 
-[zenbench] · [archmage] · [magetypes] · [enough] · [whereat] · [cargo-copter]
+[zenbench] · [archmage] · [magetypes] · [enough] · [whereat] · [cargo-copter] · [zenutils]
 
 [Open source](https://www.imazen.io/open-source) · [@imazen](https://github.com/imazen) · [@lilith](https://github.com/lilith) · [lib.rs/~lilith](https://lib.rs/~lilith)
 
@@ -164,36 +165,38 @@ Curves that claim a standard name are validated against their reference implemen
 [zengif]: https://github.com/imazen/zengif
 [zenavif]: https://github.com/imazen/zenavif
 [zenjxl]: https://github.com/imazen/zenjxl
+[zenjxl-decoder]: https://github.com/imazen/zenjxl-decoder
+[jxl-encoder]: https://github.com/imazen/jxl-encoder
 [zenbitmaps]: https://github.com/imazen/zenbitmaps
 [heic]: https://github.com/imazen/heic
-[zentiff]: https://github.com/imazen/zentiff
-[zenpdf]: https://github.com/imazen/zenpdf
+[zentiff]: https://github.com/imazen/zenextras
+[zenpdf]: https://github.com/imazen/zenextras
 [zensvg]: https://github.com/imazen/zenextras
 [zenjp2]: https://github.com/imazen/zenextras
 [zenraw]: https://github.com/imazen/zenraw
 [ultrahdr]: https://github.com/imazen/ultrahdr
-[zenjxl-decoder]: https://github.com/imazen/zenjxl-decoder
-[jxl-encoder]: https://github.com/imazen/jxl-encoder
 [zenrav1e]: https://github.com/imazen/zenrav1e
 [rav1d-safe]: https://github.com/imazen/rav1d-safe
-[zenavif-parse]: https://github.com/imazen/zenavif-parse
-[zenavif-serialize]: https://github.com/imazen/zenavif-serialize
+[zenravif]: https://github.com/imazen/cavif-rs
+[zenavif-parse]: https://github.com/imazen/zenavif
+[zenavif-serialize]: https://github.com/imazen/zenavif
 [zenflate]: https://github.com/imazen/zenflate
 [zenzop]: https://github.com/imazen/zenzop
 [zenzstd]: https://github.com/imazen/zenzstd
 [zenresize]: https://github.com/imazen/zenresize
 [zenquant]: https://github.com/imazen/zenquant
 [zenblend]: https://github.com/imazen/zenblend
-[zenfilters]: https://github.com/imazen/zenfilters
+[zenfilters]: https://github.com/imazen/zenpipe
 [zensally]: https://github.com/imazen/zensally
 [zenpixels]: https://github.com/imazen/zenpixels
 [zenpixels-convert]: https://github.com/imazen/zenpixels
 [linear-srgb]: https://github.com/imazen/linear-srgb
 [garb]: https://github.com/imazen/garb
+[zenyuv]: https://github.com/imazen/zenjpeg
 [zenpipe]: https://github.com/imazen/zenpipe
 [zencodec]: https://github.com/imazen/zencodec
-[zencodecs]: https://github.com/imazen/zencodecs
-[zenlayout]: https://github.com/imazen/zenlayout
+[zencodecs]: https://github.com/imazen/zenpipe
+[zenlayout]: https://github.com/imazen/zenpipe
 [zennode]: https://github.com/imazen/zennode
 [zenwasm]: https://github.com/imazen/zenwasm
 [zentract]: https://github.com/imazen/zentract
@@ -205,12 +208,16 @@ Curves that claim a standard name are validated against their reference implemen
 [zenanalyze]: https://github.com/imazen/zenanalyze
 [zenpredict]: https://github.com/imazen/zenanalyze
 [zenpicker]: https://github.com/imazen/zenanalyze
+[zenanalyze-api]: https://github.com/imazen/zenanalyze
+[codec-corpus]: https://github.com/imazen/codec-corpus
+[imazen-26]: https://github.com/imazen/imazen-26
 [zenbench]: https://github.com/imazen/zenbench
 [archmage]: https://github.com/imazen/archmage
 [magetypes]: https://github.com/imazen/archmage
 [enough]: https://github.com/imazen/enough
 [whereat]: https://github.com/lilith/whereat
 [cargo-copter]: https://github.com/imazen/cargo-copter
+[zenutils]: https://github.com/imazen/zenutils
 [Imageflow]: https://github.com/imazen/imageflow
 [Imageflow Server]: https://github.com/imazen/imageflow-dotnet-server
 [ImageResizer]: https://github.com/imazen/resizer
