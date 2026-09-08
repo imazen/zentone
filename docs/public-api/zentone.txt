@@ -1,0 +1,293 @@
+# zentone public API — supported surface (default features)
+# (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
+# Encodings: crate-name prefix stripped; auto traits collapse to a
+# count + exceptions; trait impls collapse to one roster line per
+# type (method signatures live at the trait definition); blanket
+# impls omitted; re-export duplicates annotated `[also: path]`.
+# DO NOT EDIT BY HAND — commit regenerated changes with the code.
+#
+# files: zentone.txt 252 lines (supported surface) | zentone.features.txt 197 added (features: avx512,experimental,hdr-shootout,std,zenpixels) | zentone.internal.txt 26 lines (26 hidden + 0 excluded-feature)
+# arch-unique surface: (none — portable on every target)
+
+## summary
+#
+#   pub modules                                 7
+#   pub types (struct/enum/trait/alias)        31
+#   pub consts/statics                         13
+#   free functions                             43
+#   inherent methods                           51
+#   struct fields                              57
+#   enum variants                              39
+#   trait roster entries (type × trait)        62
+#   auto-trait-complete types                  16
+#   auto-trait exceptions                       2
+#
+# per-module pub lines:
+#   (root)                          118
+#   curves                           32
+#   gainmap                          49
+#   gamut                            16
+#   hlg                              10
+#   pipeline                          9
+#   sdr_hdr                           7
+
+## items (230 lines)
+
+pub mod zentone
+pub mod curves
+pub curves::AgxLook::Default
+pub curves::AgxLook::Golden
+pub curves::AgxLook::Punchy
+pub curves::ToneMapCurve::AcesAp1
+pub curves::ToneMapCurve::Agx(curves::AgxLook)
+pub curves::ToneMapCurve::Bt2390
+pub curves::ToneMapCurve::Bt2390::source_peak: f32
+pub curves::ToneMapCurve::Bt2390::target_peak: f32
+pub curves::ToneMapCurve::Clamp
+pub curves::ToneMapCurve::ExtendedReinhard
+pub curves::ToneMapCurve::ExtendedReinhard::l_max: f32
+pub curves::ToneMapCurve::ExtendedReinhard::luma: [f32; 3]
+pub curves::ToneMapCurve::HableFilmic
+pub curves::ToneMapCurve::Mobius
+pub curves::ToneMapCurve::Mobius::knee: f32
+pub curves::ToneMapCurve::Mobius::source_peak: f32
+pub curves::ToneMapCurve::Narkowicz
+pub curves::ToneMapCurve::Reinhard
+pub curves::ToneMapCurve::ReinhardJodie
+pub curves::ToneMapCurve::ReinhardJodie::luma: [f32; 3]
+pub curves::ToneMapCurve::TunedReinhard
+pub curves::ToneMapCurve::TunedReinhard::content_max_nits: f32
+pub curves::ToneMapCurve::TunedReinhard::display_max_nits: f32
+pub curves::ToneMapCurve::TunedReinhard::luma: [f32; 3]
+pub fn curves::aces_ap1([f32; 3]) -> [f32; 3]
+pub fn curves::agx_tonemap([f32; 3], curves::AgxLook) -> [f32; 3]
+pub fn curves::bt2390_tonemap(f32, f32, f32) -> f32
+pub fn curves::bt2390_tonemap_ext(f32, f32, f32, core::option::Option<f32>) -> f32
+pub fn curves::filmic_narkowicz(f32) -> f32
+pub fn curves::hable_filmic(f32) -> f32
+pub mod gainmap
+pub fn gainmap::Bt2408Yrgb::new(f32, f32) -> Self
+pub fn gainmap::Bt2408Yrgb::with_luma(f32, f32, [f32; 3]) -> Self
+pub fn gainmap::ExtendedReinhardLuma::new(f32, [f32; 3]) -> Self
+pub const fn gainmap::HableFilmic::new() -> Self [also: (root)]
+pub fn gainmap::LumaGainMapSplitter<T>::apply_hlg_row(&self, &[f32], &[f32], &mut [f32], u8, f32, f32)
+pub fn gainmap::LumaGainMapSplitter<T>::apply_pq_row(&self, &[f32], &[f32], &mut [f32], u8, f32)
+pub fn gainmap::LumaGainMapSplitter<T>::apply_row(&self, &[f32], &[f32], &mut [f32], u8)
+pub fn gainmap::LumaGainMapSplitter<T>::config(&self) -> &gainmap::SplitConfig
+pub fn gainmap::LumaGainMapSplitter<T>::curve(&self) -> &T
+pub fn gainmap::LumaGainMapSplitter<T>::new(T, gainmap::SplitConfig) -> Self
+pub fn gainmap::LumaGainMapSplitter<T>::split_hlg_row(&self, &[f32], &mut [f32], &mut [f32], u8, f32, f32, &mut gainmap::SplitStats)
+pub fn gainmap::LumaGainMapSplitter<T>::split_pq_row(&self, &[f32], &mut [f32], &mut [f32], u8, f32, &mut gainmap::SplitStats)
+pub fn gainmap::LumaGainMapSplitter<T>::split_row(&self, &[f32], &mut [f32], &mut [f32], u8, &mut gainmap::SplitStats)
+pub gainmap::SplitConfig::alternate_offset: f32
+pub gainmap::SplitConfig::base_offset: f32
+pub gainmap::SplitConfig::hlg_ootf_mode: pipeline::HlgOotfMode
+pub gainmap::SplitConfig::luma_weights: [f32; 3]
+pub gainmap::SplitConfig::max_log2: f32
+pub gainmap::SplitConfig::min_log2: f32
+pub gainmap::SplitConfig::pre_desaturate: f32
+pub gainmap::SplitStats::clipped_sdr_pixels: u32
+pub gainmap::SplitStats::observed_max_log2: f32
+pub gainmap::SplitStats::observed_min_log2: f32
+pub fn gainmap::LumaToneMap::map_luma(&self, f32) -> f32
+pub fn gainmap::hlg_to_normalized_linear_row(&mut [f32], u8, f32, f32)
+pub fn gainmap::hlg_to_normalized_linear_row_with_mode(&mut [f32], u8, f32, f32, pipeline::HlgOotfMode)
+pub fn gainmap::normalized_linear_to_hlg_row(&mut [f32], u8, f32, f32)
+pub fn gainmap::normalized_linear_to_hlg_row_with_mode(&mut [f32], u8, f32, f32, pipeline::HlgOotfMode)
+pub fn gainmap::normalized_linear_to_pq_row(&mut [f32], u8, f32)
+pub fn gainmap::pq_to_normalized_linear_row(&mut [f32], u8, f32)
+pub mod gamut
+pub const gamut::BT2020_TO_BT709: [[f32; 3]; 3]
+pub const gamut::BT2020_TO_P3: [[f32; 3]; 3]
+pub const gamut::BT709_TO_BT2020: [[f32; 3]; 3]
+pub const gamut::BT709_TO_P3: [[f32; 3]; 3]
+pub const gamut::P3_TO_BT2020: [[f32; 3]; 3]
+pub const gamut::P3_TO_BT709: [[f32; 3]; 3]
+pub fn gamut::apply_matrix(&[[f32; 3]; 3], [f32; 3]) -> [f32; 3]
+pub fn gamut::apply_matrix_row(&[[f32; 3]; 3], &mut [f32], u8)
+pub fn gamut::apply_matrix_row_simd(&[[f32; 3]; 3], &mut [[f32; 3]])
+pub fn gamut::apply_matrix_row_simd_rgba(&[[f32; 3]; 3], &mut [[f32; 4]])
+pub fn gamut::is_out_of_gamut([f32; 3]) -> bool
+pub fn gamut::is_out_of_gamut_mask_simd(&[[f32; 3]], &mut [f32])
+pub fn gamut::soft_clip([f32; 3]) -> [f32; 3]
+pub fn gamut::soft_clip_knee([f32; 3], f32) -> [f32; 3]
+pub fn gamut::soft_clip_knee_strip(&mut [[f32; 3]], f32)
+pub fn gamut::soft_clip_row_simd(&mut [[f32; 3]])
+pub mod hlg
+pub fn hlg::hlg_inverse_ootf([f32; 3], f32) -> [f32; 3]
+pub fn hlg::hlg_inverse_ootf_approx([f32; 3], f32) -> [f32; 3]
+pub fn hlg::hlg_inverse_ootf_approx_row_simd(&mut [[f32; 3]], f32)
+pub fn hlg::hlg_inverse_ootf_row_simd(&mut [[f32; 3]], f32)
+pub fn hlg::hlg_ootf([f32; 3], f32) -> [f32; 3]
+pub fn hlg::hlg_ootf_approx([f32; 3], f32) -> [f32; 3]
+pub fn hlg::hlg_ootf_approx_row_simd(&mut [[f32; 3]], f32)
+pub fn hlg::hlg_ootf_row_simd(&mut [[f32; 3]], f32)
+pub fn hlg::hlg_system_gamma(f32) -> f32
+pub fn hlg::hlg_to_display([f32; 3], f32) -> [f32; 3]
+pub mod pipeline
+pub enum pipeline::HlgOotfMode
+pub pipeline::HlgOotfMode::Exact
+pub pipeline::HlgOotfMode::LibultrahdrCompat
+pub fn pipeline::tonemap_hlg_rgba_row_simd(&mut TonemapScratch, &[[f32; 4]], &mut [[f32; 4]], &dyn ToneMap, f32)
+pub fn pipeline::tonemap_hlg_row_simd(&mut TonemapScratch, &[[f32; 3]], &mut [[f32; 3]], &dyn ToneMap, f32)
+pub fn pipeline::tonemap_pq_rgba_row_simd(&mut TonemapScratch, &[[f32; 4]], &mut [[f32; 4]], &dyn ToneMap)
+pub fn pipeline::tonemap_pq_row_simd(&mut TonemapScratch, &[[f32; 3]], &mut [[f32; 3]], &dyn ToneMap)
+pub fn pipeline::tonemap_pq_to_srgb8_rgba_row_simd(&mut TonemapScratch, &[[f32; 4]], &mut [[u8; 4]], &dyn ToneMap)
+pub fn pipeline::tonemap_pq_to_srgb8_row_simd(&mut TonemapScratch, &[[f32; 3]], &mut [[u8; 3]], &dyn ToneMap)
+pub mod sdr_hdr
+pub const sdr_hdr::OOTF_GAMMA_ARIB: f32
+pub const sdr_hdr::OOTF_GAMMA_BBC: f32
+pub fn sdr_hdr::gamma_100_to_203(f32) -> f32
+pub fn sdr_hdr::gamma_203_to_100(f32) -> f32
+pub fn sdr_hdr::ootf_gamma_adjust(f32, f32) -> f32
+pub fn sdr_hdr::scale_100_to_203(f32) -> f32
+pub fn sdr_hdr::scale_203_to_100(f32) -> f32
+#[non_exhaustive] pub enum AgxLook [also: curves]
+pub AgxLook::Default
+pub AgxLook::Golden
+pub AgxLook::Punchy
+#[non_exhaustive] pub enum EetfSpace
+pub EetfSpace::MaxRgb
+pub EetfSpace::Yrgb
+#[non_exhaustive] pub enum Error
+pub Error::BufferTooSmall
+pub Error::BufferTooSmall::actual: usize
+pub Error::BufferTooSmall::required: usize
+pub Error::EmptyChannel
+pub Error::EmptyChannel::channel: u8
+pub Error::InvalidConfig(&'static str)
+pub Error::LengthMismatch
+pub Error::LengthMismatch::hdr: usize
+pub Error::LengthMismatch::sdr: usize
+pub Error::NoValidSamples
+pub Error::NotAligned
+pub Error::NotAligned::channels: u8
+pub Error::NotAligned::len: usize
+pub Error::RingBufferFull
+#[non_exhaustive] pub enum ToneMapCurve [also: curves]
+pub ToneMapCurve::AcesAp1
+pub ToneMapCurve::Agx(curves::AgxLook)
+pub ToneMapCurve::Bt2390
+pub ToneMapCurve::Bt2390::source_peak: f32
+pub ToneMapCurve::Bt2390::target_peak: f32
+pub ToneMapCurve::Clamp
+pub ToneMapCurve::ExtendedReinhard
+pub ToneMapCurve::ExtendedReinhard::l_max: f32
+pub ToneMapCurve::ExtendedReinhard::luma: [f32; 3]
+pub ToneMapCurve::HableFilmic
+pub ToneMapCurve::Mobius
+pub ToneMapCurve::Mobius::knee: f32
+pub ToneMapCurve::Mobius::source_peak: f32
+pub ToneMapCurve::Narkowicz
+pub ToneMapCurve::Reinhard
+pub ToneMapCurve::ReinhardJodie
+pub ToneMapCurve::ReinhardJodie::luma: [f32; 3]
+pub ToneMapCurve::TunedReinhard
+pub ToneMapCurve::TunedReinhard::content_max_nits: f32
+pub ToneMapCurve::TunedReinhard::display_max_nits: f32
+pub ToneMapCurve::TunedReinhard::luma: [f32; 3]
+pub struct Bt2408Tonemapper
+pub fn Bt2408Tonemapper::content_max_nits(&self) -> f32
+pub fn Bt2408Tonemapper::display_max_nits(&self) -> f32
+pub fn Bt2408Tonemapper::luma(&self) -> [f32; 3]
+pub fn Bt2408Tonemapper::max_rgb(f32, f32) -> Self
+pub fn Bt2408Tonemapper::new(f32, f32) -> Self
+pub fn Bt2408Tonemapper::space(&self) -> EetfSpace
+pub fn Bt2408Tonemapper::tonemap_nits(&self, f32) -> f32
+pub fn Bt2408Tonemapper::with_luma(f32, f32, [f32; 3]) -> Self
+pub struct Bt2408Yrgb(_) [also: gainmap]
+pub fn gainmap::Bt2408Yrgb::new(f32, f32) -> Self
+pub fn gainmap::Bt2408Yrgb::with_luma(f32, f32, [f32; 3]) -> Self
+pub struct Bt2446B
+pub fn Bt2446B::new(f32, f32) -> Self
+pub struct Bt2446C
+pub fn Bt2446C::inverse_tone_curve(&self, f32) -> f32
+pub fn Bt2446C::new(f32, f32) -> Self
+pub fn Bt2446C::tone_curve(&self, f32) -> f32
+pub fn Bt2446C::with_params(f32, f32, f32, f32, f32, f32, f32) -> Self
+pub struct CompiledFilmicSpline
+pub fn CompiledFilmicSpline::apply_spline(&self, f32) -> f32
+pub fn CompiledFilmicSpline::for_hdr_peak(f32) -> Self
+pub fn CompiledFilmicSpline::luma(&self) -> [f32; 3]
+pub fn CompiledFilmicSpline::new(&FilmicSplineConfig) -> Self
+pub fn CompiledFilmicSpline::with_luma(&FilmicSplineConfig, [f32; 3]) -> Self
+pub struct ExtendedReinhardLuma [also: gainmap]
+pub fn gainmap::ExtendedReinhardLuma::new(f32, [f32; 3]) -> Self
+#[non_exhaustive] pub struct FilmicSplineConfig
+pub FilmicSplineConfig::balance: f32
+pub FilmicSplineConfig::black_point_source: f32
+pub FilmicSplineConfig::black_point_target: f32
+pub FilmicSplineConfig::contrast: f32
+pub FilmicSplineConfig::grey_point_target: f32
+pub FilmicSplineConfig::latitude: f32
+pub FilmicSplineConfig::output_power: f32
+pub FilmicSplineConfig::saturation: f32
+pub FilmicSplineConfig::white_point_source: f32
+pub FilmicSplineConfig::white_point_target: f32
+pub struct HableFilmic [also: gainmap]
+pub struct LumaFn<F: core::ops::function::Fn(f32) -> f32>(pub F) [also: gainmap]
+pub struct LumaGainMapSplitter<T: gainmap::LumaToneMap> [also: gainmap]
+pub fn gainmap::LumaGainMapSplitter<T>::apply_hlg_row(&self, &[f32], &[f32], &mut [f32], u8, f32, f32)
+pub fn gainmap::LumaGainMapSplitter<T>::apply_pq_row(&self, &[f32], &[f32], &mut [f32], u8, f32)
+pub fn gainmap::LumaGainMapSplitter<T>::apply_row(&self, &[f32], &[f32], &mut [f32], u8)
+pub fn gainmap::LumaGainMapSplitter<T>::config(&self) -> &gainmap::SplitConfig
+pub fn gainmap::LumaGainMapSplitter<T>::curve(&self) -> &T
+pub fn gainmap::LumaGainMapSplitter<T>::new(T, gainmap::SplitConfig) -> Self
+pub fn gainmap::LumaGainMapSplitter<T>::split_hlg_row(&self, &[f32], &mut [f32], &mut [f32], u8, f32, f32, &mut gainmap::SplitStats)
+pub fn gainmap::LumaGainMapSplitter<T>::split_pq_row(&self, &[f32], &mut [f32], &mut [f32], u8, f32, &mut gainmap::SplitStats)
+pub fn gainmap::LumaGainMapSplitter<T>::split_row(&self, &[f32], &mut [f32], &mut [f32], u8, &mut gainmap::SplitStats)
+pub struct SplitConfig [also: gainmap]
+pub SplitConfig::alternate_offset: f32
+pub SplitConfig::base_offset: f32
+pub SplitConfig::hlg_ootf_mode: pipeline::HlgOotfMode
+pub SplitConfig::luma_weights: [f32; 3]
+pub SplitConfig::max_log2: f32
+pub SplitConfig::min_log2: f32
+pub SplitConfig::pre_desaturate: f32
+pub struct SplitStats [also: gainmap]
+pub SplitStats::clipped_sdr_pixels: u32
+pub SplitStats::observed_max_log2: f32
+pub SplitStats::observed_min_log2: f32
+pub struct TonemapScratch
+pub fn TonemapScratch::chunk_size(&self) -> usize
+pub fn TonemapScratch::new() -> Self
+pub fn TonemapScratch::with_chunk_size(usize) -> Self
+pub const LUMA_BT2020: [f32; 3]
+pub const LUMA_BT709: [f32; 3]
+pub const LUMA_P3: [f32; 3]
+pub trait LumaToneMap [also: gainmap]
+pub fn LumaToneMap::map_luma(&self, f32) -> f32
+pub trait ToneMap
+pub fn ToneMap::map_into(&self, &[f32], &mut [f32], u8)
+pub fn ToneMap::map_rgb(&self, [f32; 3]) -> [f32; 3]
+pub fn ToneMap::map_row(&self, &mut [f32], u8)
+pub fn ToneMap::map_strip_simd(&self, &mut [[f32; 3]])
+pub type Result<T> = core::result::Result<T, Error>
+
+## trait impls (19 types)
+
+&T: gainmap::LumaToneMap
+Bt2408Tonemapper: ToneMap
+Bt2446B: ToneMap, gainmap::LumaToneMap
+Bt2446C: ToneMap, gainmap::LumaToneMap
+CompiledFilmicSpline: Clone, Debug, ToneMap, gainmap::LumaToneMap
+EetfSpace: Clone, Copy, Debug, Default, Eq, PartialEq
+Error: Clone, Debug, Display, Eq, Error, PartialEq
+FilmicSplineConfig: Clone, Copy, Debug, Default, PartialEq
+TonemapScratch: Debug, Default
+alloc::boxed::Box<T>: gainmap::LumaToneMap
+curves::AgxLook: Clone, Copy, Debug, Eq, PartialEq
+curves::ToneMapCurve: Clone, Copy, Debug, PartialEq, ToneMap
+gainmap::Bt2408Yrgb: gainmap::LumaToneMap
+gainmap::ExtendedReinhardLuma: gainmap::LumaToneMap
+gainmap::HableFilmic: Clone, Copy, Debug, Default, gainmap::LumaToneMap
+gainmap::LumaFn<F>: f32> gainmap::LumaToneMap
+gainmap::SplitConfig: Clone, Copy, Debug, Default
+gainmap::SplitStats: Clone, Copy, Debug, Default
+pipeline::HlgOotfMode: Clone, Copy, Debug, Default, Eq, PartialEq
+
+## auto traits
+
+16 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+gainmap::LumaFn<F>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe
+gainmap::LumaGainMapSplitter<T>: !Freeze !RefUnwindSafe !Send !Sync !Unpin !UnwindSafe

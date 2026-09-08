@@ -11,6 +11,8 @@ readme = "README.crates.md"
 keywords = ["hdr", "tonemap", "bt2408", "agx", "image"]
 categories = ["multimedia::images", "graphics", "no-std"]
 exclude = [
+    "docs/",
+    "apidoc/",
     "CLAUDE.md",
     "CONTEXT-HANDOFF.md",
     "FEEDBACK.md",

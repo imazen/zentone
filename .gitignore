@@ -10,3 +10,7 @@ __pycache__/
 .jj/
 /dev/shootout/target
 /dev/shootout/Cargo.lock
+
+# apidoc/ snapshot-runner package: commit its lockfile, ignore its target
+!apidoc/Cargo.lock
+apidoc/target/

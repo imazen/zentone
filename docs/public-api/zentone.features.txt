@@ -1,0 +1,231 @@
+# zentone public API — additions from non-default features
+# features: avx512,experimental,hdr-shootout,std,zenpixels
+# (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
+# Encodings: crate-name prefix stripped; auto traits collapse to a
+# count + exceptions; trait impls collapse to one roster line per
+# type (method signatures live at the trait definition); blanket
+# impls omitted; re-export duplicates annotated `[also: path]`.
+# DO NOT EDIT BY HAND — commit regenerated changes with the code.
+
+## summary
+#
+#   pub modules                                 4
+#   pub types (struct/enum/trait/alias)        20
+#   pub consts/statics                         34
+#   free functions                             22
+#   inherent methods                           57
+#   struct fields                              46
+#   enum variants                              10
+#   trait roster entries (type × trait)        61
+#   auto-trait-complete types                  18
+#
+# per-module pub lines:
+#   (root)                            2
+#   experimental                    190
+#   gainmap                           1
+
+## items (177 lines)
+
+pub mod experimental
+pub mod experimental::aces
+pub struct experimental::aces::AscCdl [also: experimental::aces_encodings]
+pub experimental::aces::AscCdl::offset: [f32; 3]
+pub experimental::aces::AscCdl::power: [f32; 3]
+pub experimental::aces::AscCdl::saturation: f32
+pub experimental::aces::AscCdl::slope: [f32; 3]
+pub const experimental::aces_encodings::AscCdl::IDENTITY: Self
+pub fn experimental::aces_encodings::AscCdl::apply(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::aces_encodings::AscCdl::apply_no_clamp(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::aces_encodings::AscCdl::inverse(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::aces_encodings::AscCdl::inverse_no_clamp(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::aces_encodings::AscCdl::is_invertible(&self) -> bool
+pub struct experimental::aces::ReferenceGamutCompression [also: experimental::aces_encodings]
+pub experimental::aces::ReferenceGamutCompression::limit: [f32; 3]
+pub experimental::aces::ReferenceGamutCompression::power: f32
+pub experimental::aces::ReferenceGamutCompression::threshold: [f32; 3]
+pub const experimental::aces_encodings::ReferenceGamutCompression::ACES_1_3: Self
+pub fn experimental::aces_encodings::ReferenceGamutCompression::apply(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::aces_encodings::ReferenceGamutCompression::apply_row(&self, &mut [f32], usize)
+pub fn experimental::aces_encodings::ReferenceGamutCompression::inverse(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::aces_encodings::ReferenceGamutCompression::inverse_row(&self, &mut [f32], usize)
+pub fn experimental::aces_encodings::ReferenceGamutCompression::is_valid(&self) -> bool
+pub const experimental::aces::ACES_WHITE: [f32; 2] [also: experimental::aces_encodings]
+pub const experimental::aces::CONE_RESP_MAT_BRADFORD: [[f32; 3]; 3] [also: experimental::aces_encodings]
+pub const experimental::aces::CONE_RESP_MAT_CAT02: [[f32; 3]; 3] [also: experimental::aces_encodings]
+pub const experimental::aces::D65_WHITE: [f32; 2] [also: experimental::aces_encodings]
+pub fn experimental::aces::acescc_decode(f32) -> f32 [also: experimental::aces_encodings]
+pub fn experimental::aces::acescc_encode(f32) -> f32 [also: experimental::aces_encodings]
+pub fn experimental::aces::acescct_decode(f32) -> f32 [also: experimental::aces_encodings]
+pub fn experimental::aces::acescct_encode(f32) -> f32 [also: experimental::aces_encodings]
+pub fn experimental::aces::ap0_to_ap1([f32; 3]) -> [f32; 3] [also: experimental::aces_encodings]
+pub fn experimental::aces::ap1_to_ap0([f32; 3]) -> [f32; 3] [also: experimental::aces_encodings]
+pub fn experimental::aces::apply_scalar(&mut [f32], impl core::ops::function::Fn(f32) -> f32) [also: experimental::aces_encodings]
+pub fn experimental::aces::bradford_matrix([f32; 2], [f32; 2]) -> core::option::Option<[[f32; 3]; 3]> [also: experimental::aces_encodings]
+pub fn experimental::aces::chromatic_adaptation_matrix([f32; 2], [f32; 2], &[[f32; 3]; 3]) -> core::option::Option<[[f32; 3]; 3]> [also: experimental::aces_encodings]
+pub fn experimental::aces::rgb_to_rgb_matrix(&experimental::Chromaticities, &experimental::Chromaticities) -> core::option::Option<[[f32; 3]; 3]> [also: experimental::aces_encodings]
+pub mod experimental::aces_encodings
+pub experimental::aces_encodings::AscCdl::offset: [f32; 3]
+pub experimental::aces_encodings::AscCdl::power: [f32; 3]
+pub experimental::aces_encodings::AscCdl::saturation: f32
+pub experimental::aces_encodings::AscCdl::slope: [f32; 3]
+pub const experimental::aces_encodings::AscCdl::IDENTITY: Self
+pub fn experimental::aces_encodings::AscCdl::apply(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::aces_encodings::AscCdl::apply_no_clamp(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::aces_encodings::AscCdl::inverse(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::aces_encodings::AscCdl::inverse_no_clamp(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::aces_encodings::AscCdl::is_invertible(&self) -> bool
+pub experimental::aces_encodings::ReferenceGamutCompression::limit: [f32; 3]
+pub experimental::aces_encodings::ReferenceGamutCompression::power: f32
+pub experimental::aces_encodings::ReferenceGamutCompression::threshold: [f32; 3]
+pub const experimental::aces_encodings::ReferenceGamutCompression::ACES_1_3: Self
+pub fn experimental::aces_encodings::ReferenceGamutCompression::apply(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::aces_encodings::ReferenceGamutCompression::apply_row(&self, &mut [f32], usize)
+pub fn experimental::aces_encodings::ReferenceGamutCompression::inverse(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::aces_encodings::ReferenceGamutCompression::inverse_row(&self, &mut [f32], usize)
+pub fn experimental::aces_encodings::ReferenceGamutCompression::is_valid(&self) -> bool
+pub mod experimental::detect
+#[non_exhaustive] pub enum experimental::detect::DetectedParams
+pub experimental::detect::DetectedParams::Bt2408
+pub experimental::detect::DetectedParams::Bt2408::content_nits: f32
+pub experimental::detect::DetectedParams::Bt2408::display_nits: f32
+pub experimental::detect::DetectedParams::ExtendedReinhard
+pub experimental::detect::DetectedParams::ExtendedReinhard::l_max: f32
+pub experimental::detect::DetectedParams::None
+#[non_exhaustive] pub struct experimental::detect::DetectedCurve
+pub experimental::detect::DetectedCurve::name: &'static str
+pub experimental::detect::DetectedCurve::params: experimental::detect::DetectedParams
+pub experimental::detect::DetectedCurve::rms_error: f32
+pub fn experimental::detect::detect_standard(&[f32], f32, f32) -> core::option::Option<experimental::detect::DetectedCurve>
+#[non_exhaustive] pub enum experimental::DisplayEotf
+pub experimental::DisplayEotf::Bt1886
+pub experimental::DisplayEotf::Gamma22
+pub experimental::DisplayEotf::Gamma26
+pub experimental::DisplayEotf::Hlg
+pub experimental::DisplayEotf::Linear
+pub experimental::DisplayEotf::SrgbPiecewise
+pub experimental::DisplayEotf::St2084
+pub fn experimental::DisplayEotf::decode(self, f32) -> f32
+pub fn experimental::DisplayEotf::decode_rgb(self, [f32; 3]) -> [f32; 3]
+pub fn experimental::DisplayEotf::encode(self, f32) -> f32
+pub fn experimental::DisplayEotf::encode_rgb(self, [f32; 3]) -> [f32; 3]
+pub struct experimental::Aces2Config
+pub experimental::Aces2Config::limiting_primaries: experimental::Chromaticities
+pub experimental::Aces2Config::peak_luminance: f32
+pub struct experimental::Aces2DisplayEncoding
+pub experimental::Aces2DisplayEncoding::encoding_primaries: experimental::Chromaticities
+pub experimental::Aces2DisplayEncoding::eotf: experimental::DisplayEotf
+pub experimental::Aces2DisplayEncoding::linear_scale: f32
+pub experimental::Aces2DisplayEncoding::scale_white: bool
+pub const experimental::Aces2DisplayEncoding::DCDM_GAMMA26: Self
+pub const experimental::Aces2DisplayEncoding::DCDM_ST2084: Self
+pub const experimental::Aces2DisplayEncoding::DISPLAY_P3: Self
+pub const experimental::Aces2DisplayEncoding::P3_D65_GAMMA26: Self
+pub const experimental::Aces2DisplayEncoding::P3_D65_ST2084: Self
+pub const experimental::Aces2DisplayEncoding::REC2100_HLG: Self
+pub const experimental::Aces2DisplayEncoding::REC2100_ST2084: Self
+pub const experimental::Aces2DisplayEncoding::REC709_BT1886: Self
+pub const experimental::Aces2DisplayEncoding::REC709_GAMMA22: Self
+pub const experimental::Aces2DisplayEncoding::SRGB: Self
+pub const fn experimental::Aces2DisplayEncoding::with_white_scaling(self) -> Self
+pub struct experimental::Aces2DisplayTransform
+pub fn experimental::Aces2DisplayTransform::config(&self) -> &experimental::Aces2Config
+pub fn experimental::Aces2DisplayTransform::decode_display(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::Aces2DisplayTransform::encode_display(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::Aces2DisplayTransform::encoding(&self) -> &experimental::Aces2DisplayEncoding
+pub fn experimental::Aces2DisplayTransform::forward(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::Aces2DisplayTransform::from_output_transform(experimental::Aces2OutputTransform, experimental::Aces2Config, experimental::Aces2DisplayEncoding) -> Result<Self>
+pub fn experimental::Aces2DisplayTransform::inverse(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::Aces2DisplayTransform::new(experimental::Aces2Config, experimental::Aces2DisplayEncoding) -> Result<Self>
+pub fn experimental::Aces2DisplayTransform::output_transform(&self) -> &experimental::Aces2OutputTransform
+pub fn experimental::Aces2DisplayTransform::transform_id(&self) -> core::option::Option<&'static str>
+pub struct experimental::Aces2OutputTransform
+pub fn experimental::Aces2OutputTransform::forward(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::Aces2OutputTransform::inverse(&self, [f32; 3]) -> [f32; 3]
+pub fn experimental::Aces2OutputTransform::new(experimental::Aces2Config) -> Result<Self>
+pub fn experimental::Aces2OutputTransform::peak_luminance(&self) -> f32
+pub struct experimental::AdaptiveTonemapper
+pub fn experimental::AdaptiveTonemapper::fit_luminance(&[f32], &[f32], u8, &experimental::FitConfig) -> Result<Self>
+pub fn experimental::AdaptiveTonemapper::fit_per_channel(&[f32], &[f32], u8, &experimental::FitConfig) -> Result<Self>
+pub fn experimental::AdaptiveTonemapper::is_per_channel(&self) -> bool
+pub fn experimental::AdaptiveTonemapper::max_hdr_observed(&self) -> f32
+pub fn experimental::AdaptiveTonemapper::stats(&self) -> &experimental::FitStats
+pub struct experimental::Chromaticities
+pub experimental::Chromaticities::blue: [f32; 2]
+pub experimental::Chromaticities::green: [f32; 2]
+pub experimental::Chromaticities::red: [f32; 2]
+pub experimental::Chromaticities::white: [f32; 2]
+pub const experimental::Chromaticities::AP0: Self
+pub const experimental::Chromaticities::AP1: Self
+pub const experimental::Chromaticities::P3_D60: Self
+pub const experimental::Chromaticities::P3_D65: Self
+pub const experimental::Chromaticities::REC2020: Self
+pub const experimental::Chromaticities::REC2020_D60: Self
+pub const experimental::Chromaticities::REC709: Self
+pub const experimental::Chromaticities::REC709_D60: Self
+pub const experimental::Chromaticities::XYZ_E: Self
+#[non_exhaustive] pub struct experimental::FitConfig
+pub experimental::FitConfig::compute_mae: bool
+pub experimental::FitConfig::detect_saturation: bool
+pub experimental::FitConfig::luma_coeffs: [f32; 3]
+pub experimental::FitConfig::max_samples: usize
+#[non_exhaustive] pub struct experimental::FitStats
+pub experimental::FitStats::mae: core::option::Option<f32>
+pub experimental::FitStats::max_hdr: f32
+pub experimental::FitStats::samples: usize
+pub experimental::FitStats::saturation_ratio: f32
+pub struct experimental::ProfileLuminance<'a>
+pub struct experimental::ProfilePerChannel<'a>
+pub struct experimental::ProfileToneCurve
+pub fn experimental::ProfileToneCurve::eval(&self, f32) -> f32
+pub fn experimental::ProfileToneCurve::from_lut(alloc::vec::Vec<f32>) -> core::option::Option<Self>
+pub fn experimental::ProfileToneCurve::from_xy_pairs(&[f32]) -> core::option::Option<Self>
+pub fn experimental::ProfileToneCurve::identity() -> Self
+pub fn experimental::ProfileToneCurve::luminance(&self, [f32; 3]) -> experimental::ProfileLuminance<'_>
+pub fn experimental::ProfileToneCurve::per_channel(&self) -> experimental::ProfilePerChannel<'_>
+#[non_exhaustive] pub struct experimental::StreamingTonemapConfig
+pub experimental::StreamingTonemapConfig::cell_size: u32
+pub experimental::StreamingTonemapConfig::contrast: f32
+pub experimental::StreamingTonemapConfig::desat_threshold: f32
+pub experimental::StreamingTonemapConfig::locality: f32
+pub experimental::StreamingTonemapConfig::lookahead_rows: u32
+pub experimental::StreamingTonemapConfig::saturation: f32
+pub experimental::StreamingTonemapConfig::shadow_lift: f32
+pub experimental::StreamingTonemapConfig::target_key: f32
+pub struct experimental::StreamingTonemapper
+pub fn experimental::StreamingTonemapper::channels(&self) -> u8
+pub fn experimental::StreamingTonemapper::finish(&mut self)
+pub fn experimental::StreamingTonemapper::new(u32, u32, u8, experimental::StreamingTonemapConfig) -> Result<Self>
+pub fn experimental::StreamingTonemapper::progress(&self) -> (u32, u32)
+pub fn experimental::StreamingTonemapper::pull_row(&mut self, &mut [f32]) -> Result<core::option::Option<u32>>
+pub fn experimental::StreamingTonemapper::push_row(&mut self, &[f32]) -> Result<()>
+pub fn experimental::StreamingTonemapper::row_stride(&self) -> usize
+pub fn experimental::StreamingTonemapper::rows_ready(&self) -> u32
+pub const experimental::ACES_OUTPUT_TRANSFORM_IDS: [&str; 54]
+pub const experimental::DCDM_LINEAR_SCALE: f32
+pub fn gainmap::normalized_linear_to_hlg_buffer(zenpixels::buffer::PixelSlice<'_>, f32, f32) -> core::option::Option<zenpixels::buffer::PixelBuffer>
+
+## trait impls (19 types)
+
+experimental::Aces2Config: Clone, Copy, Debug, Default, PartialEq
+experimental::Aces2DisplayEncoding: Clone, Copy, Debug, Default, PartialEq
+experimental::Aces2DisplayTransform: Clone, Debug, ToneMap
+experimental::Aces2OutputTransform: Clone, Debug, ToneMap
+experimental::AdaptiveTonemapper: Clone, Debug, ToneMap
+experimental::Chromaticities: Clone, Copy, Debug, PartialEq
+experimental::DisplayEotf: Clone, Copy, Debug, Eq, PartialEq
+experimental::FitConfig: Clone, Debug, Default
+experimental::FitStats: Clone, Debug, Default
+experimental::ProfileLuminance<'_>: ToneMap
+experimental::ProfileLuminance<'a>: Clone, Copy, Debug
+experimental::ProfilePerChannel<'_>: ToneMap
+experimental::ProfilePerChannel<'a>: Clone, Copy, Debug
+experimental::ProfileToneCurve: Clone, Debug
+experimental::StreamingTonemapConfig: Clone, Debug, Default
+experimental::aces_encodings::AscCdl: Clone, Copy, Debug, Default, PartialEq
+experimental::aces_encodings::ReferenceGamutCompression: Clone, Copy, Debug, Default, PartialEq
+experimental::detect::DetectedCurve: Clone, Debug
+experimental::detect::DetectedParams: Clone, Debug
+
+## auto traits
+
+18 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
