@@ -68,9 +68,9 @@ __polyfit-tools = []
 [dependencies]
 linear-srgb = { version = "0.6.12", default-features = false, features = ["transfer"] }
 zenpixels = { version = ">=0.2.14, <0.4.0", optional = true, default-features = false }
-libm = { version = "0.2", default-features = false }
-archmage = { version = "0.9.22", default-features = false, features = ["macros"] }
-magetypes = { version = "0.9.22", default-features = false }
+libm = { version = "0.2.16", default-features = false }
+archmage = { version = "0.9.29", default-features = false, features = ["macros"] }
+magetypes = { version = "0.9.29", default-features = false }
 
 [dev-dependencies]
 gainforge = "0.5.0"
@@ -81,8 +81,8 @@ gainforge = "0.5.0"
 # to `>=0.9.0` (commit f32e091) split the graph into two moxcms versions and
 # broke the bench with an `expected moxcms::profile::ColorProfile` mismatch.
 moxcms = "0.8.1"
-image = { version = "0.25", default-features = false, features = ["png"] }
-zensim = "0.2.6"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+zensim = "0.2.7"
 # Dev-only HDR→SDR shootout / offline-fitting drivers (and their unpublished
 # sibling-checkout deps + crates-io patches) live in `dev/shootout/`, NOT here:
 # a root-manifest path dep that only exists on one machine breaks every cargo
@@ -90,7 +90,7 @@ zensim = "0.2.6"
 
 # Native-only: benchmark dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-zenbench = { version = "0.1.6", features = ["criterion-compat"] }
+zenbench = { version = "0.1.10", features = ["criterion-compat"] }
 
 [[example]]
 name = "visual_compare"
