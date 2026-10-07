@@ -7,6 +7,8 @@ adheres to semver.
 ## [Unreleased]
 
 ### Changed
+- Dependency floors raised to the tested versions (archmage/magetypes 0.9.29, libm 0.2.16; dev: zensim 0.2.7, zenbench 0.1.10, image 0.25.10). moxcms 0.9 and gainforge 0.5.1 stay held by the 1.89 MSRV (4b2c5b1).
+- CI: `actions/checkout` v4 -> v7 (945bb41).
 - **`zenpixels` requirement now spans the published minor and the next one**:
   `">=0.2.14, <0.4.0"` (was `"0.2.14"`). For a `0.x` crate Cargo treats the minor
   as the major, so the plain requirement meant `^0.2.14` = `>=0.2.14, <0.3.0` and
