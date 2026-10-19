@@ -29,8 +29,6 @@ jobs:
             target: aarch64-pc-windows-msvc
           - os: macos-latest
             target: aarch64-apple-darwin
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
 
     runs-on: ${{ matrix.os }}
 
@@ -86,7 +84,7 @@ jobs:
           targets: wasm32-unknown-unknown, wasm32-wasip1
 
       - name: Install wasmtime
-        run: curl https://wasmtime.dev/install.sh -sSf | bash && echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
+        run: curl https://wasmtime.dev/install.sh -sSf | bash && echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
 
       - name: Check wasm32-unknown-unknown (no default features)
         run: cargo check --target wasm32-unknown-unknown --no-default-features
