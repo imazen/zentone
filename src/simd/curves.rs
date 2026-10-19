@@ -55,33 +55,33 @@ pub(crate) struct Bt2408Params {
 
 #[archmage::magetypes(define(f32x8), v3, neon, wasm128, scalar)]
 pub(crate) fn bt2408_yrgb_tier(token: Token, row: &mut [[f32; 3]], p: &Bt2408Params) {
-    let zero = f32x8::zero(token);
-    let one = f32x8::splat(token, 1.0);
-    let pos_eps = f32x8::splat(token, f32::MIN_POSITIVE);
-    let inv_10000 = f32x8::splat(token, 1.0 / 10000.0);
-    let lr = f32x8::splat(token, p.luma[0]);
-    let lg = f32x8::splat(token, p.luma[1]);
-    let lb = f32x8::splat(token, p.luma[2]);
-    let cmax = f32x8::splat(token, p.content_max_nits);
-    let dmax = f32x8::splat(token, p.display_max_nits);
-    let inv_dmax = f32x8::splat(token, p.inv_display_max);
-    let cmin_pq = f32x8::splat(token, p.content_min_pq);
-    let inv_range = f32x8::splat(token, p.inv_content_range_pq);
-    let range_pq = f32x8::splat(token, p.content_range_pq);
-    let min_lum = f32x8::splat(token, p.min_lum);
-    let max_lum = f32x8::splat(token, p.max_lum);
-    let ks = f32x8::splat(token, p.ks);
-    let one_minus_ks = f32x8::splat(token, p.one_minus_ks);
-    let inv_one_minus_ks = f32x8::splat(token, p.inv_one_minus_ks);
-    let normalizer = f32x8::splat(token, p.normalizer);
-    let pq_c1 = f32x8::splat(token, PQ_C1);
-    let pq_c2 = f32x8::splat(token, PQ_C2);
-    let pq_c3 = f32x8::splat(token, PQ_C3);
-    let two = f32x8::splat(token, 2.0);
-    let three = f32x8::splat(token, 3.0);
-    let neg_two = f32x8::splat(token, -2.0);
-    let cutoff = f32x8::splat(token, 1e-6);
-    let ten_thousand = f32x8::splat(token, 10000.0);
+    let zero = f32x8::zero_t(token);
+    let one = f32x8::splat_t(token, 1.0);
+    let pos_eps = f32x8::splat_t(token, f32::MIN_POSITIVE);
+    let inv_10000 = f32x8::splat_t(token, 1.0 / 10000.0);
+    let lr = f32x8::splat_t(token, p.luma[0]);
+    let lg = f32x8::splat_t(token, p.luma[1]);
+    let lb = f32x8::splat_t(token, p.luma[2]);
+    let cmax = f32x8::splat_t(token, p.content_max_nits);
+    let dmax = f32x8::splat_t(token, p.display_max_nits);
+    let inv_dmax = f32x8::splat_t(token, p.inv_display_max);
+    let cmin_pq = f32x8::splat_t(token, p.content_min_pq);
+    let inv_range = f32x8::splat_t(token, p.inv_content_range_pq);
+    let range_pq = f32x8::splat_t(token, p.content_range_pq);
+    let min_lum = f32x8::splat_t(token, p.min_lum);
+    let max_lum = f32x8::splat_t(token, p.max_lum);
+    let ks = f32x8::splat_t(token, p.ks);
+    let one_minus_ks = f32x8::splat_t(token, p.one_minus_ks);
+    let inv_one_minus_ks = f32x8::splat_t(token, p.inv_one_minus_ks);
+    let normalizer = f32x8::splat_t(token, p.normalizer);
+    let pq_c1 = f32x8::splat_t(token, PQ_C1);
+    let pq_c2 = f32x8::splat_t(token, PQ_C2);
+    let pq_c3 = f32x8::splat_t(token, PQ_C3);
+    let two = f32x8::splat_t(token, 2.0);
+    let three = f32x8::splat_t(token, 3.0);
+    let neg_two = f32x8::splat_t(token, -2.0);
+    let cutoff = f32x8::splat_t(token, 1e-6);
+    let ten_thousand = f32x8::splat_t(token, 10000.0);
 
     let mut iter = row.chunks_exact_mut(8);
     for chunk in &mut iter {
@@ -93,9 +93,9 @@ pub(crate) fn bt2408_yrgb_tier(token: Token, row: &mut [[f32; 3]], p: &Bt2408Par
             ga[i] = px[1];
             ba[i] = px[2];
         }
-        let r = f32x8::load(token, &ra);
-        let g = f32x8::load(token, &ga);
-        let b = f32x8::load(token, &ba);
+        let r = f32x8::load_t(token, &ra);
+        let g = f32x8::load_t(token, &ga);
+        let b = f32x8::load_t(token, &ba);
         let signal = lr * r + lg * g + lb * b;
         let signal_nits = signal * cmax;
 
@@ -161,30 +161,30 @@ pub(crate) fn bt2408_yrgb_tier(token: Token, row: &mut [[f32; 3]], p: &Bt2408Par
 
 #[archmage::magetypes(define(f32x8), v3, neon, wasm128, scalar)]
 pub(crate) fn bt2408_maxrgb_tier(token: Token, row: &mut [[f32; 3]], p: &Bt2408Params) {
-    let zero = f32x8::zero(token);
-    let one = f32x8::splat(token, 1.0);
-    let pos_eps = f32x8::splat(token, f32::MIN_POSITIVE);
-    let inv_10000 = f32x8::splat(token, 1.0 / 10000.0);
-    let cmax = f32x8::splat(token, p.content_max_nits);
-    let dmax = f32x8::splat(token, p.display_max_nits);
-    let inv_dmax = f32x8::splat(token, p.inv_display_max);
-    let cmin_pq = f32x8::splat(token, p.content_min_pq);
-    let inv_range = f32x8::splat(token, p.inv_content_range_pq);
-    let range_pq = f32x8::splat(token, p.content_range_pq);
-    let min_lum = f32x8::splat(token, p.min_lum);
-    let max_lum = f32x8::splat(token, p.max_lum);
-    let ks = f32x8::splat(token, p.ks);
-    let one_minus_ks = f32x8::splat(token, p.one_minus_ks);
-    let inv_one_minus_ks = f32x8::splat(token, p.inv_one_minus_ks);
-    let normalizer = f32x8::splat(token, p.normalizer);
-    let pq_c1 = f32x8::splat(token, PQ_C1);
-    let pq_c2 = f32x8::splat(token, PQ_C2);
-    let pq_c3 = f32x8::splat(token, PQ_C3);
-    let two = f32x8::splat(token, 2.0);
-    let three = f32x8::splat(token, 3.0);
-    let neg_two = f32x8::splat(token, -2.0);
-    let cutoff = f32x8::splat(token, 1e-6);
-    let ten_thousand = f32x8::splat(token, 10000.0);
+    let zero = f32x8::zero_t(token);
+    let one = f32x8::splat_t(token, 1.0);
+    let pos_eps = f32x8::splat_t(token, f32::MIN_POSITIVE);
+    let inv_10000 = f32x8::splat_t(token, 1.0 / 10000.0);
+    let cmax = f32x8::splat_t(token, p.content_max_nits);
+    let dmax = f32x8::splat_t(token, p.display_max_nits);
+    let inv_dmax = f32x8::splat_t(token, p.inv_display_max);
+    let cmin_pq = f32x8::splat_t(token, p.content_min_pq);
+    let inv_range = f32x8::splat_t(token, p.inv_content_range_pq);
+    let range_pq = f32x8::splat_t(token, p.content_range_pq);
+    let min_lum = f32x8::splat_t(token, p.min_lum);
+    let max_lum = f32x8::splat_t(token, p.max_lum);
+    let ks = f32x8::splat_t(token, p.ks);
+    let one_minus_ks = f32x8::splat_t(token, p.one_minus_ks);
+    let inv_one_minus_ks = f32x8::splat_t(token, p.inv_one_minus_ks);
+    let normalizer = f32x8::splat_t(token, p.normalizer);
+    let pq_c1 = f32x8::splat_t(token, PQ_C1);
+    let pq_c2 = f32x8::splat_t(token, PQ_C2);
+    let pq_c3 = f32x8::splat_t(token, PQ_C3);
+    let two = f32x8::splat_t(token, 2.0);
+    let three = f32x8::splat_t(token, 3.0);
+    let neg_two = f32x8::splat_t(token, -2.0);
+    let cutoff = f32x8::splat_t(token, 1e-6);
+    let ten_thousand = f32x8::splat_t(token, 10000.0);
 
     let mut iter = row.chunks_exact_mut(8);
     for chunk in &mut iter {
@@ -196,9 +196,9 @@ pub(crate) fn bt2408_maxrgb_tier(token: Token, row: &mut [[f32; 3]], p: &Bt2408P
             ga[i] = px[1];
             ba[i] = px[2];
         }
-        let r = f32x8::load(token, &ra);
-        let g = f32x8::load(token, &ga);
-        let b = f32x8::load(token, &ba);
+        let r = f32x8::load_t(token, &ra);
+        let g = f32x8::load_t(token, &ga);
+        let b = f32x8::load_t(token, &ba);
         let signal = r.max(g).max(b);
         let signal_nits = signal * cmax;
 
@@ -309,22 +309,22 @@ pub(crate) fn bt2446b_tier(
     log_offset: f32,
     ln_breakpoint: f32,
 ) {
-    let zero = f32x8::zero(token);
-    let one = f32x8::splat(token, 1.0);
-    let lr = f32x8::splat(token, LR_2020);
-    let lg = f32x8::splat(token, LG_2020);
-    let lb = f32x8::splat(token, LB_2020);
-    let bp = f32x8::splat(token, breakpoint);
+    let zero = f32x8::zero_t(token);
+    let one = f32x8::splat_t(token, 1.0);
+    let lr = f32x8::splat_t(token, LR_2020);
+    let lg = f32x8::splat_t(token, LG_2020);
+    let lb = f32x8::splat_t(token, LB_2020);
+    let bp = f32x8::splat_t(token, breakpoint);
     // ln(y / bp) = (log2(y) - log2(bp)) * ln 2. Dividing first overflowed to
     // +Inf for y > bp * f32::MAX and made every channel NaN or 1.0
     // (zentone#25/#26); the log-domain difference cannot overflow.
-    let log2_bp = f32x8::splat(token, ln_breakpoint / core::f32::consts::LN_2);
-    let gain_v = f32x8::splat(token, gain);
-    let log_scale_v = f32x8::splat(token, log_scale);
-    let log_offset_v = f32x8::splat(token, log_offset);
-    let pos_eps = f32x8::splat(token, f32::MIN_POSITIVE);
-    let fmax = f32x8::splat(token, f32::MAX);
-    let ln2 = f32x8::splat(token, core::f32::consts::LN_2);
+    let log2_bp = f32x8::splat_t(token, ln_breakpoint / core::f32::consts::LN_2);
+    let gain_v = f32x8::splat_t(token, gain);
+    let log_scale_v = f32x8::splat_t(token, log_scale);
+    let log_offset_v = f32x8::splat_t(token, log_offset);
+    let pos_eps = f32x8::splat_t(token, f32::MIN_POSITIVE);
+    let fmax = f32x8::splat_t(token, f32::MAX);
+    let ln2 = f32x8::splat_t(token, core::f32::consts::LN_2);
 
     let mut iter = row.chunks_exact_mut(8);
     for chunk in &mut iter {
@@ -336,9 +336,9 @@ pub(crate) fn bt2446b_tier(
             ga[i] = px[1];
             ba[i] = px[2];
         }
-        let r = f32x8::load(token, &ra);
-        let g = f32x8::load(token, &ga);
-        let b = f32x8::load(token, &ba);
+        let r = f32x8::load_t(token, &ra);
+        let g = f32x8::load_t(token, &ga);
+        let b = f32x8::load_t(token, &ba);
         // `min(fmax)`: three huge finite channels must not sum to +Inf
         // (Inf / Inf = NaN in the ratio below).
         let y = (lr * r + lg * g + lb * b).min(fmax);
@@ -395,15 +395,15 @@ pub(crate) fn bt2446c_tier(
     hdr_peak_nits: f32,
     sdr_peak_nits: f32,
 ) {
-    let zero = f32x8::zero(token);
-    let lr = f32x8::splat(token, LR_2020);
-    let lg = f32x8::splat(token, LG_2020);
-    let lb = f32x8::splat(token, LB_2020);
+    let zero = f32x8::zero_t(token);
+    let lr = f32x8::splat_t(token, LR_2020);
+    let lg = f32x8::splat_t(token, LG_2020);
+    let lb = f32x8::splat_t(token, LB_2020);
 
     let a = alpha;
     let d = 1.0 - 2.0 * a;
-    let a_v = f32x8::splat(token, a);
-    let d_v = f32x8::splat(token, d);
+    let a_v = f32x8::splat_t(token, a);
+    let d_v = f32x8::splat_t(token, d);
     let do_crosstalk = a > 0.0;
 
     let inv_a = if do_crosstalk {
@@ -412,22 +412,22 @@ pub(crate) fn bt2446c_tier(
         0.0
     };
     let inv_d = 1.0 - 2.0 * inv_a;
-    let inv_a_v = f32x8::splat(token, inv_a);
-    let inv_d_v = f32x8::splat(token, inv_d);
+    let inv_a_v = f32x8::splat_t(token, inv_a);
+    let inv_d_v = f32x8::splat_t(token, inv_d);
 
-    let k1_v = f32x8::splat(token, k1);
-    let k2_v = f32x8::splat(token, k2);
-    let k3_v = f32x8::splat(token, k3);
-    let k4_v = f32x8::splat(token, k4);
-    let y_ip_v = f32x8::splat(token, y_ip);
-    let inv_y_ip = f32x8::splat(token, 1.0 / y_ip);
-    let to_nits = f32x8::splat(token, hdr_peak_nits);
-    let inv_sdr = f32x8::splat(token, 1.0 / sdr_peak_nits);
-    let nits_ceil = f32x8::splat(token, 10_000.0);
-    let lo = f32x8::splat(token, 0.0);
-    let hi = f32x8::splat(token, 1.09);
-    let pos_eps = f32x8::splat(token, f32::MIN_POSITIVE);
-    let ln2 = f32x8::splat(token, core::f32::consts::LN_2);
+    let k1_v = f32x8::splat_t(token, k1);
+    let k2_v = f32x8::splat_t(token, k2);
+    let k3_v = f32x8::splat_t(token, k3);
+    let k4_v = f32x8::splat_t(token, k4);
+    let y_ip_v = f32x8::splat_t(token, y_ip);
+    let inv_y_ip = f32x8::splat_t(token, 1.0 / y_ip);
+    let to_nits = f32x8::splat_t(token, hdr_peak_nits);
+    let inv_sdr = f32x8::splat_t(token, 1.0 / sdr_peak_nits);
+    let nits_ceil = f32x8::splat_t(token, 10_000.0);
+    let lo = f32x8::splat_t(token, 0.0);
+    let hi = f32x8::splat_t(token, 1.09);
+    let pos_eps = f32x8::splat_t(token, f32::MIN_POSITIVE);
+    let ln2 = f32x8::splat_t(token, core::f32::consts::LN_2);
 
     let mut iter = row.chunks_exact_mut(8);
     for chunk in &mut iter {
@@ -439,9 +439,9 @@ pub(crate) fn bt2446c_tier(
             ga[i] = px[1];
             ba[i] = px[2];
         }
-        let r_nits = (f32x8::load(token, &ra).max(zero) * to_nits).min(nits_ceil);
-        let g_nits = (f32x8::load(token, &ga).max(zero) * to_nits).min(nits_ceil);
-        let b_nits = (f32x8::load(token, &ba).max(zero) * to_nits).min(nits_ceil);
+        let r_nits = (f32x8::load_t(token, &ra).max(zero) * to_nits).min(nits_ceil);
+        let g_nits = (f32x8::load_t(token, &ga).max(zero) * to_nits).min(nits_ceil);
+        let b_nits = (f32x8::load_t(token, &ba).max(zero) * to_nits).min(nits_ceil);
 
         let (cr_, cg_, cb_) = if do_crosstalk {
             (
@@ -570,34 +570,34 @@ pub(crate) struct FilmicSimdParams {
 
 #[archmage::magetypes(define(f32x8), v3, neon, wasm128, scalar)]
 pub(crate) fn filmic_spline_tier(token: Token, row: &mut [[f32; 3]], p: &FilmicSimdParams) {
-    let zero = f32x8::zero(token);
-    let one = f32x8::splat(token, 1.0);
-    let lr = f32x8::splat(token, p.luma[0]);
-    let lg = f32x8::splat(token, p.luma[1]);
-    let lb = f32x8::splat(token, p.luma[2]);
-    let norm_floor = f32x8::splat(token, 1.525879e-05);
-    let inv_grey = f32x8::splat(token, 1.0 / p.grey_source);
-    let black_src = f32x8::splat(token, p.black_source);
-    let inv_dyn = f32x8::splat(token, 1.0 / p.dynamic_range);
-    let lat_min = f32x8::splat(token, p.latitude_min);
-    let lat_max = f32x8::splat(token, p.latitude_max);
-    let m1_toe = f32x8::splat(token, p.m1_toe);
-    let m1_shoulder = f32x8::splat(token, p.m1_shoulder);
-    let m2_toe = f32x8::splat(token, p.m2_toe);
-    let m2_shoulder = f32x8::splat(token, p.m2_shoulder);
-    let m2_lin = f32x8::splat(token, p.m2_lin);
-    let m3_toe = f32x8::splat(token, p.m3_toe);
-    let m3_shoulder = f32x8::splat(token, p.m3_shoulder);
-    let m4_toe = f32x8::splat(token, p.m4_toe);
-    let m4_shoulder = f32x8::splat(token, p.m4_shoulder);
-    let m1_lin = f32x8::splat(token, p.m1_lin);
-    let inv_sigma_toe = f32x8::splat(token, 1.0 / p.sigma_toe);
-    let inv_sigma_shoulder = f32x8::splat(token, 1.0 / p.sigma_shoulder);
-    let sat = f32x8::splat(token, p.saturation);
-    let sat2 = f32x8::splat(token, 0.5 / sqrtf(p.saturation));
-    let inv_ln2 = f32x8::splat(token, 1.0 / core::f32::consts::LN_2);
-    let ratio_lim = f32x8::splat(token, FILMIC_RATIO_LIMIT);
-    let neg_ratio_lim = f32x8::splat(token, -FILMIC_RATIO_LIMIT);
+    let zero = f32x8::zero_t(token);
+    let one = f32x8::splat_t(token, 1.0);
+    let lr = f32x8::splat_t(token, p.luma[0]);
+    let lg = f32x8::splat_t(token, p.luma[1]);
+    let lb = f32x8::splat_t(token, p.luma[2]);
+    let norm_floor = f32x8::splat_t(token, 1.525879e-05);
+    let inv_grey = f32x8::splat_t(token, 1.0 / p.grey_source);
+    let black_src = f32x8::splat_t(token, p.black_source);
+    let inv_dyn = f32x8::splat_t(token, 1.0 / p.dynamic_range);
+    let lat_min = f32x8::splat_t(token, p.latitude_min);
+    let lat_max = f32x8::splat_t(token, p.latitude_max);
+    let m1_toe = f32x8::splat_t(token, p.m1_toe);
+    let m1_shoulder = f32x8::splat_t(token, p.m1_shoulder);
+    let m2_toe = f32x8::splat_t(token, p.m2_toe);
+    let m2_shoulder = f32x8::splat_t(token, p.m2_shoulder);
+    let m2_lin = f32x8::splat_t(token, p.m2_lin);
+    let m3_toe = f32x8::splat_t(token, p.m3_toe);
+    let m3_shoulder = f32x8::splat_t(token, p.m3_shoulder);
+    let m4_toe = f32x8::splat_t(token, p.m4_toe);
+    let m4_shoulder = f32x8::splat_t(token, p.m4_shoulder);
+    let m1_lin = f32x8::splat_t(token, p.m1_lin);
+    let inv_sigma_toe = f32x8::splat_t(token, 1.0 / p.sigma_toe);
+    let inv_sigma_shoulder = f32x8::splat_t(token, 1.0 / p.sigma_shoulder);
+    let sat = f32x8::splat_t(token, p.saturation);
+    let sat2 = f32x8::splat_t(token, 0.5 / sqrtf(p.saturation));
+    let inv_ln2 = f32x8::splat_t(token, 1.0 / core::f32::consts::LN_2);
+    let ratio_lim = f32x8::splat_t(token, FILMIC_RATIO_LIMIT);
+    let neg_ratio_lim = f32x8::splat_t(token, -FILMIC_RATIO_LIMIT);
 
     let mut iter = row.chunks_exact_mut(8);
     for chunk in &mut iter {
@@ -609,9 +609,9 @@ pub(crate) fn filmic_spline_tier(token: Token, row: &mut [[f32; 3]], p: &FilmicS
             ga[i] = px[1];
             ba[i] = px[2];
         }
-        let r = f32x8::load(token, &ra);
-        let g = f32x8::load(token, &ga);
-        let b = f32x8::load(token, &ba);
+        let r = f32x8::load_t(token, &ra);
+        let g = f32x8::load_t(token, &ga);
+        let b = f32x8::load_t(token, &ba);
 
         let norm0 = (lr * r + lg * g + lb * b).max(norm_floor);
         let inv_norm = one / norm0;

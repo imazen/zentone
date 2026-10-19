@@ -165,11 +165,11 @@ pub(crate) fn tuned_reinhard_row(
 
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 fn reinhard_3_tier(token: Token, row: &mut [f32]) {
-    let one = f32x8::splat(token, 1.0);
-    let zero = f32x8::zero(token);
-    let (chunks, tail) = f32x8::partition_slice_mut(token, row);
+    let one = f32x8::splat_t(token, 1.0);
+    let zero = f32x8::zero_t(token);
+    let (chunks, tail) = f32x8::partition_slice_mut_t(token, row);
     for chunk in chunks.iter_mut() {
-        let v = f32x8::load(token, chunk).max(zero);
+        let v = f32x8::load_t(token, chunk).max(zero);
         (v / (one + v)).min(one).store(chunk);
     }
     // Public `reinhard_simple` is deprecated, but the SIMD scalar tail still
@@ -183,12 +183,12 @@ fn reinhard_3_tier(token: Token, row: &mut [f32]) {
 
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 fn reinhard_4_tier(token: Token, row: &mut [f32]) {
-    let one = f32x8::splat(token, 1.0);
-    let zero = f32x8::zero(token);
-    let (chunks, tail) = f32x8::partition_slice_mut(token, row);
+    let one = f32x8::splat_t(token, 1.0);
+    let zero = f32x8::zero_t(token);
+    let (chunks, tail) = f32x8::partition_slice_mut_t(token, row);
     for chunk in chunks.iter_mut() {
         let a = [chunk[3], chunk[7]];
-        let v = f32x8::load(token, chunk).max(zero);
+        let v = f32x8::load_t(token, chunk).max(zero);
         (v / (one + v)).min(one).store(chunk);
         chunk[3] = a[0];
         chunk[7] = a[1];
@@ -218,17 +218,17 @@ const NARKOWICZ_X_MAX: f32 = 65536.0;
 
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 fn narkowicz_3_tier(token: Token, row: &mut [f32]) {
-    let a = f32x8::splat(token, 2.51);
-    let b = f32x8::splat(token, 0.03);
-    let c = f32x8::splat(token, 2.43);
-    let d = f32x8::splat(token, 0.59);
-    let e = f32x8::splat(token, 0.14);
-    let zero = f32x8::zero(token);
-    let one = f32x8::splat(token, 1.0);
-    let xmax = f32x8::splat(token, NARKOWICZ_X_MAX);
-    let (chunks, tail) = f32x8::partition_slice_mut(token, row);
+    let a = f32x8::splat_t(token, 2.51);
+    let b = f32x8::splat_t(token, 0.03);
+    let c = f32x8::splat_t(token, 2.43);
+    let d = f32x8::splat_t(token, 0.59);
+    let e = f32x8::splat_t(token, 0.14);
+    let zero = f32x8::zero_t(token);
+    let one = f32x8::splat_t(token, 1.0);
+    let xmax = f32x8::splat_t(token, NARKOWICZ_X_MAX);
+    let (chunks, tail) = f32x8::partition_slice_mut_t(token, row);
     for chunk in chunks.iter_mut() {
-        let x = f32x8::load(token, chunk).max(zero).min(xmax);
+        let x = f32x8::load_t(token, chunk).max(zero).min(xmax);
         (x * (a * x + b) / (x * (c * x + d) + e))
             .max(zero)
             .min(one)
@@ -241,18 +241,18 @@ fn narkowicz_3_tier(token: Token, row: &mut [f32]) {
 
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 fn narkowicz_4_tier(token: Token, row: &mut [f32]) {
-    let a = f32x8::splat(token, 2.51);
-    let b = f32x8::splat(token, 0.03);
-    let c = f32x8::splat(token, 2.43);
-    let d = f32x8::splat(token, 0.59);
-    let e = f32x8::splat(token, 0.14);
-    let zero = f32x8::zero(token);
-    let one = f32x8::splat(token, 1.0);
-    let xmax = f32x8::splat(token, NARKOWICZ_X_MAX);
-    let (chunks, tail) = f32x8::partition_slice_mut(token, row);
+    let a = f32x8::splat_t(token, 2.51);
+    let b = f32x8::splat_t(token, 0.03);
+    let c = f32x8::splat_t(token, 2.43);
+    let d = f32x8::splat_t(token, 0.59);
+    let e = f32x8::splat_t(token, 0.14);
+    let zero = f32x8::zero_t(token);
+    let one = f32x8::splat_t(token, 1.0);
+    let xmax = f32x8::splat_t(token, NARKOWICZ_X_MAX);
+    let (chunks, tail) = f32x8::partition_slice_mut_t(token, row);
     for chunk in chunks.iter_mut() {
         let alphas = [chunk[3], chunk[7]];
-        let x = f32x8::load(token, chunk).max(zero).min(xmax);
+        let x = f32x8::load_t(token, chunk).max(zero).min(xmax);
         (x * (a * x + b) / (x * (c * x + d) + e))
             .max(zero)
             .min(one)
@@ -283,25 +283,25 @@ const HABLE_X_MAX: f32 = 65536.0;
 
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 fn hable_3_tier(token: Token, row: &mut [f32]) {
-    let a = f32x8::splat(token, 0.15);
-    let bv = f32x8::splat(token, 0.50);
-    let cb = f32x8::splat(token, 0.05);
-    let de = f32x8::splat(token, 0.004);
-    let df = f32x8::splat(token, 0.06);
-    let ef = f32x8::splat(token, 0.02 / 0.30);
-    let exp = f32x8::splat(token, 2.0);
-    let ws = f32x8::splat(token, {
+    let a = f32x8::splat_t(token, 0.15);
+    let bv = f32x8::splat_t(token, 0.50);
+    let cb = f32x8::splat_t(token, 0.05);
+    let de = f32x8::splat_t(token, 0.004);
+    let df = f32x8::splat_t(token, 0.06);
+    let ef = f32x8::splat_t(token, 0.02 / 0.30);
+    let exp = f32x8::splat_t(token, 2.0);
+    let ws = f32x8::splat_t(token, {
         const fn p(x: f32) -> f32 {
             ((x * (0.15 * x + 0.05) + 0.004) / (x * (0.15 * x + 0.50) + 0.06)) - 0.02 / 0.30
         }
         1.0 / p(11.2)
     });
-    let one = f32x8::splat(token, 1.0);
-    let xmax = f32x8::splat(token, HABLE_X_MAX);
-    let neg_xmax = f32x8::splat(token, -HABLE_X_MAX);
-    let (chunks, tail) = f32x8::partition_slice_mut(token, row);
+    let one = f32x8::splat_t(token, 1.0);
+    let xmax = f32x8::splat_t(token, HABLE_X_MAX);
+    let neg_xmax = f32x8::splat_t(token, -HABLE_X_MAX);
+    let (chunks, tail) = f32x8::partition_slice_mut_t(token, row);
     for chunk in chunks.iter_mut() {
-        let x = (f32x8::load(token, chunk).min(xmax).max(neg_xmax)) * exp;
+        let x = (f32x8::load_t(token, chunk).min(xmax).max(neg_xmax)) * exp;
         let r = ((x * (a * x + cb) + de) / (x * (a * x + bv) + df) - ef) * ws;
         r.min(one).store(chunk);
     }
@@ -312,26 +312,26 @@ fn hable_3_tier(token: Token, row: &mut [f32]) {
 
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 fn hable_4_tier(token: Token, row: &mut [f32]) {
-    let a = f32x8::splat(token, 0.15);
-    let bv = f32x8::splat(token, 0.50);
-    let cb = f32x8::splat(token, 0.05);
-    let de = f32x8::splat(token, 0.004);
-    let df = f32x8::splat(token, 0.06);
-    let ef = f32x8::splat(token, 0.02 / 0.30);
-    let exp = f32x8::splat(token, 2.0);
-    let ws = f32x8::splat(token, {
+    let a = f32x8::splat_t(token, 0.15);
+    let bv = f32x8::splat_t(token, 0.50);
+    let cb = f32x8::splat_t(token, 0.05);
+    let de = f32x8::splat_t(token, 0.004);
+    let df = f32x8::splat_t(token, 0.06);
+    let ef = f32x8::splat_t(token, 0.02 / 0.30);
+    let exp = f32x8::splat_t(token, 2.0);
+    let ws = f32x8::splat_t(token, {
         const fn p(x: f32) -> f32 {
             ((x * (0.15 * x + 0.05) + 0.004) / (x * (0.15 * x + 0.50) + 0.06)) - 0.02 / 0.30
         }
         1.0 / p(11.2)
     });
-    let one = f32x8::splat(token, 1.0);
-    let xmax = f32x8::splat(token, HABLE_X_MAX);
-    let neg_xmax = f32x8::splat(token, -HABLE_X_MAX);
-    let (chunks, tail) = f32x8::partition_slice_mut(token, row);
+    let one = f32x8::splat_t(token, 1.0);
+    let xmax = f32x8::splat_t(token, HABLE_X_MAX);
+    let neg_xmax = f32x8::splat_t(token, -HABLE_X_MAX);
+    let (chunks, tail) = f32x8::partition_slice_mut_t(token, row);
     for chunk in chunks.iter_mut() {
         let alphas = [chunk[3], chunk[7]];
-        let x = (f32x8::load(token, chunk).min(xmax).max(neg_xmax)) * exp;
+        let x = (f32x8::load_t(token, chunk).min(xmax).max(neg_xmax)) * exp;
         let r = ((x * (a * x + cb) + de) / (x * (a * x + bv) + df) - ef) * ws;
         r.min(one).store(chunk);
         chunk[3] = alphas[0];
@@ -378,12 +378,12 @@ fn aces_4_tier(_token: Token, row: &mut [f32]) {
 /// scale = (1 + l/l_max²) / (1 + l), applied to RGB.
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 fn ext_reinhard_3_tier(token: Token, row: &mut [f32], l_max: f32, luma: [f32; 3]) {
-    let lr = f32x8::splat(token, luma[0]);
-    let lg = f32x8::splat(token, luma[1]);
-    let lb = f32x8::splat(token, luma[2]);
-    let lmax_sq = f32x8::splat(token, l_max * l_max);
-    let one = f32x8::splat(token, 1.0);
-    let zero = f32x8::zero(token);
+    let lr = f32x8::splat_t(token, luma[0]);
+    let lg = f32x8::splat_t(token, luma[1]);
+    let lb = f32x8::splat_t(token, luma[2]);
+    let lmax_sq = f32x8::splat_t(token, l_max * l_max);
+    let one = f32x8::splat_t(token, 1.0);
+    let zero = f32x8::zero_t(token);
 
     let mut iter = row.chunks_exact_mut(24);
     for chunk in &mut iter {
@@ -395,9 +395,9 @@ fn ext_reinhard_3_tier(token: Token, row: &mut [f32], l_max: f32, luma: [f32; 3]
             ga[i] = chunk[i * 3 + 1];
             ba[i] = chunk[i * 3 + 2];
         }
-        let r = f32x8::load(token, &ra).max(zero);
-        let g = f32x8::load(token, &ga).max(zero);
-        let b = f32x8::load(token, &ba).max(zero);
+        let r = f32x8::load_t(token, &ra).max(zero);
+        let g = f32x8::load_t(token, &ga).max(zero);
+        let b = f32x8::load_t(token, &ba).max(zero);
         let l = r * lr + g * lg + b * lb;
         let scale = ((one + l / lmax_sq) / (one + l)).max(zero);
         let ro = (r * scale).min(one).to_array();
@@ -420,12 +420,12 @@ fn ext_reinhard_3_tier(token: Token, row: &mut [f32], l_max: f32, luma: [f32; 3]
 
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 fn ext_reinhard_4_tier(token: Token, row: &mut [f32], l_max: f32, luma: [f32; 3]) {
-    let lr = f32x8::splat(token, luma[0]);
-    let lg = f32x8::splat(token, luma[1]);
-    let lb = f32x8::splat(token, luma[2]);
-    let lmax_sq = f32x8::splat(token, l_max * l_max);
-    let one = f32x8::splat(token, 1.0);
-    let zero = f32x8::zero(token);
+    let lr = f32x8::splat_t(token, luma[0]);
+    let lg = f32x8::splat_t(token, luma[1]);
+    let lb = f32x8::splat_t(token, luma[2]);
+    let lmax_sq = f32x8::splat_t(token, l_max * l_max);
+    let one = f32x8::splat_t(token, 1.0);
+    let zero = f32x8::zero_t(token);
 
     let mut iter = row.chunks_exact_mut(32);
     for chunk in &mut iter {
@@ -437,9 +437,9 @@ fn ext_reinhard_4_tier(token: Token, row: &mut [f32], l_max: f32, luma: [f32; 3]
             ga[i] = chunk[i * 4 + 1];
             ba[i] = chunk[i * 4 + 2];
         }
-        let r = f32x8::load(token, &ra).max(zero);
-        let g = f32x8::load(token, &ga).max(zero);
-        let b = f32x8::load(token, &ba).max(zero);
+        let r = f32x8::load_t(token, &ra).max(zero);
+        let g = f32x8::load_t(token, &ga).max(zero);
+        let b = f32x8::load_t(token, &ba).max(zero);
         let l = r * lr + g * lg + b * lb;
         let scale = ((one + l / lmax_sq) / (one + l)).max(zero);
         let ro = (r * scale).min(one).to_array();
@@ -479,11 +479,11 @@ fn ext_reinhard_4_tier(token: Token, row: &mut [f32], l_max: f32, luma: [f32; 3]
 // kernel's input handling.
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 fn reinhard_jodie_3_tier(token: Token, row: &mut [f32], luma: [f32; 3]) {
-    let lr = f32x8::splat(token, luma[0]);
-    let lg = f32x8::splat(token, luma[1]);
-    let lb = f32x8::splat(token, luma[2]);
-    let one = f32x8::splat(token, 1.0);
-    let zero = f32x8::zero(token);
+    let lr = f32x8::splat_t(token, luma[0]);
+    let lg = f32x8::splat_t(token, luma[1]);
+    let lb = f32x8::splat_t(token, luma[2]);
+    let one = f32x8::splat_t(token, 1.0);
+    let zero = f32x8::zero_t(token);
 
     let mut iter = row.chunks_exact_mut(24);
     for chunk in &mut iter {
@@ -495,9 +495,9 @@ fn reinhard_jodie_3_tier(token: Token, row: &mut [f32], luma: [f32; 3]) {
             ga[i] = chunk[i * 3 + 1];
             ba[i] = chunk[i * 3 + 2];
         }
-        let r = f32x8::load(token, &ra).max(zero);
-        let g = f32x8::load(token, &ga).max(zero);
-        let b = f32x8::load(token, &ba).max(zero);
+        let r = f32x8::load_t(token, &ra).max(zero);
+        let g = f32x8::load_t(token, &ga).max(zero);
+        let b = f32x8::load_t(token, &ba).max(zero);
         let l = r * lr + g * lg + b * lb;
         let luma_scale = one / (one + l);
         let tvr = r / (one + r);
@@ -534,11 +534,11 @@ fn reinhard_jodie_3_tier(token: Token, row: &mut [f32], luma: [f32; 3]) {
 
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 fn reinhard_jodie_4_tier(token: Token, row: &mut [f32], luma: [f32; 3]) {
-    let lr = f32x8::splat(token, luma[0]);
-    let lg = f32x8::splat(token, luma[1]);
-    let lb = f32x8::splat(token, luma[2]);
-    let one = f32x8::splat(token, 1.0);
-    let zero = f32x8::zero(token);
+    let lr = f32x8::splat_t(token, luma[0]);
+    let lg = f32x8::splat_t(token, luma[1]);
+    let lb = f32x8::splat_t(token, luma[2]);
+    let one = f32x8::splat_t(token, 1.0);
+    let zero = f32x8::zero_t(token);
 
     let mut iter = row.chunks_exact_mut(32);
     for chunk in &mut iter {
@@ -553,9 +553,9 @@ fn reinhard_jodie_4_tier(token: Token, row: &mut [f32], luma: [f32; 3]) {
         // See comment on reinhard_jodie_3_tier — clamp inputs to non-negative
         // to match scalar's `if luma <= 0 → return zero` early-out and avoid
         // -1/0 → NaN that NEON's vminq_f32 won't suppress.
-        let r = f32x8::load(token, &ra).max(zero);
-        let g = f32x8::load(token, &ga).max(zero);
-        let b = f32x8::load(token, &ba).max(zero);
+        let r = f32x8::load_t(token, &ra).max(zero);
+        let g = f32x8::load_t(token, &ga).max(zero);
+        let b = f32x8::load_t(token, &ba).max(zero);
         let l = r * lr + g * lg + b * lb;
         let luma_scale = one / (one + l);
         let tvr = r / (one + r);
@@ -602,13 +602,13 @@ fn tuned_reinhard_3_tier(
 ) {
     let white_point = 203.0_f32;
     let ld = content_max / white_point;
-    let lr = f32x8::splat(token, luma[0]);
-    let lg = f32x8::splat(token, luma[1]);
-    let lb = f32x8::splat(token, luma[2]);
-    let w_a = f32x8::splat(token, (display_max / white_point) / (ld * ld));
-    let w_b = f32x8::splat(token, 1.0 / (display_max / white_point));
-    let one = f32x8::splat(token, 1.0);
-    let zero = f32x8::zero(token);
+    let lr = f32x8::splat_t(token, luma[0]);
+    let lg = f32x8::splat_t(token, luma[1]);
+    let lb = f32x8::splat_t(token, luma[2]);
+    let w_a = f32x8::splat_t(token, (display_max / white_point) / (ld * ld));
+    let w_b = f32x8::splat_t(token, 1.0 / (display_max / white_point));
+    let one = f32x8::splat_t(token, 1.0);
+    let zero = f32x8::zero_t(token);
 
     let mut iter = row.chunks_exact_mut(24);
     for chunk in &mut iter {
@@ -624,9 +624,9 @@ fn tuned_reinhard_3_tier(
         // path. A negative luminance otherwise made `(1 + w_a·l)/(1 + w_b·l)`
         // return garbage instead of black (scalar/SIMD divergence, zentone#21
         // sweep).
-        let r = f32x8::load(token, &ra).max(zero);
-        let g = f32x8::load(token, &ga).max(zero);
-        let b = f32x8::load(token, &ba).max(zero);
+        let r = f32x8::load_t(token, &ra).max(zero);
+        let g = f32x8::load_t(token, &ga).max(zero);
+        let b = f32x8::load_t(token, &ba).max(zero);
         let l = r * lr + g * lg + b * lb;
         let scale = ((one + w_a * l) / (one + w_b * l)).max(zero);
         let ro = (r * scale).min(one).to_array();
@@ -661,13 +661,13 @@ fn tuned_reinhard_4_tier(
 ) {
     let white_point = 203.0_f32;
     let ld = content_max / white_point;
-    let lr = f32x8::splat(token, luma[0]);
-    let lg = f32x8::splat(token, luma[1]);
-    let lb = f32x8::splat(token, luma[2]);
-    let w_a = f32x8::splat(token, (display_max / white_point) / (ld * ld));
-    let w_b = f32x8::splat(token, 1.0 / (display_max / white_point));
-    let one = f32x8::splat(token, 1.0);
-    let zero = f32x8::zero(token);
+    let lr = f32x8::splat_t(token, luma[0]);
+    let lg = f32x8::splat_t(token, luma[1]);
+    let lb = f32x8::splat_t(token, luma[2]);
+    let w_a = f32x8::splat_t(token, (display_max / white_point) / (ld * ld));
+    let w_b = f32x8::splat_t(token, 1.0 / (display_max / white_point));
+    let one = f32x8::splat_t(token, 1.0);
+    let zero = f32x8::zero_t(token);
 
     let mut iter = row.chunks_exact_mut(32);
     for chunk in &mut iter {
@@ -683,9 +683,9 @@ fn tuned_reinhard_4_tier(
         // path. A negative luminance otherwise made `(1 + w_a·l)/(1 + w_b·l)`
         // return garbage instead of black (scalar/SIMD divergence, zentone#21
         // sweep).
-        let r = f32x8::load(token, &ra).max(zero);
-        let g = f32x8::load(token, &ga).max(zero);
-        let b = f32x8::load(token, &ba).max(zero);
+        let r = f32x8::load_t(token, &ra).max(zero);
+        let g = f32x8::load_t(token, &ga).max(zero);
+        let b = f32x8::load_t(token, &ba).max(zero);
         let l = r * lr + g * lg + b * lb;
         let scale = ((one + w_a * l) / (one + w_b * l)).max(zero);
         let ro = (r * scale).min(one).to_array();
@@ -745,26 +745,26 @@ fn agx_kernel_8(
     const AGX_MAX_EV: f32 = 4.026069;
     const RECIP_EV: f32 = 1.0 / (AGX_MAX_EV - AGX_MIN_EV);
 
-    let r = f32x8::from_array(token, rin);
-    let g = f32x8::from_array(token, gin);
-    let b = f32x8::from_array(token, bin);
+    let r = f32x8::from_array_t(token, rin);
+    let g = f32x8::from_array_t(token, gin);
+    let b = f32x8::from_array_t(token, bin);
 
     // Inset matrix (Blender AgX, OCIO row-major — rows sum to 1.0).
-    let z0r = f32x8::splat(token, 0.856627153315983) * r
-        + f32x8::splat(token, 0.0951212405381588) * g
-        + f32x8::splat(token, 0.0482516061458583) * b;
-    let z0g = f32x8::splat(token, 0.137318972929847) * r
-        + f32x8::splat(token, 0.761241990602591) * g
-        + f32x8::splat(token, 0.101439036467562) * b;
-    let z0b = f32x8::splat(token, 0.11189821299995) * r
-        + f32x8::splat(token, 0.0767994186031903) * g
-        + f32x8::splat(token, 0.811302368396859) * b;
+    let z0r = f32x8::splat_t(token, 0.856627153315983) * r
+        + f32x8::splat_t(token, 0.0951212405381588) * g
+        + f32x8::splat_t(token, 0.0482516061458583) * b;
+    let z0g = f32x8::splat_t(token, 0.137318972929847) * r
+        + f32x8::splat_t(token, 0.761241990602591) * g
+        + f32x8::splat_t(token, 0.101439036467562) * b;
+    let z0b = f32x8::splat_t(token, 0.11189821299995) * r
+        + f32x8::splat_t(token, 0.0767994186031903) * g
+        + f32x8::splat_t(token, 0.811302368396859) * b;
 
     // log2(max(x, 1e-10)), clamped to EV range, normalized to [0, 1].
-    let floor = f32x8::splat(token, 1e-10);
-    let min_ev = f32x8::splat(token, AGX_MIN_EV);
-    let max_ev = f32x8::splat(token, AGX_MAX_EV);
-    let recip = f32x8::splat(token, RECIP_EV);
+    let floor = f32x8::splat_t(token, 1e-10);
+    let min_ev = f32x8::splat_t(token, AGX_MIN_EV);
+    let max_ev = f32x8::splat_t(token, AGX_MAX_EV);
+    let recip = f32x8::splat_t(token, RECIP_EV);
 
     let z2r = (z0r.max(floor).log2_midp().max(min_ev).min(max_ev) - min_ev) * recip;
     let z2g = (z0g.max(floor).log2_midp().max(min_ev).min(max_ev) - min_ev) * recip;
@@ -776,13 +776,13 @@ fn agx_kernel_8(
         let x2 = x * x;
         let x4 = x2 * x2;
         let x6 = x4 * x2;
-        let w0 = f32x8::splat(token, 0.002857) + f32x8::splat(token, -0.1718) * x;
-        let w1 = f32x8::splat(token, 4.361) + f32x8::splat(token, -28.72) * x;
-        let w2 = f32x8::splat(token, 92.06) + f32x8::splat(token, -126.7) * x;
-        let w3 = f32x8::splat(token, 78.01) + f32x8::splat(token, -17.86) * x;
+        let w0 = f32x8::splat_t(token, 0.002857) + f32x8::splat_t(token, -0.1718) * x;
+        let w1 = f32x8::splat_t(token, 4.361) + f32x8::splat_t(token, -28.72) * x;
+        let w2 = f32x8::splat_t(token, 92.06) + f32x8::splat_t(token, -126.7) * x;
+        let w3 = f32x8::splat_t(token, 78.01) + f32x8::splat_t(token, -17.86) * x;
         let raw = w0 + w1 * x2 + w2 * x4 + w3 * x6;
-        let p0 = f32x8::splat(token, 0.002857);
-        let scale = f32x8::splat(token, 1.0 / (0.982059 - 0.002857));
+        let p0 = f32x8::splat_t(token, 0.002857);
+        let scale = f32x8::splat_t(token, 1.0 / (0.982059 - 0.002857));
         (raw - p0) * scale
     };
     let cr = contrast(z2r);
@@ -790,13 +790,13 @@ fn agx_kernel_8(
     let cb = contrast(z2b);
 
     // Look transform: slope → pow → saturation blend. None = no-op (Default).
-    let zero = f32x8::zero(token);
+    let zero = f32x8::zero_t(token);
     let (lr, lg, lb) = match params {
         None => (cr, cg, cb),
         Some((slope, power, saturation)) => {
-            let dr = (f32x8::splat(token, slope[0]) * cr).max(zero);
-            let dg = (f32x8::splat(token, slope[1]) * cg).max(zero);
-            let db = (f32x8::splat(token, slope[2]) * cb).max(zero);
+            let dr = (f32x8::splat_t(token, slope[0]) * cr).max(zero);
+            let dg = (f32x8::splat_t(token, slope[1]) * cg).max(zero);
+            let db = (f32x8::splat_t(token, slope[2]) * cb).max(zero);
 
             let (zr, zg, zb) = if power == [1.0, 1.0, 1.0] {
                 (dr, dg, db)
@@ -808,32 +808,32 @@ fn agx_kernel_8(
                 )
             };
 
-            let luma = f32x8::splat(token, 0.2126) * zr
-                + f32x8::splat(token, 0.7152) * zg
-                + f32x8::splat(token, 0.0722) * zb;
+            let luma = f32x8::splat_t(token, 0.2126) * zr
+                + f32x8::splat_t(token, 0.7152) * zg
+                + f32x8::splat_t(token, 0.0722) * zb;
 
-            let or = f32x8::splat(token, saturation[0]) * (zr - luma) + luma;
-            let og = f32x8::splat(token, saturation[1]) * (zg - luma) + luma;
-            let ob = f32x8::splat(token, saturation[2]) * (zb - luma) + luma;
+            let or = f32x8::splat_t(token, saturation[0]) * (zr - luma) + luma;
+            let og = f32x8::splat_t(token, saturation[1]) * (zg - luma) + luma;
+            let ob = f32x8::splat_t(token, saturation[2]) * (zb - luma) + luma;
             (or, og, ob)
         }
     };
 
     // Outset matrix + clamp to [0, 1].
-    let one = f32x8::splat(token, 1.0);
-    let or = (f32x8::splat(token, 1.19744107688770) * lr
-        + f32x8::splat(token, -0.144261512698001) * lg
-        + f32x8::splat(token, -0.0531795641897042) * lb)
+    let one = f32x8::splat_t(token, 1.0);
+    let or = (f32x8::splat_t(token, 1.19744107688770) * lr
+        + f32x8::splat_t(token, -0.144261512698001) * lg
+        + f32x8::splat_t(token, -0.0531795641897042) * lb)
         .max(zero)
         .min(one);
-    let og = (f32x8::splat(token, -0.196474626321346) * lr
-        + f32x8::splat(token, 1.35409513146973) * lg
-        + f32x8::splat(token, -0.157620505148385) * lb)
+    let og = (f32x8::splat_t(token, -0.196474626321346) * lr
+        + f32x8::splat_t(token, 1.35409513146973) * lg
+        + f32x8::splat_t(token, -0.157620505148385) * lb)
         .max(zero)
         .min(one);
-    let ob = (f32x8::splat(token, -0.146557417106601) * lr
-        + f32x8::splat(token, -0.108284058788469) * lg
-        + f32x8::splat(token, 1.25484147589507) * lb)
+    let ob = (f32x8::splat_t(token, -0.146557417106601) * lr
+        + f32x8::splat_t(token, -0.108284058788469) * lg
+        + f32x8::splat_t(token, 1.25484147589507) * lb)
         .max(zero)
         .min(one);
 
@@ -924,17 +924,17 @@ pub(crate) struct Bt2390Params {
 /// helper: `Token`/`f32x8` only exist inside a `#[magetypes]` body.
 macro_rules! bt2390_body {
     ($token:ident, $chunk:expr, $p:expr) => {{
-        let one = f32x8::splat($token, 1.0);
-        let two = f32x8::splat($token, 2.0);
-        let three = f32x8::splat($token, 3.0);
-        let neg_two = f32x8::splat($token, -2.0);
-        let ks = f32x8::splat($token, $p.ks);
-        let one_minus_ks = f32x8::splat($token, 1.0 - $p.ks);
-        let inv_one_minus_ks = f32x8::splat($token, 1.0 / (1.0 - $p.ks));
-        let inv_source = f32x8::splat($token, $p.inv_source);
-        let out_scale = f32x8::splat($token, $p.out_scale);
+        let one = f32x8::splat_t($token, 1.0);
+        let two = f32x8::splat_t($token, 2.0);
+        let three = f32x8::splat_t($token, 3.0);
+        let neg_two = f32x8::splat_t($token, -2.0);
+        let ks = f32x8::splat_t($token, $p.ks);
+        let one_minus_ks = f32x8::splat_t($token, 1.0 - $p.ks);
+        let inv_one_minus_ks = f32x8::splat_t($token, 1.0 / (1.0 - $p.ks));
+        let inv_source = f32x8::splat_t($token, $p.inv_source);
+        let out_scale = f32x8::splat_t($token, $p.out_scale);
 
-        let e1 = (f32x8::load($token, $chunk) * inv_source).min(one);
+        let e1 = (f32x8::load_t($token, $chunk) * inv_source).min(one);
         let t = (e1 - ks) * inv_one_minus_ks;
         let t2 = t * t;
         let t3 = t2 * t;
@@ -952,7 +952,7 @@ macro_rules! bt2390_body {
 fn bt2390_3_tier(token: Token, row: &mut [f32], p: &Bt2390Params) {
     let src_peak = 1.0 / p.inv_source;
     let tgt_peak = p.out_scale * src_peak;
-    let (chunks, tail) = f32x8::partition_slice_mut(token, row);
+    let (chunks, tail) = f32x8::partition_slice_mut_t(token, row);
     for chunk in chunks.iter_mut() {
         bt2390_body!(token, chunk, p).store(chunk);
     }
@@ -965,7 +965,7 @@ fn bt2390_3_tier(token: Token, row: &mut [f32], p: &Bt2390Params) {
 fn bt2390_4_tier(token: Token, row: &mut [f32], p: &Bt2390Params) {
     let src_peak = 1.0 / p.inv_source;
     let tgt_peak = p.out_scale * src_peak;
-    let (chunks, tail) = f32x8::partition_slice_mut(token, row);
+    let (chunks, tail) = f32x8::partition_slice_mut_t(token, row);
     for chunk in chunks.iter_mut() {
         let alphas = [chunk[3], chunk[7]];
         bt2390_body!(token, chunk, p).store(chunk);

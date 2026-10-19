@@ -25,15 +25,15 @@ use crate::hlg;
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 pub(crate) fn apply_matrix_rgb_tier(token: Token, m: &[[f32; 3]; 3], row: &mut [[f32; 3]]) {
     // Hoist matrix lanes once per strip — none depend on the chunk.
-    let m00 = f32x8::splat(token, m[0][0]);
-    let m01 = f32x8::splat(token, m[0][1]);
-    let m02 = f32x8::splat(token, m[0][2]);
-    let m10 = f32x8::splat(token, m[1][0]);
-    let m11 = f32x8::splat(token, m[1][1]);
-    let m12 = f32x8::splat(token, m[1][2]);
-    let m20 = f32x8::splat(token, m[2][0]);
-    let m21 = f32x8::splat(token, m[2][1]);
-    let m22 = f32x8::splat(token, m[2][2]);
+    let m00 = f32x8::splat_t(token, m[0][0]);
+    let m01 = f32x8::splat_t(token, m[0][1]);
+    let m02 = f32x8::splat_t(token, m[0][2]);
+    let m10 = f32x8::splat_t(token, m[1][0]);
+    let m11 = f32x8::splat_t(token, m[1][1]);
+    let m12 = f32x8::splat_t(token, m[1][2]);
+    let m20 = f32x8::splat_t(token, m[2][0]);
+    let m21 = f32x8::splat_t(token, m[2][1]);
+    let m22 = f32x8::splat_t(token, m[2][2]);
 
     let mut iter = row.chunks_exact_mut(8);
     for chunk in &mut iter {
@@ -45,9 +45,9 @@ pub(crate) fn apply_matrix_rgb_tier(token: Token, m: &[[f32; 3]; 3], row: &mut [
             ga[i] = px[1];
             ba[i] = px[2];
         }
-        let r = f32x8::load(token, &ra);
-        let g = f32x8::load(token, &ga);
-        let b = f32x8::load(token, &ba);
+        let r = f32x8::load_t(token, &ra);
+        let g = f32x8::load_t(token, &ga);
+        let b = f32x8::load_t(token, &ba);
         let nr = (m00 * r + m01 * g + m02 * b).to_array();
         let ng = (m10 * r + m11 * g + m12 * b).to_array();
         let nb = (m20 * r + m21 * g + m22 * b).to_array();
@@ -70,15 +70,15 @@ pub(crate) fn apply_matrix_rgb_tier(token: Token, m: &[[f32; 3]; 3], row: &mut [
 /// 3x3 matrix multiply over 8 SOA pixels of an RGBA strip; alpha untouched.
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 pub(crate) fn apply_matrix_rgba_tier(token: Token, m: &[[f32; 3]; 3], row: &mut [[f32; 4]]) {
-    let m00 = f32x8::splat(token, m[0][0]);
-    let m01 = f32x8::splat(token, m[0][1]);
-    let m02 = f32x8::splat(token, m[0][2]);
-    let m10 = f32x8::splat(token, m[1][0]);
-    let m11 = f32x8::splat(token, m[1][1]);
-    let m12 = f32x8::splat(token, m[1][2]);
-    let m20 = f32x8::splat(token, m[2][0]);
-    let m21 = f32x8::splat(token, m[2][1]);
-    let m22 = f32x8::splat(token, m[2][2]);
+    let m00 = f32x8::splat_t(token, m[0][0]);
+    let m01 = f32x8::splat_t(token, m[0][1]);
+    let m02 = f32x8::splat_t(token, m[0][2]);
+    let m10 = f32x8::splat_t(token, m[1][0]);
+    let m11 = f32x8::splat_t(token, m[1][1]);
+    let m12 = f32x8::splat_t(token, m[1][2]);
+    let m20 = f32x8::splat_t(token, m[2][0]);
+    let m21 = f32x8::splat_t(token, m[2][1]);
+    let m22 = f32x8::splat_t(token, m[2][2]);
 
     let mut iter = row.chunks_exact_mut(8);
     for chunk in &mut iter {
@@ -90,9 +90,9 @@ pub(crate) fn apply_matrix_rgba_tier(token: Token, m: &[[f32; 3]; 3], row: &mut 
             ga[i] = px[1];
             ba[i] = px[2];
         }
-        let r = f32x8::load(token, &ra);
-        let g = f32x8::load(token, &ga);
-        let b = f32x8::load(token, &ba);
+        let r = f32x8::load_t(token, &ra);
+        let g = f32x8::load_t(token, &ga);
+        let b = f32x8::load_t(token, &ba);
         let nr = (m00 * r + m01 * g + m02 * b).to_array();
         let ng = (m10 * r + m11 * g + m12 * b).to_array();
         let nb = (m20 * r + m21 * g + m22 * b).to_array();
@@ -132,12 +132,12 @@ pub(crate) fn apply_matrix_rgba_tier(token: Token, m: &[[f32; 3]; 3], row: &mut 
 /// to `new_hi`).
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 pub(crate) fn soft_clip_tier(token: Token, row: &mut [[f32; 3]]) {
-    let zero = f32x8::zero(token);
-    let one = f32x8::splat(token, 1.0);
+    let zero = f32x8::zero_t(token);
+    let one = f32x8::splat_t(token, 1.0);
     // EPS guards 1.0 / (hi - lo) when hi == lo. The blend below replaces
     // those lanes anyway, so the value chosen only needs to keep the
     // intermediate finite.
-    let denom_eps = f32x8::splat(token, f32::EPSILON);
+    let denom_eps = f32x8::splat_t(token, f32::EPSILON);
 
     let mut iter = row.chunks_exact_mut(8);
     for chunk in &mut iter {
@@ -150,9 +150,9 @@ pub(crate) fn soft_clip_tier(token: Token, row: &mut [[f32; 3]]) {
             ba[i] = px[2];
         }
         // Clamp negatives to 0 first (under-range from gamut matrix).
-        let r = f32x8::load(token, &ra).max(zero);
-        let g = f32x8::load(token, &ga).max(zero);
-        let b = f32x8::load(token, &ba).max(zero);
+        let r = f32x8::load_t(token, &ra).max(zero);
+        let g = f32x8::load_t(token, &ga).max(zero);
+        let b = f32x8::load_t(token, &ba).max(zero);
 
         let hi = r.max(g).max(b);
         let lo = r.min(g).min(b);
@@ -202,8 +202,8 @@ pub(crate) fn soft_clip_tier(token: Token, row: &mut [[f32; 3]]) {
 /// `simd_gt(0.5)` to recover a SIMD mask, or use directly as a scaling factor).
 #[archmage::magetypes(define(f32x8), v4(cfg(avx512)), v3, neon, wasm128, scalar)]
 pub(crate) fn is_out_of_gamut_mask_tier(token: Token, row: &[[f32; 3]], out: &mut [f32]) {
-    let zero = f32x8::zero(token);
-    let one = f32x8::splat(token, 1.0);
+    let zero = f32x8::zero_t(token);
+    let one = f32x8::splat_t(token, 1.0);
 
     let chunks = row.chunks_exact(8);
     let row_tail = chunks.remainder();
@@ -219,9 +219,9 @@ pub(crate) fn is_out_of_gamut_mask_tier(token: Token, row: &[[f32; 3]], out: &mu
             ga[i] = px[1];
             ba[i] = px[2];
         }
-        let r = f32x8::load(token, &ra);
-        let g = f32x8::load(token, &ga);
-        let b = f32x8::load(token, &ba);
+        let r = f32x8::load_t(token, &ra);
+        let g = f32x8::load_t(token, &ga);
+        let b = f32x8::load_t(token, &ba);
         // any (c < 0 || c > 1)
         let any_lt = r.simd_lt(zero) | g.simd_lt(zero) | b.simd_lt(zero);
         let any_gt = r.simd_gt(one) | g.simd_gt(one) | b.simd_gt(one);
@@ -255,11 +255,11 @@ const LB: f32 = 0.0593;
 /// kernel shape (luminance, then `pow(Y, k)`, then per-channel multiply).
 #[archmage::magetypes(define(f32x8), v3, neon, wasm128, scalar)]
 pub(crate) fn hlg_ootf_exact_tier(token: Token, row: &mut [[f32; 3]], k: f32) {
-    let lr = f32x8::splat(token, LR);
-    let lg = f32x8::splat(token, LG);
-    let lb = f32x8::splat(token, LB);
-    let zero = f32x8::zero(token);
-    let pos_eps = f32x8::splat(token, f32::MIN_POSITIVE);
+    let lr = f32x8::splat_t(token, LR);
+    let lg = f32x8::splat_t(token, LG);
+    let lb = f32x8::splat_t(token, LB);
+    let zero = f32x8::zero_t(token);
+    let pos_eps = f32x8::splat_t(token, f32::MIN_POSITIVE);
 
     let mut iter = row.chunks_exact_mut(8);
     for chunk in &mut iter {
@@ -271,9 +271,9 @@ pub(crate) fn hlg_ootf_exact_tier(token: Token, row: &mut [[f32; 3]], k: f32) {
             ga[i] = px[1];
             ba[i] = px[2];
         }
-        let r = f32x8::load(token, &ra);
-        let g = f32x8::load(token, &ga);
-        let b = f32x8::load(token, &ba);
+        let r = f32x8::load_t(token, &ra);
+        let g = f32x8::load_t(token, &ga);
+        let b = f32x8::load_t(token, &ba);
         let y = lr * r + lg * g + lb * b;
         // pow_midp expects positive inputs. Lanes where Y <= 0 are forced to
         // an all-zero pixel below via blend.
@@ -283,9 +283,9 @@ pub(crate) fn hlg_ootf_exact_tier(token: Token, row: &mut [[f32; 3]], k: f32) {
         let nr = (r * scale).to_array();
         let ng = (g * scale).to_array();
         let nb = (b * scale).to_array();
-        let or_arr = f32x8::blend(nz, f32x8::load(token, &nr), zero).to_array();
-        let og_arr = f32x8::blend(nz, f32x8::load(token, &ng), zero).to_array();
-        let ob_arr = f32x8::blend(nz, f32x8::load(token, &nb), zero).to_array();
+        let or_arr = f32x8::blend(nz, f32x8::load_t(token, &nr), zero).to_array();
+        let og_arr = f32x8::blend(nz, f32x8::load_t(token, &ng), zero).to_array();
+        let ob_arr = f32x8::blend(nz, f32x8::load_t(token, &nb), zero).to_array();
         for (i, px) in chunk.iter_mut().enumerate() {
             px[0] = or_arr[i];
             px[1] = og_arr[i];
@@ -327,9 +327,9 @@ pub(crate) fn hlg_ootf_approx_tier(token: Token, row: &mut [[f32; 3]], exponent:
             ga[i] = px[1];
             ba[i] = px[2];
         }
-        let r = f32x8::load(token, &ra).pow_midp(exponent).to_array();
-        let g = f32x8::load(token, &ga).pow_midp(exponent).to_array();
-        let b = f32x8::load(token, &ba).pow_midp(exponent).to_array();
+        let r = f32x8::load_t(token, &ra).pow_midp(exponent).to_array();
+        let g = f32x8::load_t(token, &ga).pow_midp(exponent).to_array();
+        let b = f32x8::load_t(token, &ba).pow_midp(exponent).to_array();
         for (i, px) in chunk.iter_mut().enumerate() {
             px[0] = r[i];
             px[1] = g[i];

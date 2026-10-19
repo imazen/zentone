@@ -31,7 +31,7 @@ const REF_LUMINANCE: f32 = 100.0;
 
 #[archmage::magetypes(define(f32x8), v3, neon, wasm128, scalar)]
 pub(super) fn aces2_forward_tier(token: Token, strip: &mut [[f32; 3]], ot: &Aces2OutputTransform) {
-    let splat = |v: f32| f32x8::splat(token, v);
+    let splat = |v: f32| f32x8::splat_t(token, v);
     let zero = splat(0.0);
     let one = splat(1.0);
     let half = splat(0.5);
@@ -174,9 +174,9 @@ pub(super) fn aces2_forward_tier(token: Token, strip: &mut [[f32; 3]], ot: &Aces
             ba[i] = px[2];
         }
         let aces = [
-            f32x8::load(token, &ra),
-            f32x8::load(token, &ga),
-            f32x8::load(token, &ba),
+            f32x8::load_t(token, &ra),
+            f32x8::load_t(token, &ga),
+            f32x8::load_t(token, &ba),
         ];
 
         // -- clamp_AP0_to_AP1 (NaN → 0 via max-then-min) ---------------------
@@ -213,7 +213,7 @@ pub(super) fn aces2_forward_tier(token: Token, strip: &mut [[f32; 3]], ot: &Aces
         for (r, &hh) in reach_arr.iter_mut().zip(h_arr.iter()) {
             *r = ot.reach_m_from_table(hh);
         }
-        let reach_m = f32x8::load(token, &reach_arr);
+        let reach_m = f32x8::load_t(token, &reach_arr);
         let n_j = j_ts * inv_limit_j_max;
         let sn_j = (one - n_j).max(zero);
         let (sin_h, cos_h) = sincos(h * deg_to_rad);
@@ -258,12 +258,12 @@ pub(super) fn aces2_forward_tier(token: Token, strip: &mut [[f32; 3]], ot: &Aces
             focus_j_a[i] = p.focus_j;
             thr_a[i] = p.analytical_threshold;
         }
-        let cusp_j = f32x8::load(token, &cusp_j);
-        let cusp_m = f32x8::load(token, &cusp_m);
-        let gamma_top_inv = f32x8::load(token, &gamma_top_inv);
-        let gamma_bottom_inv = f32x8::load(token, &gamma_bottom_inv);
-        let focus_j = f32x8::load(token, &focus_j_a);
-        let analytical_threshold = f32x8::load(token, &thr_a);
+        let cusp_j = f32x8::load_t(token, &cusp_j);
+        let cusp_m = f32x8::load_t(token, &cusp_m);
+        let gamma_top_inv = f32x8::load_t(token, &gamma_top_inv);
+        let gamma_bottom_inv = f32x8::load_t(token, &gamma_bottom_inv);
+        let focus_j = f32x8::load_t(token, &focus_j_a);
+        let analytical_threshold = f32x8::load_t(token, &thr_a);
 
         // get_focus_gain(J = j_ts).
         let gain_base = limit_j_max * focus_dist;
