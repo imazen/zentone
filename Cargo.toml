@@ -45,8 +45,8 @@ experimental = []
 [dependencies]
 linear-srgb = { version = "0.6.12", default-features = false, features = ["transfer"] }
 libm = { version = "0.2", default-features = false }
-archmage = { version = "0.9.22", default-features = false, features = ["macros"] }
-magetypes = { version = "0.9.22", default-features = false }
+archmage = { version = ">=0.9.22, <=0.9.31-beta.2", default-features = false, features = ["macros"] }
+magetypes = { version = ">=0.9.22, <=0.9.31-beta.2", default-features = false }
 
 [dev-dependencies]
 gainforge = "0.4.1"
