@@ -11,6 +11,9 @@ adheres to semver.
 
 ### Changed
 
+- Pin standalone codec/pixel operation dependencies to the verified saliency consumer cohort.
+  Full standalone resolution still needs other optional/dev crates to admit SIMD beta.2.
+
 - Accept the archmage and magetypes 0.9.31 stable release.
 
 - Admit archmage/magetypes 0.9.31-beta.1 alongside compatible stable versions; use explicit-token aliases where needed. Formatting, strict library lint and library tests pass (`5d93bf00`).
