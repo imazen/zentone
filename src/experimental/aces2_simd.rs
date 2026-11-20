@@ -42,17 +42,17 @@ pub(super) fn aces2_forward_tier(token: Token, strip: &mut [[f32; 3]], ot: &Aces
     // v · M with the CTL's row-vector convention.
     let mul_vm = |v: [f32x8; 3], m: &[[f32; 3]; 3]| -> [f32x8; 3] {
         [
-            v[2].mul_add(
+            v[2].mul_add_relaxed(
                 splat(m[2][0]),
-                v[1].mul_add(splat(m[1][0]), v[0] * splat(m[0][0])),
+                v[1].mul_add_relaxed(splat(m[1][0]), v[0] * splat(m[0][0])),
             ),
-            v[2].mul_add(
+            v[2].mul_add_relaxed(
                 splat(m[2][1]),
-                v[1].mul_add(splat(m[1][1]), v[0] * splat(m[0][1])),
+                v[1].mul_add_relaxed(splat(m[1][1]), v[0] * splat(m[0][1])),
             ),
-            v[2].mul_add(
+            v[2].mul_add_relaxed(
                 splat(m[2][2]),
-                v[1].mul_add(splat(m[1][2]), v[0] * splat(m[0][2])),
+                v[1].mul_add_relaxed(splat(m[1][2]), v[0] * splat(m[0][2])),
             ),
         ]
     };
@@ -75,16 +75,16 @@ pub(super) fn aces2_forward_tier(token: Token, strip: &mut [[f32; 3]], ot: &Aces
         let folded = f32x8::blend(fold, copysign(splat(PI), x) - x, x);
         let x2 = folded * folded;
         let s = x2
-            .mul_add(splat(2.752_556_2e-6), splat(-1.984_087_4e-4))
-            .mul_add(x2, splat(8.333_331_0e-3))
-            .mul_add(x2, splat(-1.666_666_7e-1))
-            .mul_add(x2, one)
+            .mul_add_relaxed(splat(2.752_556_2e-6), splat(-1.984_087_4e-4))
+            .mul_add_relaxed(x2, splat(8.333_331_0e-3))
+            .mul_add_relaxed(x2, splat(-1.666_666_7e-1))
+            .mul_add_relaxed(x2, one)
             * folded;
         let c = x2
-            .mul_add(splat(2.476_049_5e-5), splat(-1.388_837_8e-3))
-            .mul_add(x2, splat(4.166_663_8e-2))
-            .mul_add(x2, splat(-0.5))
-            .mul_add(x2, one);
+            .mul_add_relaxed(splat(2.476_049_5e-5), splat(-1.388_837_8e-3))
+            .mul_add_relaxed(x2, splat(4.166_663_8e-2))
+            .mul_add_relaxed(x2, splat(-0.5))
+            .mul_add_relaxed(x2, one);
         (s, f32x8::blend(fold, zero - c, c))
     };
     // atan2(y, x) in radians (|err| < 2e-6): atan on [0, 1] via an odd
@@ -99,11 +99,11 @@ pub(super) fn aces2_forward_tier(token: Token, strip: &mut [[f32; 3]], ot: &Aces
         let t = num / den.max(splat(f32::MIN_POSITIVE));
         let t2 = t * t;
         let a = t2
-            .mul_add(splat(-1.172_120e-2), splat(5.265_332e-2))
-            .mul_add(t2, splat(-1.164_328_7e-1))
-            .mul_add(t2, splat(1.935_434_6e-1))
-            .mul_add(t2, splat(-3.326_234_7e-1))
-            .mul_add(t2, splat(9.999_772_6e-1))
+            .mul_add_relaxed(splat(-1.172_120e-2), splat(5.265_332e-2))
+            .mul_add_relaxed(t2, splat(-1.164_328_7e-1))
+            .mul_add_relaxed(t2, splat(1.935_434_6e-1))
+            .mul_add_relaxed(t2, splat(-3.326_234_7e-1))
+            .mul_add_relaxed(t2, splat(9.999_772_6e-1))
             * t;
         let a = f32x8::blend(swap, splat(0.5 * PI) - a, a);
         let a = f32x8::blend(x.simd_lt(zero), splat(PI) - a, a);
