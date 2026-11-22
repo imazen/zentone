@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: zentone.txt 252 lines (supported surface) | zentone.features.txt 197 added (features: avx512,experimental,hdr-shootout,std,zenpixels) | zentone.internal.txt 26 lines (26 hidden + 0 excluded-feature)
+# files: zentone.txt 252 lines (supported surface) | zentone.features.txt 197 added (features: avx512,experimental,hdr-shootout,std,zenpixels) | zentone.internal.txt 22 lines (22 hidden + 0 excluded-feature)
 # arch-unique surface: (none — portable on every target)
 
 ## summary

@@ -69,8 +69,8 @@ moxcms = ">=0.9.0, <0.10"
 zensim = "0.2.6"
 image = { version = "0.25", default-features = false, features = ["png"] }
 anyhow = "1"
-bytemuck = { version = "1.25", default-features = false }
-rayon = "1.10"
+bytemuck = { version = "1.25.2", default-features = false }
+rayon = "1.12.0"
 
 # Cross-crate git overrides for the transitive `zencodecs` graph. They expose
 # APIs the drivers need that pre-date the latest crates.io publishes of

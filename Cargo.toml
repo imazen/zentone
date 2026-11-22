@@ -90,7 +90,7 @@ zensim = "0.2.7"
 
 # Native-only: benchmark dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-zenbench = { version = "0.1.10", features = ["criterion-compat"] }
+zenbench = { version = "0.1.11", features = ["criterion-compat"] }
 
 [[example]]
 name = "visual_compare"
