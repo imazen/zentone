@@ -8,6 +8,7 @@ adheres to semver.
 
 ### Changed
 
+- Upgrade `archmage` and `magetypes` to `0.9.33` (including `fuzz/Cargo.lock`).
 - Bump `zenbench` dev-dependency to `0.1.11`, update `dev/shootout` `bytemuck` (`1.25.2`) and `rayon` (`1.12.0`), refresh `fuzz/Cargo.lock`, and regenerate `docs/public-api/` snapshots.
 - Add `CROSS_CONTAINER_OPTS: --security-opt seccomp=unconfined` to the `cross-i686` CI job.
 - Accept the archmage and magetypes 0.9.31 stable release.
